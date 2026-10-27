@@ -3,14 +3,23 @@
 import { revalidatePath } from "next/cache";
 import { unstable_rethrow } from "next/navigation";
 import { z } from "zod";
-import { uuidField } from "@/lib/action-state";
+import { slugField, uuidField } from "@/lib/action-state";
+import { readUploadedText } from "@/lib/docs/read-file";
 import { actorOf, requireUser } from "@/lib/auth/session";
 import { createModelClient, createTranscriber } from "@/lib/models";
 import { readAudio } from "@/lib/models/transcribe";
 import {
   AVATARS,
   addNote,
+  addTodo,
   chat,
+  completeSetup,
+  deleteReminder,
+  jobForChat,
+  reviewFromChat,
+  runTask,
+  setReminderDone,
+  takeDueReminders,
   checkIn,
   clearConversation,
   deleteNote,
@@ -40,16 +49,119 @@ const FRAME_TYPES = /^data:image\/(jpeg|png|webp);base64,/;
 /** About 1.5 MB of image once decoded. */
 const MAX_FRAME_CHARS = 2_000_000;
 
-export async function personaChatAction(text: string, day: string) {
+const clockField = z.object({
+  day: dayField,
+  now: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/),
+  offset: z.number().int().min(-900).max(900),
+});
+
+export async function personaChatAction(text: string, clock: z.input<typeof clockField>) {
   return run(async () => {
     const user = await requireUser();
     const message = z.string().trim().min(1, "Say something first").max(4000).parse(text);
     return chat(createModelClient(user), user.id, {
       text: message,
-      day: dayField.parse(day),
+      clock: clockField.parse(clock),
       actor: actorOf(user),
     });
   });
+}
+
+const setupForm = z.object({
+  name: z.string().trim().min(1, "Give your Persona a name").max(40),
+  avatar: z.enum(AVATARS),
+  task: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("existing"), slug: slugField }),
+    z.object({ kind: z.literal("sample") }),
+    z.object({
+      kind: z.literal("new"),
+      name: z.string().trim().min(3, "Name the task").max(120),
+      description: z.string().trim().min(10, "Describe the task in a sentence").max(1000),
+    }),
+    z.object({ kind: z.literal("skip") }),
+  ]),
+});
+
+export async function personaSetupAction(input: z.input<typeof setupForm>) {
+  return run(async () => {
+    const user = await requireUser();
+    const parsed = setupForm.parse(input);
+    const result = await completeSetup(user.id, { ...parsed, actor: actorOf(user) });
+    revalidatePath("/", "layout");
+    return result;
+  });
+}
+
+/** Runs a published skill from the chat on pasted text or an uploaded file. */
+export async function personaRunTaskAction(form: FormData) {
+  return run(async () => {
+    const user = await requireUser();
+    const slug = slugField.parse(form.get("skill"));
+    const text = (await readUploadedText(form.get("file"))) ?? String(form.get("text") ?? "");
+    if (!text.trim()) throw new Error("Paste the input or upload a file first.");
+    if (text.length > 100_000) throw new Error("That's too long for one task.");
+    const result = await runTask(createModelClient(user), user, { slug, text });
+    revalidatePath("/jobs");
+    return result;
+  });
+}
+
+export async function personaJobAction(jobId: string) {
+  return run(async () => {
+    const user = await requireUser();
+    return jobForChat(user.id, uuidField.parse(jobId));
+  });
+}
+
+export async function personaReviewJobAction(
+  jobId: string,
+  decision: "approve" | "reject",
+  finalOutput?: string,
+) {
+  return run(async () => {
+    const user = await requireUser();
+    const job = await reviewFromChat(
+      user.id,
+      uuidField.parse(jobId),
+      z.enum(["approve", "reject"]).parse(decision),
+      finalOutput === undefined ? undefined : z.string().max(200_000).parse(finalOutput),
+    );
+    revalidatePath("/jobs");
+    return job;
+  });
+}
+
+/** Reminders that just came due; each is returned once. */
+export async function personaDueRemindersAction() {
+  return run(async () => {
+    const user = await requireUser();
+    return (await takeDueReminders(user.id)).map((r) => ({ id: r.id, text: r.text }));
+  });
+}
+
+export async function reminderDoneAction(form: FormData) {
+  const user = await requireUser();
+  await setReminderDone(user.id, uuidField.parse(form.get("id")), form.get("done") === "true");
+  revalidatePath("/persona");
+}
+
+export async function deleteReminderAction(form: FormData) {
+  const user = await requireUser();
+  await deleteReminder(user.id, uuidField.parse(form.get("id")));
+  revalidatePath("/persona");
+}
+
+export async function addTodoAction(_: { error: string | null }, form: FormData) {
+  const result = await run(async () => {
+    const user = await requireUser();
+    await addTodo(
+      user.id,
+      z.string().trim().min(1, "Write the to-do").max(300).parse(form.get("text")),
+    );
+    revalidatePath("/persona");
+    return true;
+  });
+  return { error: result.ok ? null : result.error };
 }
 
 export async function personaCheckInAction(day: string) {

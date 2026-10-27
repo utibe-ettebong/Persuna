@@ -43,6 +43,8 @@ export function tidyReply(reply: PersonaReply, state: PersonaState): PersonaRepl
   const slugs = new Set(state.skills.map((s) => s.slug));
   const unanswered = new Set(state.focusSkill?.unanswered.map((q) => q.key) ?? []);
   const actions = reply.actions.flatMap((action): PersonaAction[] => {
+    if (action.type === "run_task" || action.type === "coach")
+      return [{ ...action, skill: action.skill && slugs.has(action.skill) ? action.skill : null }];
     if (action.type === "set_focus")
       return [{ ...action, skill: action.skill && slugs.has(action.skill) ? action.skill : null }];
     if (action.type === "answer" || action.type === "learn")
