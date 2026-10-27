@@ -6,7 +6,7 @@ import { defineRailway, github, postgres, preserve, project, service } from "rai
 export default defineRailway(() => {
   const db = postgres("postgres");
 
-  const web = service("web", {
+  const web = service("Persuna", {
     source: github("utibe-ettebong/Persuna", { branch: "main" }),
     build: { builder: "RAILPACK", buildCommand: "npm run build" },
     deploy: {
