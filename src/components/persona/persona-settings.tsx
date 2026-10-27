@@ -9,20 +9,17 @@ import {
   personaTeachNoteAction,
 } from "@/app/actions/persona";
 import { buttonClass, inputClass } from "@/components/ui";
+import { LookPicker } from "./look-picker";
 
-type Avatar = NonNullable<Parameters<typeof personaProfileAction>[0]["avatar"]>;
-
-/** Name, avatar and today's focus. Saves as you change them. */
+/** Name, look and today's focus. Saves as you change them. */
 export function PersonaProfileForm({
   name,
   avatar,
   focus,
-  avatars,
 }: {
   name: string;
   avatar: string;
   focus: string | null;
-  avatars: readonly Avatar[];
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -62,27 +59,7 @@ export function PersonaProfileForm({
           Save
         </button>
       </form>
-      <fieldset>
-        <legend className="text-sm font-medium">Avatar</legend>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {avatars.map((a) => (
-            <button
-              key={a}
-              type="button"
-              onClick={() => save({ avatar: a })}
-              aria-pressed={a === avatar}
-              aria-label={`Use ${a}`}
-              className={`grid h-11 w-11 place-items-center rounded-full border-2 text-2xl ${
-                a === avatar
-                  ? "border-accent bg-accent-soft"
-                  : "border-line hover:border-line-strong"
-              }`}
-            >
-              {a}
-            </button>
-          ))}
-        </div>
-      </fieldset>
+      <LookPicker value={avatar} onChange={(look) => save({ avatar: look })} />
       <div className="text-sm">
         <p className="font-medium">Today&apos;s focus</p>
         <p className="mt-1 text-muted">

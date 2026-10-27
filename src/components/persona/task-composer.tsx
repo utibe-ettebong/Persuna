@@ -28,9 +28,13 @@ export function TaskComposer({
 
   if (!skills.length) {
     return (
-      <div className="border-b border-line bg-subtle px-4 py-3 text-sm">
+      <div className="p-4 text-sm">
         <p>You need a published skill before I can do work for you.</p>
-        <button type="button" onClick={onCancel} className="label-mono mt-2 text-muted">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mt-2 rounded-full px-3 py-1 text-muted hover:text-foreground"
+        >
           Close
         </button>
       </div>
@@ -55,10 +59,7 @@ export function TaskComposer({
   }
 
   return (
-    <div
-      className="space-y-2 border-b border-line bg-subtle px-4 py-3 text-sm"
-      aria-label="Give Persona a task"
-    >
+    <div className="space-y-3 p-4 text-sm" aria-label="Give Persona a task">
       <div className="flex items-center gap-2">
         <label className="font-medium" htmlFor="persona-task-skill">
           Do this with
@@ -67,7 +68,7 @@ export function TaskComposer({
           id="persona-task-skill"
           value={skill}
           onChange={(e) => setSkill(e.target.value)}
-          className="flex-1 rounded-md border border-line bg-background px-2 py-1"
+          className="flex-1 rounded-full bg-background/70 px-3 py-1.5 outline-none ring-1 ring-line focus:ring-accent"
         >
           {skills.map((s) => (
             <option key={s.slug} value={s.slug}>
@@ -82,7 +83,7 @@ export function TaskComposer({
         rows={5}
         aria-label="Task input"
         placeholder="Paste the notes here…"
-        className="w-full rounded-md border border-line bg-background px-3 py-2 outline-none focus:border-accent"
+        className="w-full rounded-2xl bg-background/70 px-4 py-3 outline-none ring-1 ring-line focus:ring-2 focus:ring-accent"
       />
       <label className="block text-muted">
         …or upload a file (.md, .txt, .docx)
@@ -107,11 +108,15 @@ export function TaskComposer({
           type="button"
           onClick={() => void run()}
           disabled={pending}
-          className="label-mono rounded-md bg-accent px-3 py-1.5 text-accent-ink disabled:opacity-60"
+          className="rounded-full bg-accent px-5 py-2 text-accent-ink disabled:opacity-60"
         >
           {pending ? "Drafting…" : "Draft it"}
         </button>
-        <button type="button" onClick={onCancel} className="label-mono text-muted">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-full px-3 py-2 text-muted hover:text-foreground"
+        >
           Cancel
         </button>
       </div>

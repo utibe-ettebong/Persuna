@@ -1,6 +1,6 @@
 # Persona Desktop
 
-Persona in a small window that stays on top of your other apps, so it can sit beside Figma, a video editor or a spreadsheet and, **only when you choose a window**, watch it to learn your steps.
+Persona in a see-through, frameless window that floats on top of your other apps (drag it by Persona itself), so it can sit beside Figma, a video editor or a spreadsheet and, **only when you choose a window**, watch it to learn your steps.
 
 It is a thin [Electron](https://www.electronjs.org) shell around your PERSUNA server's `/companion` page. Sign in once in the window; chat, voice, reminders, tasks and notes work as on the web.
 

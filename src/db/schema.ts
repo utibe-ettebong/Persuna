@@ -385,8 +385,8 @@ export const personaProfiles = pgTable("persona_profiles", {
     .primaryKey()
     .references(() => authUsers.id, { onDelete: "cascade" }),
   name: text("name").notNull().default("Persona"),
-  /** An emoji the user picked for the on-screen companion. */
-  avatar: text("avatar").notNull().default("🦉"),
+  /** The companion's look, a key of LOOKS in lib/persona/looks (older rows hold an emoji). */
+  avatar: text("avatar").notNull().default("plum"),
   /** Set once the first-meeting setup (name, avatar, first task) is done or skipped. */
   setupDone: boolean("setup_done").notNull().default(false),
   /** Public profile address: /personas/<handle>. */

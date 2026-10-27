@@ -13,6 +13,8 @@ export default async function CompanionPage() {
   const user = await requireUser("/companion");
   return (
     <main className="h-screen">
+      {/* Lets the desktop app's see-through window show the desktop behind Persona. */}
+      <style>{"html,body{background:transparent!important}"}</style>
       <CompanionMount userId={user.id} standalone />
     </main>
   );

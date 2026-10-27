@@ -30,6 +30,13 @@ function createWindow() {
     title: "Persona",
     alwaysOnTop: true,
     autoHideMenuBar: true,
+    // See-through and frameless: Persona floats over your desktop, not in a box.
+    // Drag it by Persona itself.
+    transparent: true,
+    frame: false,
+    hasShadow: false,
+    backgroundColor: "#00000000",
+    ...(process.platform === "darwin" && { vibrancy: "under-window", visualEffectState: "active" }),
     webPreferences: { contextIsolation: true, sandbox: true, backgroundThrottling: false },
   });
   win.setAlwaysOnTop(true, "floating");
@@ -103,8 +110,12 @@ app.whenReady().then(() => {
             click: (item) => win?.setAlwaysOnTop(item.checked, "floating"),
           },
           { role: "reload" },
+          {
+            label: "Close Persona",
+            accelerator: "CmdOrCtrl+W",
+            click: () => win?.close(),
+          },
           { role: "minimize" },
-          { role: "close" },
         ],
       },
     ]),

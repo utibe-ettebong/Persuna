@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { PersonaOrb } from "@/components/persona/orb";
 import { ScoreBadge } from "@/components/score-trend";
 import { Badge, Card, PageHeader } from "@/components/ui";
 import { formatNaira } from "@/lib/market/rules";
@@ -66,7 +67,10 @@ export default async function MarketPage() {
                     href={`/personas/${persona.handle}`}
                     className="label-mono border-t border-line px-6 py-3 text-muted hover:text-accent"
                   >
-                    <span aria-hidden>{persona.avatar}</span> by {persona.name} →
+                    <span className="inline-flex items-center gap-2">
+                      <PersonaOrb look={persona.avatar} size={22} animate={false} />
+                      by {persona.name} →
+                    </span>
                   </Link>
                 )}
               </li>

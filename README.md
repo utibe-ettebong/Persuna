@@ -20,7 +20,8 @@ The design follows a framed, rule-drawn system: an off-white page inside vertica
 
 **Persona, your assistant** (the avatar in the corner of every studio page)
 
-- A small avatar you can drag anywhere. Click it to chat; it reads replies aloud if you turn on 🔊, and the 🎙 button is push-to-talk (transcribed, then sent). In Chrome, ⧉ pops it into a floating window that stays above your other apps.
+- **Its own character, hovering over the page.** Persona is a living drop (pick its look: Plum, Aurora, Ember, Lagoon, Moss, Ink) that breathes, follows your cursor with its eyes, blinks, ripples with your voice while listening, swirls while thinking, moves its mouth while talking, and dozes when you leave. Drag it anywhere. Its words float beside it as captions; open it and the conversation flows above it with no panel around it. In Chrome, the float button pops it into a window above your other apps.
+- **It talks back.** Replies are spoken aloud by default (the most natural voice the browser has; long replies speak the first few sentences). The wave button starts a **hands-free conversation**: it listens, notices when you stop speaking, transcribes, answers out loud, and listens again. It doesn't listen while it's talking, so it won't hear itself.
 - Once a day it asks what you're working on. Tell it ("I'm working on the board minutes") and it sets today's focus and links it to your matching skill.
 - "Take a note: …" saves a note; "Remember that …" saves a fact it uses in later conversations. Both are on the _Persona_ page, where you can delete notes, make it forget facts, rename it and change its avatar.
 - **Training by conversation:** say "teach me" and it asks the skill's interview questions one at a time, saving each answer to the skill. State a rule ("I always put decisions in bold") and it becomes a proposed rule change you review, with names and identifiers removed first.
