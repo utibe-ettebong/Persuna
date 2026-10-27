@@ -98,7 +98,7 @@ export async function getSkillBySlug(slug: string) {
   return skill;
 }
 
-async function splitPairs(skillId: string) {
+export async function splitPairs(skillId: string) {
   const rows = await db()
     .select()
     .from(examples)
@@ -552,7 +552,7 @@ export async function rejectCorrection(id: string) {
   return row;
 }
 
-async function latestScore(versionId: string): Promise<number | null> {
+export async function latestScore(versionId: string): Promise<number | null> {
   const [run] = await db()
     .select({ meanScore: evalRuns.meanScore })
     .from(evalRuns)

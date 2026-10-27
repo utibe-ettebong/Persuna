@@ -4,7 +4,7 @@
  * goes through the skill service, so taught rules arrive as proposals the
  * owner reviews, with names and identifiers removed first.
  */
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import type { PersonaMessage, PersonaNote } from "@/db/schema";
 import { audit, type Actor } from "@/lib/audit";
@@ -12,17 +12,29 @@ import type { ModelClient } from "@/lib/models/gateway";
 import { findNames } from "@/lib/skill/engine";
 import { INTERVIEW_QUESTIONS, type InterviewAnswers } from "@/lib/skill/interview";
 import { redact, redactTogether, scanText } from "@/lib/skill/redact";
+import { slugify } from "@/lib/action-state";
 import {
   NotFoundError,
+  createSampleSkill,
+  createSkill,
+  latestScore,
   listSkills,
   proposeFromMethodNotes,
+  publishedScore,
   saveInterview,
+  splitPairs,
 } from "@/lib/skill/service";
 import { normalizeText } from "@/lib/text";
+import { env } from "@/env";
+import { createJob, getJob, reviewJob } from "@/lib/jobs/service";
 import { personaObserve, personaTurn, HISTORY_TURNS } from "./brain";
+import { coachSkill, type SkillStats } from "./coach";
+import { localToUtc, startOfLocalDay, utcToLocal, type OffsetMinutes } from "./when";
+import { buildWrapUp } from "./wrapup";
 import type { PersonaState } from "./types";
 
-const { personaProfiles, personaMessages, personaNotes, skills } = schema;
+const { personaProfiles, personaMessages, personaNotes, personaReminders, skills, jobs, listings } =
+  schema;
 
 export const MAX_MEMORY = 30;
 export const AVATARS = ["🦉", "🤖", "🦊", "🐙", "🌱", "✨", "🐝", "🪴"] as const;
@@ -52,10 +64,16 @@ export async function companion(userId: string) {
   const focusSkill = profile.focusSkillId
     ? await db().query.skills.findFirst({ where: eq(skills.id, profile.focusSkillId) })
     : null;
+  const owned = await listSkills(userId);
   return {
     profile,
     messages,
     focusSkill: focusSkill ? { slug: focusSkill.slug, name: focusSkill.name } : null,
+    skills: owned.map((s) => ({
+      slug: s.slug,
+      name: s.name,
+      published: Boolean(s.publishedVersionId),
+    })),
   };
 }
 
@@ -82,9 +100,17 @@ export async function checkIn(userId: string, day: string): Promise<PersonaMessa
   return message;
 }
 
-async function stateFor(userId: string, day: string): Promise<PersonaState> {
+/** The user's clock, sent by the browser: local day, local time and UTC offset. */
+export interface Clock {
+  day: string;
+  now: string;
+  offset: OffsetMinutes;
+}
+
+async function stateFor(userId: string, clock: Clock): Promise<PersonaState> {
   const profile = await getProfile(userId);
   const owned = await listSkills(userId);
+  const todos = await openReminders(userId);
   const focus = owned.find((s) => s.id === profile.focusSkillId) ?? null;
   const [last] = await db()
     .select()
@@ -93,7 +119,8 @@ async function stateFor(userId: string, day: string): Promise<PersonaState> {
     .orderBy(desc(personaMessages.createdAt))
     .limit(1);
   return {
-    today: day,
+    today: clock.day,
+    now: clock.now,
     name: profile.name,
     memory: profile.memory,
     focus: profile.focus,
@@ -103,12 +130,18 @@ async function stateFor(userId: string, day: string): Promise<PersonaState> {
           name: focus.name,
           task: focus.taskDescription,
           hasRules: Boolean(focus.currentVersionId),
+          published: Boolean(focus.publishedVersionId),
           unanswered: INTERVIEW_QUESTIONS.filter((q) => !focus.interview?.[q.key]?.trim()).map(
             (q) => ({ key: q.key, question: q.question }),
           ),
         }
       : null,
-    skills: owned.map((s) => ({ slug: s.slug, name: s.name })),
+    skills: owned.map((s) => ({
+      slug: s.slug,
+      name: s.name,
+      published: Boolean(s.publishedVersionId),
+    })),
+    todos: todos.slice(0, 20).map((t) => t.text),
     lastAsked:
       last?.role === "assistant" ? ((last.askedKey as PersonaState["lastAsked"]) ?? null) : null,
   };
@@ -119,17 +152,21 @@ export interface ChatResult {
   /** Something the reply produced that the user can open (a note, a proposal). */
   link: { href: string; label: string } | null;
   focus: { text: string | null; skill: { slug: string; name: string } | null };
+  /** Set when Persona should ask for a task's input: the skill to run, if one was named. */
+  task: { skill: string | null } | null;
+  /** True when a reminder was set, so the browser can ask to show notifications. */
+  reminderSet: boolean;
 }
 
 /** One message from the user: think, apply the actions, save both sides. */
 export async function chat(
   client: ModelClient,
   userId: string,
-  input: { text: string; day: string; actor: Actor },
+  input: { text: string; clock: Clock; actor: Actor },
 ): Promise<ChatResult> {
   const text = normalizeText(input.text).slice(0, 4000);
   if (!text) throw new Error("Say something first");
-  const state = await stateFor(userId, input.day);
+  const state = await stateFor(userId, input.clock);
   const history = (await recentMessages(userId, HISTORY_TURNS)).map((m) => ({
     role: m.role,
     content: m.content,
@@ -144,6 +181,8 @@ export async function chat(
   let focusSkillId = profile.focusSkillId;
   let link: ChatResult["link"] = null;
   const extra: string[] = [];
+  let task: ChatResult["task"] = null;
+  let reminderSet = false;
 
   for (const action of reply.actions) {
     if (action.type === "remember") {
@@ -169,6 +208,42 @@ export async function chat(
         .join("\n\n");
       await saveInterview(focusSkill.id, answers);
       link = { href: `/skills/${focusSkill.slug}/interview`, label: "See your answers" };
+    } else if (action.type === "remind") {
+      const dueAt = action.at ? localToUtc(action.at, input.clock.offset) : null;
+      await db()
+        .insert(personaReminders)
+        .values({ userId, text: action.text, dueAt: dueAt && dueAt > new Date() ? dueAt : null });
+      reminderSet ||= Boolean(dueAt);
+      link = { href: "/persona#todos", label: "See your to-dos" };
+    } else if (action.type === "run_task") {
+      const named = owned.find((s) => s.slug === action.skill);
+      const fallback = owned.find((s) => s.id === focusSkillId);
+      const pick = [named, fallback].find((s) => s?.publishedVersionId);
+      task = { skill: pick?.slug ?? null };
+      if (!owned.some((s) => s.publishedVersionId)) {
+        task = null;
+        extra.push(
+          "You don't have a published skill yet, so I can't do the work for you. Train one and publish it first.",
+        );
+      }
+    } else if (action.type === "coach") {
+      const target =
+        owned.find((s) => s.slug === action.skill) ??
+        owned.find((s) => s.id === focusSkillId) ??
+        owned[0];
+      if (!target) {
+        extra.push("You have no skills yet. Tell me a task you do and I'll help you set one up.");
+      } else {
+        const advice = coachSkill(await skillStats(target));
+        extra.push(advice.message);
+        link = { href: advice.href, label: advice.action };
+      }
+    } else if (action.type === "wrap_up") {
+      extra.push(`\n\n${await wrapUpText(userId, input.clock)}`);
+      await db()
+        .update(personaProfiles)
+        .set({ wrapupDay: input.clock.day })
+        .where(eq(personaProfiles.userId, userId));
     } else if (action.type === "learn" && focusSkill) {
       try {
         link = await teach(client, focusSkill, action.method, input.actor);
@@ -193,7 +268,7 @@ export async function chat(
       {
         userId,
         role: "assistant",
-        content: [reply.reply, ...extra].join(" "),
+        content: [reply.reply, ...extra].join(" ").replace(/ \n/g, "\n"),
         askedKey: reply.asked ?? null,
         skillId: focusSkillId,
       },
@@ -207,6 +282,8 @@ export async function chat(
     messages: saved,
     link,
     focus: { text: focus, skill: focusRow ? { slug: focusRow.slug, name: focusRow.name } : null },
+    task,
+    reminderSet,
   };
 }
 
@@ -387,4 +464,400 @@ export async function forgetFact(userId: string, index: number) {
 
 export async function clearConversation(userId: string) {
   await db().delete(personaMessages).where(eq(personaMessages.userId, userId));
+}
+
+/* ---------- First meeting ---------- */
+
+export type FirstTask =
+  | { kind: "existing"; slug: string }
+  | { kind: "sample" }
+  | { kind: "new"; name: string; description: string }
+  | { kind: "skip" };
+
+/**
+ * The first-meeting setup: a name, an avatar, and the first task to learn,
+ * which becomes today's focus. Returns where to go next.
+ */
+export async function completeSetup(
+  userId: string,
+  input: { name: string; avatar: string; task: FirstTask; actor: Actor },
+): Promise<{ href: string | null; message: PersonaMessage }> {
+  await getProfile(userId);
+  let skill: { id: string; slug: string; name: string } | null = null;
+  if (input.task.kind === "existing") {
+    const slug = input.task.slug;
+    skill = (await listSkills(userId)).find((s) => s.slug === slug) ?? null;
+    if (!skill) throw new NotFoundError("That skill isn't yours");
+  } else if (input.task.kind === "sample") {
+    skill = await createSampleSkill(userId, input.actor);
+  } else if (input.task.kind === "new") {
+    const name = input.task.name.trim();
+    skill = await createSkill(
+      {
+        slug: slugify(name) || "my-task",
+        name,
+        taskDescription: input.task.description.trim(),
+        inputType: "text",
+        outputType: "text",
+      },
+      userId,
+      input.actor,
+    );
+  }
+  await db()
+    .update(personaProfiles)
+    .set({
+      name: input.name,
+      avatar: input.avatar,
+      setupDone: true,
+      ...(skill && { focus: skill.name, focusSkillId: skill.id }),
+      updatedAt: new Date(),
+    })
+    .where(eq(personaProfiles.userId, userId));
+  await ensureHandle(userId);
+
+  const content = skill
+    ? `Nice to meet you. I'm ${input.name}. First up: ${skill.name}. Say "teach me" and I'll ask how you do it, one question at a time. You can also add before-and-after examples on the skill's page.`
+    : `Nice to meet you. I'm ${input.name}. Tell me what you're working on whenever you're ready.`;
+  const [message] = await db()
+    .insert(personaMessages)
+    .values({ userId, role: "assistant", content, skillId: skill?.id ?? null })
+    .returning();
+  return { href: skill ? `/skills/${skill.slug}` : null, message };
+}
+
+/** Gives the persona a public address the first time it needs one. */
+export async function ensureHandle(userId: string): Promise<string> {
+  const profile = await getProfile(userId);
+  if (profile.handle) return profile.handle;
+  const base = slugify(profile.name).slice(0, 30) || "persona";
+  for (let i = 0; i < 20; i++) {
+    const handle = `${base}-${Math.random().toString(36).slice(2, 7)}`;
+    const [row] = await db()
+      .update(personaProfiles)
+      .set({ handle })
+      .where(and(eq(personaProfiles.userId, userId), isNull(personaProfiles.handle)))
+      .returning()
+      .catch(() => []);
+    if (row) return handle;
+    const again = await getProfile(userId);
+    if (again.handle) return again.handle;
+  }
+  throw new Error("Couldn't create a public address for your Persona");
+}
+
+/* ---------- Doing work from the chat ---------- */
+
+export async function publishedSkills(userId: string) {
+  return (await listSkills(userId))
+    .filter((s) => s.publishedVersionId)
+    .map((s) => ({ slug: s.slug, name: s.name }));
+}
+
+/**
+ * Runs a published skill on the user's input as an owner job. The input and
+ * draft live in `jobs` (purged after retention); the chat only records that a
+ * task ran and points at the job.
+ */
+export async function runTask(
+  client: ModelClient,
+  user: { id: string; name: string },
+  input: { slug: string; text: string },
+) {
+  const skill = (await listSkills(user.id)).find((s) => s.slug === input.slug);
+  if (!skill) throw new NotFoundError("That skill isn't yours");
+  if (!skill.publishedVersionId) throw new Error(`Publish ${skill.name} before I can use it`);
+  const job = await createJob(client, {
+    skillId: skill.id,
+    origin: "owner",
+    requesterName: user.name,
+    requesterUserId: user.id,
+    input: input.text,
+  });
+  const saved = await db()
+    .insert(personaMessages)
+    .values([
+      {
+        userId: user.id,
+        role: "user",
+        kind: "task",
+        content: `Sent ${skill.name} something to do.`,
+        skillId: skill.id,
+      },
+      {
+        userId: user.id,
+        role: "assistant",
+        kind: "job",
+        content:
+          job.status === "approved"
+            ? `Done with ${skill.name}. Your trust level let me approve it; it's below if you want to check.`
+            : `Here's the ${skill.name} draft. Approve it, edit it, or send it back.`,
+        skillId: skill.id,
+        jobId: job.id,
+      },
+    ])
+    .returning();
+  saved.sort((a, b) => (a.role === b.role ? 0 : a.role === "user" ? -1 : 1));
+  return { messages: saved, job: chatJob(job, skill.name) };
+}
+
+function chatJob(job: Awaited<ReturnType<typeof getJob>>, skillName: string) {
+  return {
+    id: job.id,
+    skillName,
+    status: job.status,
+    draft: job.finalOutput ?? job.draft,
+    flags: job.flags.map((f) => f.message),
+  };
+}
+export type ChatJob = ReturnType<typeof chatJob>;
+
+export async function jobForChat(userId: string, jobId: string): Promise<ChatJob> {
+  const job = await getJob(jobId);
+  const skill = await db().query.skills.findFirst({
+    where: and(eq(skills.id, job.skillId), eq(skills.ownerId, userId)),
+  });
+  if (!skill || job.origin !== "owner") throw new NotFoundError("No such job");
+  return chatJob(job, skill.name);
+}
+
+export async function reviewFromChat(
+  userId: string,
+  jobId: string,
+  decision: "approve" | "reject",
+  finalOutput?: string,
+) {
+  await jobForChat(userId, jobId);
+  await reviewJob(jobId, decision, finalOutput);
+  return jobForChat(userId, jobId);
+}
+
+/* ---------- To-dos and reminders ---------- */
+
+export async function openReminders(userId: string) {
+  return db()
+    .select()
+    .from(personaReminders)
+    .where(and(eq(personaReminders.userId, userId), isNull(personaReminders.doneAt)))
+    .orderBy(asc(personaReminders.dueAt), asc(personaReminders.createdAt));
+}
+
+export async function listReminders(userId: string) {
+  const open = await openReminders(userId);
+  const done = await db()
+    .select()
+    .from(personaReminders)
+    .where(and(eq(personaReminders.userId, userId), isNotNull(personaReminders.doneAt)))
+    .orderBy(desc(personaReminders.doneAt))
+    .limit(10);
+  return { open, done };
+}
+
+/** Reminders that are due and not yet shown. Marks them shown, so each fires once. */
+export async function takeDueReminders(userId: string, now = new Date()) {
+  return db()
+    .update(personaReminders)
+    .set({ notifiedAt: now })
+    .where(
+      and(
+        eq(personaReminders.userId, userId),
+        isNull(personaReminders.doneAt),
+        isNull(personaReminders.notifiedAt),
+        lte(personaReminders.dueAt, now),
+      ),
+    )
+    .returning();
+}
+
+export async function setReminderDone(userId: string, id: string, done: boolean) {
+  await db()
+    .update(personaReminders)
+    .set({ doneAt: done ? new Date() : null })
+    .where(and(eq(personaReminders.id, id), eq(personaReminders.userId, userId)));
+}
+
+export async function deleteReminder(userId: string, id: string) {
+  await db()
+    .delete(personaReminders)
+    .where(and(eq(personaReminders.id, id), eq(personaReminders.userId, userId)));
+}
+
+export async function addTodo(userId: string, text: string) {
+  await db().insert(personaReminders).values({ userId, text });
+}
+
+/* ---------- Coaching ---------- */
+
+export async function skillStats(skill: {
+  id: string;
+  slug: string;
+  name: string;
+  interview: InterviewAnswers | null;
+  currentVersionId: string | null;
+  publishedVersionId: string | null;
+}): Promise<SkillStats> {
+  const pairs = await splitPairs(skill.id);
+  const score = skill.publishedVersionId
+    ? await publishedScore(skill)
+    : skill.currentVersionId
+      ? await latestScore(skill.currentVersionId)
+      : null;
+  const listing = await db().query.listings.findFirst({ where: eq(listings.skillId, skill.id) });
+  return {
+    name: skill.name,
+    slug: skill.slug,
+    answered: INTERVIEW_QUESTIONS.filter((q) => skill.interview?.[q.key]?.trim()).length,
+    totalQuestions: INTERVIEW_QUESTIONS.length,
+    trainPairs: pairs.train.length,
+    testPairs: pairs.test.length,
+    hasRules: Boolean(skill.currentVersionId),
+    published: Boolean(skill.publishedVersionId),
+    score,
+    minScore: env().LISTING_MIN_SCORE,
+    listed: Boolean(listing?.active),
+  };
+}
+
+export async function coachingForAll(userId: string) {
+  const owned = await listSkills(userId);
+  return Promise.all(owned.map(async (s) => coachSkill(await skillStats(s))));
+}
+
+/* ---------- End of day ---------- */
+
+async function wrapUpText(userId: string, clock: Clock): Promise<string> {
+  const now = new Date();
+  const since = startOfLocalDay(now, clock.offset);
+  const profile = await getProfile(userId);
+  const [messages, notes, todaysJobs, done, open] = await Promise.all([
+    db()
+      .select({ id: personaMessages.id })
+      .from(personaMessages)
+      .where(
+        and(
+          eq(personaMessages.userId, userId),
+          eq(personaMessages.role, "user"),
+          gte(personaMessages.createdAt, since),
+        ),
+      ),
+    db()
+      .select({ title: personaNotes.title })
+      .from(personaNotes)
+      .where(and(eq(personaNotes.userId, userId), gte(personaNotes.createdAt, since))),
+    db()
+      .select({ status: jobs.status, skill: skills.name })
+      .from(jobs)
+      .innerJoin(skills, eq(jobs.skillId, skills.id))
+      .where(
+        and(eq(jobs.requesterUserId, userId), eq(jobs.origin, "owner"), gte(jobs.createdAt, since)),
+      ),
+    db()
+      .select({ text: personaReminders.text })
+      .from(personaReminders)
+      .where(and(eq(personaReminders.userId, userId), gte(personaReminders.doneAt, since))),
+    openReminders(userId),
+  ]);
+  return buildWrapUp({
+    name: profile.name,
+    focus: profile.focus,
+    messages: messages.length,
+    notes: notes.map((n) => n.title),
+    jobs: todaysJobs,
+    done: done.map((d) => d.text),
+    open: open.map((o) => ({
+      text: o.text,
+      due: o.dueAt ? dueLabel(utcToLocal(o.dueAt, clock.offset), clock.day) : null,
+    })),
+  });
+}
+
+/** "16:00" today, "2026-10-28 09:00" on another day. */
+function dueLabel(local: string, today: string) {
+  return local.startsWith(today) ? local.slice(11) : local.replace("T", " ");
+}
+
+/* ---------- Public profile ---------- */
+
+/**
+ * What anyone can see about a persona: its name and avatar, the owner's first
+ * name, listed skills with scores and trust, how many people rent it, and
+ * renters' ratings. Never the owner's memory, notes or chats.
+ */
+export async function publicProfile(handle: string) {
+  const profile = await db().query.personaProfiles.findFirst({
+    where: eq(personaProfiles.handle, handle),
+  });
+  if (!profile) throw new NotFoundError("No such persona");
+  const owner = await db().query.authUsers.findFirst({
+    where: eq(schema.authUsers.id, profile.userId),
+  });
+  const listed = await db()
+    .select({ skill: skills, listing: listings })
+    .from(listings)
+    .innerJoin(skills, eq(listings.skillId, skills.id))
+    .where(and(eq(skills.ownerId, profile.userId), eq(listings.active, true)));
+  const skillIds = listed.map((l) => l.skill.id);
+  const since = new Date(Date.now() - 30 * 86_400_000);
+  const renterJobs = skillIds.length
+    ? await db()
+        .select({
+          skillId: jobs.skillId,
+          renter: jobs.requesterUserId,
+          renterName: jobs.requesterName,
+          status: jobs.status,
+          rating: jobs.rating,
+          comment: jobs.ratingComment,
+          createdAt: jobs.createdAt,
+        })
+        .from(jobs)
+        .where(and(inArray(jobs.skillId, skillIds), eq(jobs.origin, "renter")))
+        .orderBy(desc(jobs.createdAt))
+    : [];
+  const renterKey = (j: (typeof renterJobs)[number]) => j.renter ?? j.renterName;
+  const activeRenters = new Set(renterJobs.filter((j) => j.createdAt >= since).map(renterKey)).size;
+  const rated = renterJobs.filter((j) => j.rating !== null);
+  const skillName = new Map(listed.map((l) => [l.skill.id, l.listing.title]));
+
+  return {
+    name: profile.name,
+    avatar: profile.avatar,
+    ownerFirstName: owner?.name.split(/\s+/)[0] || "Its owner",
+    activeRenters,
+    jobsDone: renterJobs.filter((j) => j.status === "approved").length,
+    averageRating: rated.length
+      ? Math.round((rated.reduce((n, j) => n + j.rating!, 0) / rated.length) * 10) / 10
+      : null,
+    skills: await Promise.all(
+      listed.map(async ({ skill, listing }) => ({
+        listingId: listing.id,
+        title: listing.title,
+        description: listing.description,
+        priceNgn: listing.priceNgn,
+        turnaroundHours: listing.turnaroundHours,
+        trustLevel: skill.trustLevel,
+        score: await publishedScore(skill),
+        renters: new Set(
+          renterJobs.filter((j) => j.skillId === skill.id && j.createdAt >= since).map(renterKey),
+        ).size,
+      })),
+    ),
+    reviews: rated.slice(0, 12).map((j) => ({
+      rating: j.rating!,
+      comment: j.comment,
+      skill: skillName.get(j.skillId) ?? "",
+      date: j.createdAt,
+      renter: j.renterName.split(/\s+/)[0],
+    })),
+  };
+}
+
+/** The persona behind each skill owner, for marketplace cards. */
+export async function personasByOwner(ownerIds: string[]) {
+  if (!ownerIds.length)
+    return new Map<string, { name: string; avatar: string; handle: string | null }>();
+  const rows = await db()
+    .select()
+    .from(personaProfiles)
+    .where(inArray(personaProfiles.userId, ownerIds));
+  return new Map(rows.map((r) => [r.userId, { name: r.name, avatar: r.avatar, handle: r.handle }]));
 }

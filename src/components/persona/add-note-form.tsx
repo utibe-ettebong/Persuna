@@ -48,3 +48,43 @@ export function AddNoteForm({
     </form>
   );
 }
+
+export function AddTodoForm({
+  action,
+}: {
+  action: (state: State, form: FormData) => Promise<State>;
+}) {
+  const [state, submit, pending] = useActionState(action, { error: null });
+  const form = useRef<HTMLFormElement>(null);
+  const submitted = useRef(false);
+  useEffect(() => {
+    if (submitted.current && !pending && !state.error) form.current?.reset();
+  }, [pending, state]);
+  return (
+    <form
+      ref={form}
+      action={(data) => {
+        submitted.current = true;
+        submit(data);
+      }}
+      className="flex gap-2"
+    >
+      <input
+        name="text"
+        placeholder="Add a to-do…"
+        aria-label="New to-do"
+        maxLength={300}
+        required
+        className={`${inputClass} mt-0`}
+      />
+      <button type="submit" disabled={pending} className={buttonClass("secondary")}>
+        Add
+      </button>
+      {state.error && (
+        <p role="alert" className="text-sm text-danger">
+          {state.error}
+        </p>
+      )}
+    </form>
+  );
+}

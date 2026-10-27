@@ -4,6 +4,7 @@ import { ScoreBadge } from "@/components/score-trend";
 import { Badge, Card, PageHeader } from "@/components/ui";
 import { formatNaira } from "@/lib/market/rules";
 import { listActiveListings } from "@/lib/market/service";
+import { personasByOwner } from "@/lib/persona/service";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Marketplace" };
@@ -12,6 +13,9 @@ const TRUST_BADGE = ["Owner-reviewed", "Auto-approved + review", "Spot-checked"]
 
 export default async function MarketPage() {
   const listings = await listActiveListings();
+  const personas = await personasByOwner([
+    ...new Set(listings.flatMap((l) => (l.skill.ownerId ? [l.skill.ownerId] : []))),
+  ]);
 
   return (
     <div className="space-y-10">
@@ -29,34 +33,45 @@ export default async function MarketPage() {
         </Card>
       ) : (
         <ul className="grid gap-px overflow-hidden rounded-md border border-line bg-line sm:grid-cols-2 lg:grid-cols-3">
-          {listings.map(({ listing, skill, score }) => (
-            <li key={listing.id} className="bg-card">
-              <Link
-                href={`/market/${listing.id}`}
-                className="group flex h-full flex-col gap-3 p-6 transition-colors hover:bg-accent-soft/40"
-              >
-                <Badge tone="accent">{TRUST_BADGE[skill.trustLevel] ?? TRUST_BADGE[0]}</Badge>
-                <p className="font-display text-xl font-medium tracking-[-0.02em] group-hover:text-accent">
-                  {listing.title}
-                </p>
-                <p className="line-clamp-3 flex-1 text-sm leading-relaxed text-muted">
-                  {listing.description}
-                </p>
-                <div className="flex items-end justify-between gap-2 border-t border-line pt-4">
-                  <span>
-                    <span className="label-mono block text-faint">Per task</span>
-                    <span className="font-display text-2xl font-medium tabular-nums tracking-[-0.02em]">
-                      {formatNaira(listing.priceNgn)}
+          {listings.map(({ listing, skill, score }) => {
+            const persona = skill.ownerId ? personas.get(skill.ownerId) : undefined;
+            return (
+              <li key={listing.id} className="flex flex-col bg-card">
+                <Link
+                  href={`/market/${listing.id}`}
+                  className="group flex flex-1 flex-col gap-3 p-6 transition-colors hover:bg-accent-soft/40"
+                >
+                  <Badge tone="accent">{TRUST_BADGE[skill.trustLevel] ?? TRUST_BADGE[0]}</Badge>
+                  <p className="font-display text-xl font-medium tracking-[-0.02em] group-hover:text-accent">
+                    {listing.title}
+                  </p>
+                  <p className="line-clamp-3 flex-1 text-sm leading-relaxed text-muted">
+                    {listing.description}
+                  </p>
+                  <div className="flex items-end justify-between gap-2 border-t border-line pt-4">
+                    <span>
+                      <span className="label-mono block text-faint">Per task</span>
+                      <span className="font-display text-2xl font-medium tabular-nums tracking-[-0.02em]">
+                        {formatNaira(listing.priceNgn)}
+                      </span>
                     </span>
-                  </span>
-                  <span className="text-right">
-                    <span className="label-mono block text-faint">Replication</span>
-                    <ScoreBadge score={score} />
-                  </span>
-                </div>
-              </Link>
-            </li>
-          ))}
+                    <span className="text-right">
+                      <span className="label-mono block text-faint">Replication</span>
+                      <ScoreBadge score={score} />
+                    </span>
+                  </div>
+                </Link>
+                {persona?.handle && (
+                  <Link
+                    href={`/personas/${persona.handle}`}
+                    className="label-mono border-t border-line px-6 py-3 text-muted hover:text-accent"
+                  >
+                    <span aria-hidden>{persona.avatar}</span> by {persona.name} →
+                  </Link>
+                )}
+              </li>
+            );
+          })}
           {Array.from({ length: (3 - (listings.length % 3)) % 3 }).map((_, i) => (
             <li key={`pad-${i}`} aria-hidden className="hatch hidden bg-background lg:block" />
           ))}

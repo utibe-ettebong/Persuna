@@ -1,0 +1,14 @@
+{
+  "name": "persona-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Persona in a small always-on-top window that can watch any app you choose.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "44.7.0"
+  }
+}

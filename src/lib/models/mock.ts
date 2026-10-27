@@ -5,6 +5,7 @@
  * without keys. Its drafts are rough and its scores are plain text
  * similarity: good for building and demoing the flow, not for judging a skill.
  */
+import { parseWhen } from "@/lib/persona/when";
 import { tokenize } from "@/lib/skill/retrieve";
 import type { RuleCategory } from "@/lib/skill/types";
 import { textOf, type ChatMessage, type ModelClient } from "./gateway";
@@ -61,6 +62,7 @@ function mockScreenSteps(content: ChatMessage["content"]): string {
 }
 
 interface MockPersonaState {
+  now: string;
   memory: string[];
   focus: string | null;
   focusSkill: {
@@ -68,7 +70,7 @@ interface MockPersonaState {
     hasRules: boolean;
     unanswered: { key: string; question: string }[];
   } | null;
-  skills: { slug: string; name: string }[];
+  skills: { slug: string; name: string; published: boolean }[];
   lastAsked: string | null;
 }
 
@@ -102,6 +104,70 @@ function mockPersona(user: string) {
         : `Thanks, that's every question for ${skill.name}. Open the skill and extract rules when you're ready.`,
       actions: [{ type: "answer", key: state.lastAsked, answer: text }],
       asked: next?.key ?? null,
+    };
+  }
+
+  const matchSkill = () => {
+    const words = tokenize(text);
+    return (
+      state.skills.find((s) => tokenize(s.name).some((w) => words.includes(w)))?.slug ??
+      (skill ? state.skills.find((s) => s.name === skill.name)?.slug : undefined) ??
+      null
+    );
+  };
+
+  if (
+    /\b(wrap(?:-| )?up|end of (?:the )?day|summar(?:y|ise|ize) (?:of )?(?:my |the )?day)\b/.test(
+      lower,
+    )
+  ) {
+    return { reply: "Here's your wrap-up.", actions: [{ type: "wrap_up" }] };
+  }
+
+  const remind = text.match(/^(?:please )?remind me\s+(.+)/i);
+  if (remind) {
+    const at = parseWhen(remind[1], state.now);
+    const what = remind[1]
+      .replace(/\b(?:tomorrow\s+)?(?:at|by)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/i, "")
+      .replace(/\bin (?:\d+|an?|one) (?:minute|min|hour|hr)s?\b/i, "")
+      .replace(/\btomorrow\b/i, "")
+      .replace(/^\s*(?:to|that|about)\s+/i, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/[.!]+$/, "");
+    return {
+      reply: at
+        ? `Okay, I'll remind you at ${at.slice(11)}${at.slice(0, 10) !== state.now.slice(0, 10) ? " tomorrow" : ""}.`
+        : "Added to your to-dos.",
+      actions: [{ type: "remind", text: what || remind[1], at }],
+    };
+  }
+
+  const todo = text.match(/^(?:add )?(?:to-?do|add to my (?:to-?do|list)s?)[:,]?\s+(.+)/i);
+  if (todo) {
+    return {
+      reply: "Added to your to-dos.",
+      actions: [{ type: "remind", text: todo[1].replace(/[.!]+$/, ""), at: null }],
+    };
+  }
+
+  if (
+    /\b(how(?:'s| is) (?:my )?.*skill|my score|coach|can i list|ready to list|what next for)\b/.test(
+      lower,
+    )
+  ) {
+    return { reply: "Let me look at it.", actions: [{ type: "coach", skill: matchSkill() }] };
+  }
+
+  if (
+    /\b(turn (?:these|this|my)|draft (?:the|these|my|this)|do (?:a|this|the) task|run (?:my|the) skill|into minutes|write (?:up )?the minutes)\b/.test(
+      lower,
+    )
+  ) {
+    const slug = matchSkill();
+    return {
+      reply: "Sure. Paste the notes or upload a file and I'll draft it with your skill.",
+      actions: [{ type: "run_task", skill: slug }],
     };
   }
 
