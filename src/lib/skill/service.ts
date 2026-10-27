@@ -428,7 +428,7 @@ async function recordProposal(client: ModelClient, source: CorrectionSource) {
 export async function proposeFromMethodNotes(
   client: ModelClient,
   skillId: string,
-  source: "interview" | "walkthrough" | "screen",
+  source: "interview" | "walkthrough" | "screen" | "companion",
   notes: string,
 ) {
   const skill = await db().query.skills.findFirst({ where: eq(skills.id, skillId) });
@@ -446,6 +446,7 @@ export async function proposeFromMethodNotes(
       interview: "Your interview answers",
       walkthrough: "Your voice walkthrough",
       screen: "Your screen walkthrough",
+      companion: "What you taught Persona",
     }[source],
     explanation: proposal.explanation,
     ruleOps: proposal.ops,

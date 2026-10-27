@@ -196,3 +196,34 @@ input[type="file"]::file-selector-button:hover {
     }
   }
 }
+
+/* Persona, the on-screen companion. */
+@media (prefers-reduced-motion: no-preference) {
+  .persona-idle {
+    animation: persona-bob 4s ease-in-out infinite;
+  }
+  .persona-thinking {
+    animation: persona-pulse 1.1s ease-in-out infinite;
+  }
+  .persona-ring {
+    animation: persona-ring 2s ease-out infinite;
+  }
+  @keyframes persona-bob {
+    50% {
+      transform: translateY(-4px);
+    }
+  }
+  @keyframes persona-pulse {
+    50% {
+      transform: scale(1.08);
+    }
+  }
+  @keyframes persona-ring {
+    from {
+      box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 45%, transparent);
+    }
+    to {
+      box-shadow: 0 0 0 14px transparent;
+    }
+  }
+}

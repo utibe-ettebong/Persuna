@@ -18,7 +18,9 @@ export function createMockClient(): ModelClient {
       const user = lastUser ? textOf(lastUser.content) : "";
       const system = textOf(messages.find((m) => m.role === "system")?.content ?? "");
       let text: string;
-      if (role === "draft") text = mockDraft(user, system);
+      if (user.includes("<persona_user>")) text = JSON.stringify(mockPersona(user));
+      else if (user.includes("<persona_observe>")) text = JSON.stringify(mockObserve(user));
+      else if (role === "draft") text = mockDraft(user, system);
       else if (user.includes("<screen_walkthrough>"))
         text = mockScreenSteps(lastUser?.content ?? "");
       else if (user.includes("<self_check_draft>")) text = JSON.stringify(mockSelfCheck(user));
@@ -56,6 +58,129 @@ function mockScreenSteps(content: ChatMessage["content"]): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+interface MockPersonaState {
+  memory: string[];
+  focus: string | null;
+  focusSkill: {
+    name: string;
+    hasRules: boolean;
+    unanswered: { key: string; question: string }[];
+  } | null;
+  skills: { slug: string; name: string }[];
+  lastAsked: string | null;
+}
+
+/** Stand-in for Persona's chat: keyword rules that exercise every action. */
+function mockPersona(user: string) {
+  const state = JSON.parse(blocks(user, "persona_state")[0] ?? "{}") as MockPersonaState;
+  const text = blocks(user, "persona_user")[0] ?? "";
+  const lower = text.toLowerCase();
+  const skill = state.focusSkill;
+  const nextQuestion = (except: string | null) =>
+    skill?.unanswered.find((q) => q.key !== except) ?? null;
+
+  if (state.lastAsked && skill) {
+    if (/^(skip|later|not now)\b/.test(lower)) {
+      const next = nextQuestion(state.lastAsked);
+      return next
+        ? { reply: `No problem. ${next.question}`, actions: [], asked: next.key }
+        : { reply: "Okay, we'll leave it there for now.", actions: [], asked: null };
+    }
+    if (/^(stop|that's all|done)\b/.test(lower)) {
+      return {
+        reply: "Okay, I'll stop the questions. Pick it up any time.",
+        actions: [],
+        asked: null,
+      };
+    }
+    const next = nextQuestion(state.lastAsked);
+    return {
+      reply: next
+        ? `Got it, I've saved that. Next one: ${next.question}`
+        : `Thanks, that's every question for ${skill.name}. Open the skill and extract rules when you're ready.`,
+      actions: [{ type: "answer", key: state.lastAsked, answer: text }],
+      asked: next?.key ?? null,
+    };
+  }
+
+  const remember = text.match(/\bremember(?: that)?[:,]?\s+(.+)/i);
+  if (remember) {
+    return {
+      reply: "I'll remember that.",
+      actions: [{ type: "remember", fact: remember[1].replace(/[.!]+$/, "") }],
+    };
+  }
+
+  const note = text.match(
+    /^(?:note|take a note|write (?:this )?down|jot (?:this )?down)[:,]?\s*([\s\S]+)/i,
+  );
+  if (note) {
+    const body = note[1].trim();
+    return {
+      reply: "Noted. It's on your Notes page.",
+      actions: [{ type: "note", title: body.split(/\s+/).slice(0, 6).join(" "), body }],
+    };
+  }
+
+  const focus = text.match(
+    /(?:working on|focus(?:ing)? on|today (?:i'?m|we're|we are|is))\s+(.+)/i,
+  );
+  if (focus) {
+    const words = tokenize(focus[1]);
+    const match = state.skills.find((s) => tokenize(s.name).some((w) => words.includes(w)));
+    return {
+      reply: match
+        ? `Got it: today is ${focus[1].replace(/[.!]+$/, "")}. That's your "${match.name}" skill. Say "teach me" and I'll ask how you do it, one question at a time.`
+        : `Got it: today is ${focus[1].replace(/[.!]+$/, "")}. I'll keep us on it. Want me to take notes as we go?`,
+      actions: [
+        { type: "set_focus", focus: focus[1].replace(/[.!]+$/, ""), skill: match?.slug ?? null },
+      ],
+    };
+  }
+
+  if (skill && /\b(teach|train|interview me|ask me|learn)\b/.test(lower)) {
+    const next = nextQuestion(null);
+    if (next) return { reply: `Let's do it. ${next.question}`, actions: [], asked: next.key };
+    return {
+      reply: `I have your answers for ${skill.name}. Tell me a rule or a step ("I always…") and I'll ${skill.hasRules ? "propose a change to your rules" : "add it to what I know"}.`,
+      actions: [],
+    };
+  }
+
+  if (skill && /\b(i always|i never|i usually|my rule|the way i)\b/.test(lower)) {
+    return {
+      reply: skill.hasRules
+        ? "Thanks, I've turned that into a proposed rule change for you to review."
+        : "Thanks, I've added that to how you do it.",
+      actions: [{ type: "learn", method: text }],
+    };
+  }
+
+  return {
+    reply: state.focus
+      ? `I'm here. We're on ${state.focus}. Ask me to take a note, remember something, or say "teach me".`
+      : "I'm here. What are we working on today?",
+    actions: [],
+  };
+}
+
+/** Stand-in for watching the screen: one generic step per look, rarely a remark. */
+function mockObserve(user: string) {
+  const recent = blocks(user, "recent_steps")[0] ?? "";
+  const seen = recent.startsWith("(none") ? 0 : recent.split("\n").length;
+  const steps = [
+    "Opens the source material beside a blank document.",
+    "Writes the header block first.",
+    "Works through the material top to bottom, one section at a time.",
+    "Moves follow-ups into a list at the end.",
+    "Reads the result through once before saving.",
+  ];
+  return {
+    say: seen === 0 ? "I'm watching this window. I'll jot down your steps quietly." : null,
+    step: `${steps[seen % steps.length]} (mock)`,
+  };
 }
 
 export function blocks(text: string, tag: string): string[] {

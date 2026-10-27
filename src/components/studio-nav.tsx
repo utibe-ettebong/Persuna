@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAV = [
+  { href: "/persona", label: "Persona" },
   { href: "/skills", label: "Skills" },
   { href: "/jobs", label: "Jobs" },
   { href: "/market", label: "Marketplace" },
