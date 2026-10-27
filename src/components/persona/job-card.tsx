@@ -47,7 +47,7 @@ export function JobCard({ jobId, initial }: { jobId: string; initial?: ChatJob }
   }
 
   return (
-    <div className="mt-2 space-y-2 rounded-md border border-line bg-card p-2 text-foreground">
+    <div className="mt-2 space-y-2 rounded-2xl bg-background/70 p-3 text-foreground ring-1 ring-line">
       {job.flags.length > 0 && (
         <ul className="space-y-1 text-xs text-warn">
           {job.flags.map((f) => (
@@ -80,7 +80,7 @@ export function JobCard({ jobId, initial }: { jobId: string; initial?: ChatJob }
               type="button"
               disabled={pending}
               onClick={() => void decide("approve")}
-              className="label-mono rounded-md bg-good px-2 py-1 text-white"
+              className="rounded-full bg-good px-4 py-1.5 text-xs text-white"
             >
               {editing ? "Approve edit" : "Approve"}
             </button>

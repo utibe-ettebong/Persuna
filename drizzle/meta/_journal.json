@@ -50,6 +50,13 @@
       "when": 1793121811465,
       "tag": "0006_persona-assistant",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793123645133,
+      "tag": "0007_persona-look",
+      "breakpoints": true
     }
   ]
 }

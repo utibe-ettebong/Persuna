@@ -2,11 +2,15 @@
 
 import { useState } from "react";
 import { personaSetupAction } from "@/app/actions/persona";
+import { DEFAULT_LOOK, type LookId } from "@/lib/persona/looks";
 import type { CompanionMessage } from "./companion";
+import { LookPicker } from "./look-picker";
 
-const AVATARS = ["🦉", "🤖", "🦊", "🐙", "🌱", "✨", "🐝", "🪴"] as const;
-type Avatar = (typeof AVATARS)[number];
 type Task = Parameters<typeof personaSetupAction>[0]["task"];
+
+const field =
+  "mt-1 w-full rounded-2xl bg-background/70 px-4 py-2.5 text-sm outline-none ring-1 ring-line focus:ring-2 focus:ring-accent";
+const primary = "rounded-full bg-accent px-5 py-2 text-sm text-accent-ink disabled:opacity-60";
 
 /**
  * The first meeting: Persona introduces itself, asks what to be called and
@@ -21,23 +25,23 @@ export function SetupCard({
 }) {
   const [step, setStep] = useState<1 | 2>(1);
   const [name, setName] = useState("");
-  const [avatar, setAvatar] = useState<Avatar>("🦉");
+  const [look, setLook] = useState<LookId>(DEFAULT_LOOK);
   const [choice, setChoice] = useState<string>(skills[0]?.slug ?? "sample");
   const [taskName, setTaskName] = useState("");
   const [description, setDescription] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const called = name.trim() || "Persona";
 
   async function finish(task: Task) {
     setPending(true);
     setError(null);
-    const finalName = name.trim() || "Persona";
-    const res = await personaSetupAction({ name: finalName, avatar, task });
+    const res = await personaSetupAction({ name: called, avatar: look, task });
     setPending(false);
     if (!res.ok) return setError(res.error);
     onDone({
-      name: finalName,
-      avatar,
+      name: called,
+      avatar: look,
       message: {
         ...res.value.message,
         role: "assistant",
@@ -46,20 +50,34 @@ export function SetupCard({
     });
   }
 
-  const field =
-    "mt-1 w-full rounded-md border border-line bg-background px-3 py-2 text-sm outline-none focus:border-accent";
+  const option = (value: string, label: string) => (
+    <label
+      key={value}
+      className={`flex cursor-pointer items-center gap-3 rounded-2xl px-4 py-2.5 transition-colors ${
+        choice === value ? "bg-accent-soft text-foreground" : "hover:bg-subtle"
+      }`}
+    >
+      <input
+        type="radio"
+        name="first-task"
+        checked={choice === value}
+        onChange={() => setChoice(value)}
+        className="accent-[var(--accent)]"
+      />
+      {label}
+    </label>
+  );
 
   return (
-    <div className="space-y-4 px-4 py-4 text-sm" aria-label="Set up your Persona">
+    <div className="space-y-4 p-5 text-sm" aria-label="Set up your Persona">
       {step === 1 ? (
         <>
-          <p className="rounded-lg bg-subtle px-3 py-2">
+          <p className="font-display text-lg leading-snug">
             Hi! I&apos;m your new assistant. I&apos;ll keep notes, remind you of things, learn how
-            you work and, once you&apos;ve trained me, do some of it for you. What would you like to
-            call me?
+            you work and, once you&apos;ve trained me, do some of it for you.
           </p>
           <label className="block">
-            <span className="font-medium">My name</span>
+            <span className="text-muted">What would you like to call me?</span>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -69,62 +87,21 @@ export function SetupCard({
               autoFocus
             />
           </label>
-          <fieldset>
-            <legend className="font-medium">How should I look?</legend>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {AVATARS.map((a) => (
-                <button
-                  key={a}
-                  type="button"
-                  onClick={() => setAvatar(a)}
-                  aria-pressed={a === avatar}
-                  aria-label={`Look like ${a}`}
-                  className={`grid h-10 w-10 place-items-center rounded-full border-2 text-xl ${
-                    a === avatar ? "border-accent bg-accent-soft" : "border-line"
-                  }`}
-                >
-                  {a}
-                </button>
-              ))}
-            </div>
-          </fieldset>
-          <button
-            type="button"
-            onClick={() => setStep(2)}
-            className="label-mono rounded-md bg-accent px-3 py-2 text-accent-ink"
-          >
+          <LookPicker value={look} onChange={setLook} legend="And how should I look?" />
+          <button type="button" onClick={() => setStep(2)} className={primary}>
             Next
           </button>
         </>
       ) : (
         <>
-          <p className="rounded-lg bg-subtle px-3 py-2">
-            <span aria-hidden>{avatar}</span> Great, I&apos;m {name.trim() || "Persona"}. What
-            should I learn first?
+          <p className="font-display text-lg leading-snug">
+            Lovely, I&apos;m {called}. What should I learn first?
           </p>
-          <div className="space-y-2">
-            {skills.map((s) => (
-              <label key={s.slug} className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="first-task"
-                  checked={choice === s.slug}
-                  onChange={() => setChoice(s.slug)}
-                />
-                {s.name}
-              </label>
-            ))}
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="first-task"
-                checked={choice === "new"}
-                onChange={() => setChoice("new")}
-              />
-              Something new
-            </label>
+          <div className="space-y-1">
+            {skills.map((s) => option(s.slug, s.name))}
+            {option("new", "Something new")}
             {choice === "new" && (
-              <div className="space-y-2 pl-6">
+              <div className="space-y-2 px-2 pb-1">
                 <input
                   value={taskName}
                   onChange={(e) => setTaskName(e.target.value)}
@@ -142,17 +119,9 @@ export function SetupCard({
                 />
               </div>
             )}
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="first-task"
-                checked={choice === "sample"}
-                onChange={() => setChoice("sample")}
-              />
-              Try the sample: meeting notes into minutes
-            </label>
+            {option("sample", "Try the sample: meeting notes into minutes")}
           </div>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               disabled={pending}
@@ -165,18 +134,22 @@ export function SetupCard({
                       : { kind: "existing", slug: choice },
                 )
               }
-              className="label-mono rounded-md bg-accent px-3 py-2 text-accent-ink disabled:opacity-60"
+              className={primary}
             >
               {pending ? "Setting up…" : "Let's start"}
             </button>
-            <button type="button" onClick={() => setStep(1)} className="label-mono text-muted">
+            <button
+              type="button"
+              onClick={() => setStep(1)}
+              className="rounded-full px-3 py-2 text-muted hover:text-foreground"
+            >
               Back
             </button>
             <button
               type="button"
               disabled={pending}
               onClick={() => void finish({ kind: "skip" })}
-              className="label-mono ml-auto text-muted"
+              className="ml-auto rounded-full px-3 py-2 text-muted hover:text-foreground"
             >
               Later
             </button>

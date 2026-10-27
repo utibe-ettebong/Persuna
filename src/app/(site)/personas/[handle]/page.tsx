@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { PersonaOrb } from "@/components/persona/orb";
 import { ScoreBadge } from "@/components/score-trend";
 import { Badge, Card, PageHeader } from "@/components/ui";
 import { orNotFound } from "@/lib/load";
@@ -32,7 +33,10 @@ export default async function PublicPersonaPage({ params }: Params) {
         eyebrow="Persona"
         title={
           <>
-            <span aria-hidden>{p.avatar}</span> {p.name}
+            <span className="inline-flex items-center gap-3">
+              <PersonaOrb look={p.avatar} size={56} animate={false} />
+              {p.name}
+            </span>
           </>
         }
         description={`${p.ownerFirstName}'s persona. It works the way ${p.ownerFirstName} does, trained on their own examples and approved by them.`}

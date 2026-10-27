@@ -15,9 +15,9 @@ import {
   TeachNoteButton,
 } from "@/components/persona/persona-settings";
 import { Badge, Card, PageHeader, PanelTitle, Prose } from "@/components/ui";
+import { PersonaOrb } from "@/components/persona/orb";
 import { requireUser } from "@/lib/auth/session";
 import {
-  AVATARS,
   coachingForAll,
   companion,
   ensureHandle,
@@ -43,7 +43,10 @@ export default async function PersonaPage() {
         eyebrow="Studio · Persona"
         title={
           <>
-            <span aria-hidden>{profile.avatar}</span> {profile.name}
+            <span className="inline-flex items-center gap-3">
+              <PersonaOrb look={profile.avatar} size={56} />
+              {profile.name}
+            </span>
           </>
         }
         description={
@@ -60,12 +63,7 @@ export default async function PersonaPage() {
         <div className="space-y-6">
           <Card className="p-5">
             <PanelTitle>Profile</PanelTitle>
-            <PersonaProfileForm
-              name={profile.name}
-              avatar={profile.avatar}
-              focus={profile.focus}
-              avatars={AVATARS}
-            />
+            <PersonaProfileForm name={profile.name} avatar={profile.avatar} focus={profile.focus} />
             {focusSkill && (
               <p className="mt-3 text-sm text-muted">
                 Learning into{" "}

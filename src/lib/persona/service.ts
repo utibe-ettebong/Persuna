@@ -37,7 +37,7 @@ const { personaProfiles, personaMessages, personaNotes, personaReminders, skills
   schema;
 
 export const MAX_MEMORY = 30;
-export const AVATARS = ["🦉", "🤖", "🦊", "🐙", "🌱", "✨", "🐝", "🪴"] as const;
+export { LOOK_IDS as AVATARS } from "./looks";
 
 export async function getProfile(userId: string) {
   await db().insert(personaProfiles).values({ userId }).onConflictDoNothing();
@@ -53,7 +53,9 @@ export async function recentMessages(userId: string, limit = 40): Promise<Person
     .select()
     .from(personaMessages)
     .where(eq(personaMessages.userId, userId))
-    .orderBy(desc(personaMessages.createdAt))
+    // A turn's two rows share a timestamp: newest first, reply before question,
+    // so that reversed, each question comes before its reply.
+    .orderBy(desc(personaMessages.createdAt), asc(personaMessages.role))
     .limit(limit);
   return rows.reverse();
 }
