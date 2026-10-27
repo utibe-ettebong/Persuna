@@ -2,7 +2,8 @@ import { modelProvider } from "@/env";
 import { createGateway, type ModelClient } from "./gateway";
 import { createMockClient } from "./mock";
 import { createTranscriber as liveOrMockTranscriber, type Transcriber } from "./transcribe";
-import { type Caller, meteredClient, meteredTranscriber } from "./usage";
+import { createSpeaker as liveSpeaker, type Speaker } from "./speech";
+import { type Caller, meteredClient, meteredSpeaker, meteredTranscriber } from "./usage";
 
 /**
  * The model client for this environment: live providers or the offline mock.
@@ -20,4 +21,10 @@ export function createTranscriber(caller?: Caller): Transcriber {
   return caller && modelProvider() !== "mock"
     ? meteredTranscriber(transcriber, caller)
     : transcriber;
+}
+
+/** Persona's cloud voice, or null when none is configured (the browser speaks). */
+export function createSpeaker(caller?: Caller): Speaker | null {
+  const speaker = liveSpeaker();
+  return speaker && caller ? meteredSpeaker(speaker, caller) : speaker;
 }

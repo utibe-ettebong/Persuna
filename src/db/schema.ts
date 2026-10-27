@@ -15,6 +15,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import type { JobFlag } from "@/lib/jobs/self-check";
+import type { Tone } from "@/lib/persona/tone";
 import type { InterviewAnswers } from "@/lib/skill/interview";
 import type { RuleOp, ScoreBreakdown, SkillSheet } from "@/lib/skill/types";
 
@@ -399,6 +400,10 @@ export const personaProfiles = pgTable("persona_profiles", {
   checkinDay: text("checkin_day"),
   /** The local day of the last end-of-day wrap-up. */
   wrapupDay: text("wrapup_day"),
+  /** How the user likes to be spoken to (see lib/persona/tone). */
+  tone: jsonb("tone").$type<Tone>().notNull().default({}),
+  /** Keys of notices Persona already raised, newest last, so each is said once. */
+  noticeKeys: jsonb("notice_keys").$type<string[]>().notNull().default([]),
   createdAt: createdAt(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

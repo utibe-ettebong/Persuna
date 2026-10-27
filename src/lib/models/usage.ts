@@ -2,6 +2,7 @@ import { and, count, eq, gte } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import { env } from "@/env";
 import type { ModelClient } from "./gateway";
+import type { Speaker } from "./speech";
 import type { Transcriber } from "./transcribe";
 
 const { modelUsage } = schema;
@@ -52,6 +53,17 @@ export function meteredTranscriber(transcriber: Transcriber, caller: Caller): Tr
       await checkAllowance(caller);
       const result = await transcriber.transcribe(audio, filename);
       await record(caller, "transcribe");
+      return result;
+    },
+  };
+}
+
+export function meteredSpeaker(speaker: Speaker, caller: Caller): Speaker {
+  return {
+    async synthesize(text, style) {
+      await checkAllowance(caller);
+      const result = await speaker.synthesize(text, style);
+      await record(caller, "speech");
       return result;
     },
   };

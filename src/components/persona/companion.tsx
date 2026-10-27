@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
   personaChatAction,
   personaCheckInAction,
-  personaDueRemindersAction,
+  personaPulseAction,
   personaObserveAction,
   personaTeachNoteAction,
   personaTranscribeAction,
@@ -22,6 +22,7 @@ import { MAX_LOOKS, startWatching, type Watcher } from "./screen-watch";
 import { SetupCard } from "./setup-card";
 import { TaskComposer } from "./task-composer";
 import { speak, startConversation, stopSpeaking, type Conversation } from "./voice";
+import { startWakeWord, wakeWordSupported, type WakeListener } from "./wake-listener";
 
 export interface CompanionMessage {
   id: string;
@@ -114,9 +115,12 @@ export function Companion(props: CompanionProps) {
   const [looks, setLooks] = useState(0);
   const [watchNote, setWatchNote] = useState<string | null>(null);
   const [pip, setPip] = useState<Window | null>(null);
+  const [wakeOn, setWakeOn] = useState(false);
+  const [askWake, setAskWake] = useState(false);
   const router = useRouter();
   const watcher = useRef<Watcher | null>(null);
   const conversation = useRef<Conversation | null>(null);
+  const wake = useRef<WakeListener | null>(null);
   const stream = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; y: number; right: number; bottom: number; moved: boolean }>(
     null,
@@ -202,6 +206,7 @@ export function Companion(props: CompanionProps) {
     const restore = requestAnimationFrame(() => {
       setPos(stored("persona.pos", { right: 28, bottom: 28 }));
       setVoiceOn(stored("persona.voice", true));
+      setWakeOn(stored("persona.wake", false) && wakeWordSupported());
     });
     void personaCheckInAction(clock().day).then((res) => {
       if (res.ok && res.value && props.setupDone) {
@@ -220,11 +225,14 @@ export function Companion(props: CompanionProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Heartbeat: due reminders, plus anything worth speaking up about. Also
+  // runs shortly after you open another page, so Persona reacts to it.
+  const path = usePathname();
   useEffect(() => {
     const check = async () => {
-      const res = await personaDueRemindersAction();
-      if (!res.ok || !res.value.length) return;
-      for (const r of res.value) {
+      const res = await personaPulseAction(clock(), window.location.pathname);
+      if (!res.ok) return;
+      for (const r of res.value.reminders) {
         const line = `Reminder: ${r.text}`;
         setMessages((all) => [
           ...all,
@@ -235,16 +243,24 @@ export function Companion(props: CompanionProps) {
           new Notification(`${live.current.name} · reminder`, { body: r.text, tag: r.id });
         }
       }
+      for (const n of res.value.notices) {
+        setMessages((all) => [
+          ...all,
+          { ...n.message, role: "assistant", link: { href: n.href, label: "Take a look" } },
+        ]);
+        express(n.message.content);
+      }
     };
     const timer = setInterval(() => void check(), REMINDER_POLL_MS);
+    const soon = setTimeout(() => void check(), 1500);
     const onVisible = () => document.visibilityState === "visible" && void check();
     document.addEventListener("visibilitychange", onVisible);
-    void check();
     return () => {
       clearInterval(timer);
+      clearTimeout(soon);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [express]);
+  }, [express, path]);
 
   useEffect(() => {
     if (!setupDone) return;
@@ -265,7 +281,7 @@ export function Companion(props: CompanionProps) {
 
   useEffect(() => {
     stream.current?.scrollTo({ top: stream.current.scrollHeight, behavior: "smooth" });
-  }, [messages, open, pip, task, askWatch]);
+  }, [messages, open, pip, task, askWatch, askWake]);
 
   /* ---------- Talking with Persona ---------- */
 
@@ -359,6 +375,55 @@ export function Companion(props: CompanionProps) {
     } catch {
       setError("Microphone access was blocked.");
     }
+  }
+
+  /* ---------- Wake word ---------- */
+
+  useEffect(() => {
+    if (!wakeOn || !setupDone) return;
+    try {
+      wake.current = startWakeWord({
+        name: () => live.current.name,
+        onWake: (rest) => {
+          lastInput.current = Date.now();
+          setDozing(false);
+          setOpen(true);
+          if (rest.split(/\s+/).filter(Boolean).length >= 2) void send(rest);
+          else {
+            void sayAloud("Yes?");
+            if (!conversation.current) void toggleConversation();
+          }
+        },
+        onError: (message) => {
+          setError(message);
+          setWakeOn(false);
+          store("persona.wake", false);
+        },
+      });
+    } catch (e) {
+      const message = (e as Error).message;
+      queueMicrotask(() => {
+        setError(message);
+        setWakeOn(false);
+      });
+    }
+    return () => {
+      wake.current?.stop();
+      wake.current = null;
+    };
+    // toggleConversation and send read live state through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wakeOn, setupDone]);
+
+  // Don't listen for the wake word while already talking.
+  useEffect(() => {
+    wake.current?.pause(conversing || talking);
+  }, [conversing, talking]);
+
+  function setWake(next: boolean) {
+    setAskWake(false);
+    setWakeOn(next);
+    store("persona.wake", next);
   }
 
   /* ---------- Watching (only with permission) ---------- */
@@ -505,7 +570,7 @@ export function Companion(props: CompanionProps) {
             ? "sleeping"
             : "idle";
   const status = {
-    idle: focus ? `On ${focus}` : "Here with you",
+    idle: wakeOn ? `Say "Hey ${name}"` : focus ? `On ${focus}` : "Here with you",
     listening: "Listening…",
     thinking: busy === "hearing" ? "Hearing you…" : "Thinking…",
     speaking: "Speaking",
@@ -517,6 +582,7 @@ export function Companion(props: CompanionProps) {
     () => !props.standalone && "documentPictureInPicture" in window,
     () => false,
   );
+  const canWake = useSyncExternalStore(noSubscribe, wakeWordSupported, () => false);
   const inDesktopApp = useSyncExternalStore(
     noSubscribe,
     () => /Electron/.test(navigator.userAgent),
@@ -580,6 +646,32 @@ export function Companion(props: CompanionProps) {
                   style={{ animationDelay: `${i * 0.15}s` }}
                 />
               ))}
+            </div>
+          )}
+          {askWake && (
+            <div className={`persona-in space-y-2 rounded-[22px] p-4 text-sm ${card}`}>
+              <p>
+                <strong>Say &ldquo;Hey {name}&rdquo; to wake me.</strong> While this is on, your
+                browser listens for my name. In Chrome and Edge, that listening is done by the
+                browser maker&apos;s speech service, not by PERSUNA. I start a conversation when I
+                hear my name; nothing else is kept. Turn it off any time.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setWake(true)}
+                  className="rounded-full bg-accent px-4 py-1.5 text-sm text-accent-ink"
+                >
+                  Turn it on
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAskWake(false)}
+                  className="rounded-full px-3 py-1.5 text-sm text-muted hover:text-foreground"
+                >
+                  Not now
+                </button>
+              </div>
             </div>
           )}
           {askWatch && (
@@ -680,6 +772,15 @@ export function Companion(props: CompanionProps) {
       >
         <Icon name="eye" />
       </Chip>
+      {canWake && (
+        <Chip
+          label={wakeOn ? `Stop listening for "Hey ${name}"` : `Listen for "Hey ${name}"`}
+          active={wakeOn}
+          onClick={() => (wakeOn ? setWake(false) : setAskWake((v) => !v))}
+        >
+          <Icon name="ear" />
+        </Chip>
+      )}
       {pipSupported && (
         <Chip label="Float over other apps" onClick={() => void popOut()}>
           <Icon name="float" />

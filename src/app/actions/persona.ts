@@ -18,8 +18,9 @@ import {
   jobForChat,
   reviewFromChat,
   runTask,
+  pulse,
   setReminderDone,
-  takeDueReminders,
+  setTone,
   checkIn,
   clearConversation,
   deleteNote,
@@ -131,11 +132,33 @@ export async function personaReviewJobAction(
   });
 }
 
-/** Reminders that just came due; each is returned once. */
-export async function personaDueRemindersAction() {
+/**
+ * The companion's heartbeat: reminders that came due and anything worth
+ * speaking up about. `path` is the page the user is on.
+ */
+export async function personaPulseAction(clock: z.input<typeof clockField>, path: string) {
   return run(async () => {
     const user = await requireUser();
-    return (await takeDueReminders(user.id)).map((r) => ({ id: r.id, text: r.text }));
+    return pulse(user.id, {
+      clock: clockField.parse(clock),
+      path: z.string().max(300).parse(path),
+    });
+  });
+}
+
+const toneForm = z.object({
+  length: z.enum(["short", "normal", "detailed"]).optional(),
+  formality: z.enum(["casual", "neutral", "formal"]).optional(),
+  playful: z.boolean().optional(),
+  notes: z.array(z.string().trim().min(1).max(160)).max(6).optional(),
+});
+
+export async function personaToneAction(tone: z.input<typeof toneForm>) {
+  return run(async () => {
+    const user = await requireUser();
+    await setTone(user.id, toneForm.parse(tone));
+    revalidatePath("/persona");
+    return true;
   });
 }
 
