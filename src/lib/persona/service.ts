@@ -53,7 +53,15 @@ export async function getProfile(userId: string) {
   const profile = await db().query.personaProfiles.findFirst({
     where: eq(personaProfiles.userId, userId),
   });
-  if (!profile) throw new Error("Couldn't load your Persona");
+  if (!profile) throw new Error("Couldn't load your Persuna");
+  // The assistant was once called "Persona" by default; it's "Persuna" now.
+  if (profile.name === "Persona") {
+    await db()
+      .update(personaProfiles)
+      .set({ name: "Persuna" })
+      .where(eq(personaProfiles.userId, userId));
+    return { ...profile, name: "Persuna" };
+  }
   return profile;
 }
 
@@ -442,7 +450,7 @@ export async function teachFromNote(
   const profile = await getProfile(userId);
   const skillId = note.skillId ?? profile.focusSkillId;
   if (!skillId) {
-    throw new Error("Tell Persona which skill you're working on first (\"I'm working on…\").");
+    throw new Error("Tell your Persuna which skill you're working on first (\"I'm working on…\").");
   }
   const skill = await db().query.skills.findFirst({
     where: and(eq(skills.id, skillId), eq(skills.ownerId, userId)),
@@ -593,7 +601,7 @@ export async function ensureHandle(userId: string): Promise<string> {
     const again = await getProfile(userId);
     if (again.handle) return again.handle;
   }
-  throw new Error("Couldn't create a public address for your Persona");
+  throw new Error("Couldn't create a public address for your Persuna");
 }
 
 /* ---------- Doing work from the chat ---------- */

@@ -33,6 +33,13 @@ export default async function StudioLayout({ children }: Readonly<{ children: Re
                 Mock models
               </Link>
             )}
+            <Link
+              href="/download"
+              className="label-mono hidden rounded-sm border border-accent/40 bg-accent-soft px-2 py-1 text-accent hover:bg-accent-soft/70 sm:inline"
+              title="Persuna Desktop for Mac and Windows"
+            >
+              Get the app
+            </Link>
             <span
               className="hidden max-w-40 truncate text-sm text-muted md:inline"
               title={user.email}

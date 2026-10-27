@@ -1,0 +1,1 @@
+ALTER TABLE "persona_profiles" ALTER COLUMN "name" SET DEFAULT 'Persuna';

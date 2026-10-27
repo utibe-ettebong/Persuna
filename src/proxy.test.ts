@@ -11,6 +11,7 @@ describe("isPublicPath", () => {
       "/api/auth/sign-in/email",
       "/approvals/abc",
       "/personas/owl-ab12c",
+      "/download",
     ]) {
       expect(isPublicPath(p)).toBe(true);
     }

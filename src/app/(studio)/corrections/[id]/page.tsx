@@ -19,7 +19,7 @@ const SOURCE_LABEL = {
   interview: "your interview answers",
   walkthrough: "your voice walkthrough",
   screen: "your screen walkthrough",
-  companion: "what you taught Persona",
+  companion: "what you taught your Persuna",
 } as const;
 
 export default async function CorrectionPage({ params }: Params) {

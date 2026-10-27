@@ -44,7 +44,7 @@ export default async function PersonaPage() {
   return (
     <div className="space-y-10">
       <PageHeader
-        eyebrow="Studio · Persona"
+        eyebrow="Studio · My Persuna"
         title={
           <>
             <span className="inline-flex items-center gap-3">
@@ -91,18 +91,16 @@ export default async function PersonaPage() {
           <Card className="p-5">
             <PanelTitle>{profile.name} on your desktop</PanelTitle>
             <p className="text-sm text-muted">
-              Persona Desktop puts {profile.name} over your whole screen, above every app. It can
+              Persuna Desktop puts {profile.name} over your whole screen, above every app. It can
               watch any app you work in once you allow it, without sharing a window each time. For
               Mac (Apple silicon and Intel) and Windows.
             </p>
-            <a
+            <Link
               href={DESKTOP_DOWNLOAD_URL}
-              target="_blank"
-              rel="noreferrer"
               className="label-mono mt-3 inline-block text-accent underline"
             >
               Get the desktop app →
-            </a>
+            </Link>
           </Card>
 
           <Card className="p-5">

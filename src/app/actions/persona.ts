@@ -69,7 +69,7 @@ export async function personaChatAction(text: string, clock: z.input<typeof cloc
 }
 
 const setupForm = z.object({
-  name: z.string().trim().min(1, "Give your Persona a name").max(40),
+  name: z.string().trim().min(1, "Give your Persuna a name").max(40),
   avatar: z.enum(AVATARS),
   task: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("existing"), slug: slugField }),
@@ -232,7 +232,7 @@ export async function personaTeachNoteAction(noteId: string) {
 }
 
 const profileForm = z.object({
-  name: z.string().trim().min(1, "Give your Persona a name").max(40).optional(),
+  name: z.string().trim().min(1, "Give your Persuna a name").max(40).optional(),
   avatar: z.enum(AVATARS).optional(),
   focus: z.string().trim().max(200).nullable().optional(),
 });

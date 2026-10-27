@@ -59,7 +59,7 @@ export function TaskComposer({
   }
 
   return (
-    <div className="space-y-3 p-4 text-sm" aria-label="Give Persona a task">
+    <div className="space-y-3 p-4 text-sm" aria-label="Give your Persuna a task">
       <div className="flex items-center gap-2">
         <label className="font-medium" htmlFor="persona-task-skill">
           Do this with
