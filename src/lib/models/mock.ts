@@ -5,6 +5,7 @@
  * without keys. Its drafts are rough and its scores are plain text
  * similarity: good for building and demoing the flow, not for judging a skill.
  */
+import { toneFromMessage } from "@/lib/persona/tone";
 import { parseWhen } from "@/lib/persona/when";
 import { tokenize } from "@/lib/skill/retrieve";
 import type { RuleCategory } from "@/lib/skill/types";
@@ -63,6 +64,7 @@ function mockScreenSteps(content: ChatMessage["content"]): string {
 
 interface MockPersonaState {
   now: string;
+  tone?: { length?: string };
   memory: string[];
   focus: string | null;
   focusSkill: {
@@ -74,8 +76,22 @@ interface MockPersonaState {
   lastAsked: string | null;
 }
 
-/** Stand-in for Persona's chat: keyword rules that exercise every action. */
+/** Stand-in for Persona's chat. A "short" tone keeps only the first sentence, as asked. */
 function mockPersona(user: string) {
+  const state = JSON.parse(blocks(user, "persona_state")[0] ?? "{}") as MockPersonaState;
+  const out = mockPersonaTurn(user);
+  if (state.tone?.length === "short") {
+    out.reply = out.reply.match(/^[^.!?]+[.!?]/)?.[0] ?? out.reply;
+  }
+  return out;
+}
+
+/** Keyword rules that exercise every action. */
+function mockPersonaTurn(user: string): {
+  reply: string;
+  actions: Record<string, unknown>[];
+  asked?: string | null;
+} {
   const state = JSON.parse(blocks(user, "persona_state")[0] ?? "{}") as MockPersonaState;
   const text = blocks(user, "persona_user")[0] ?? "";
   const lower = text.toLowerCase();
@@ -115,6 +131,21 @@ function mockPersona(user: string) {
       null
     );
   };
+
+  const toneChange = toneFromMessage(text);
+  if (toneChange) {
+    const said = [
+      toneChange.length === "short" && "shorter",
+      toneChange.length === "detailed" && "with more detail",
+      toneChange.formality && `more ${toneChange.formality}`,
+      toneChange.playful === true && "with a bit of fun",
+      toneChange.playful === false && "serious",
+    ].filter(Boolean);
+    return {
+      reply: `Got it. I'll keep it ${said.join(" and ")} from now on.`,
+      actions: [{ type: "set_tone", ...toneChange }],
+    };
+  }
 
   if (
     /\b(wrap(?:-| )?up|end of (?:the )?day|summar(?:y|ise|ize) (?:of )?(?:my |the )?day)\b/.test(

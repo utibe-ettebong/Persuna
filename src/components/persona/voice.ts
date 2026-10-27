@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * Persona's voice. Speaking uses the browser's speech synthesis with the most
- * natural voice available. Listening is hands-free: the microphone stays open,
+ * Persona's voice. Speaking uses the cloud voice when the server has one
+ * (POST /api/persona/speak), and otherwise the browser's speech synthesis
+ * with the most natural voice available. Listening is hands-free: the microphone stays open,
  * a recording starts when you speak and ends after a short pause, and each
  * utterance is handed back for transcription. Listening pauses while Persona
  * is thinking or talking, so it doesn't hear itself.
@@ -51,16 +52,110 @@ export function canSpeak(): boolean {
 }
 
 let generation = 0;
+/** Set once the server says it has no cloud voice (or it keeps failing). */
+let cloudOff = false;
+let cloudFailures = 0;
+let playing: HTMLAudioElement | null = null;
+let audioCtx: AudioContext | null = null;
+
+/**
+ * Says `text`: in the cloud voice when there is one (styled to the user's
+ * tone on the server), else the browser's. `onLevel` gets a
+ * 0–1 "mouth" value. Resolves when done or cancelled.
+ */
+export async function speak(text: string, onLevel: (level: number) => void): Promise<void> {
+  const mine = ++generation;
+  stopAudio();
+  if (canSpeak()) speechSynthesis.cancel();
+  if (!cloudOff && (await speakInCloud(text, onLevel, mine))) return;
+  if (mine === generation) await speakInBrowser(text, onLevel, mine);
+}
+
+async function speakInCloud(
+  text: string,
+  onLevel: (level: number) => void,
+  mine: number,
+): Promise<boolean> {
+  let res: Response;
+  try {
+    res = await fetch("/api/persona/speak", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: speakable(text).join(" ") }),
+    });
+  } catch {
+    return false;
+  }
+  if (res.status === 204) {
+    cloudOff = true;
+    return false;
+  }
+  if (!res.ok) {
+    if (++cloudFailures >= 3) cloudOff = true;
+    return false;
+  }
+  cloudFailures = 0;
+  const url = URL.createObjectURL(await res.blob());
+  if (mine !== generation) {
+    URL.revokeObjectURL(url);
+    return true;
+  }
+  const audio = new Audio(url);
+  playing = audio;
+  // Drive the mouth from the real audio.
+  let meter = 0;
+  try {
+    audioCtx ??= new AudioContext();
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    audioCtx.createMediaElementSource(audio).connect(analyser);
+    analyser.connect(audioCtx.destination);
+    const data = new Float32Array(analyser.fftSize);
+    meter = window.setInterval(() => {
+      analyser.getFloatTimeDomainData(data);
+      let sum = 0;
+      for (const v of data) sum += v * v;
+      onLevel(Math.min(1, Math.sqrt(sum / data.length) * 5));
+    }, 50);
+  } catch {
+    meter = window.setInterval(() => onLevel(0.35 + Math.random() * 0.65), 90);
+  }
+  try {
+    await new Promise<void>((resolve, reject) => {
+      audio.onended = () => resolve();
+      audio.onpause = () => resolve();
+      audio.onerror = () => reject(new Error("playback failed"));
+      audio.play().catch(reject);
+    });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearInterval(meter);
+    onLevel(0);
+    URL.revokeObjectURL(url);
+    if (playing === audio) playing = null;
+  }
+}
+
+function stopAudio() {
+  if (playing) {
+    playing.pause();
+    playing = null;
+  }
+}
 
 /**
  * Says `text` sentence by sentence (long single utterances get cut off in
  * some browsers). `onLevel` gets a 0–1 "mouth" value. Resolves when done or
  * cancelled; never hangs, even where no voice is installed.
  */
-export async function speak(text: string, onLevel: (level: number) => void): Promise<void> {
+async function speakInBrowser(
+  text: string,
+  onLevel: (level: number) => void,
+  mine: number,
+): Promise<void> {
   if (!canSpeak()) return;
-  const mine = ++generation;
-  speechSynthesis.cancel();
   for (const sentence of speakable(text)) {
     if (mine !== generation) break;
     await new Promise<void>((resolve) => {
@@ -92,6 +187,7 @@ export async function speak(text: string, onLevel: (level: number) => void): Pro
 
 export function stopSpeaking() {
   generation++;
+  stopAudio();
   if (canSpeak()) speechSynthesis.cancel();
 }
 

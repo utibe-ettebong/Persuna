@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { INTERVIEW_QUESTIONS, type InterviewKey } from "@/lib/skill/interview";
+import type { Tone } from "./tone";
 
 const interviewKey = z.enum(
   INTERVIEW_QUESTIONS.map((q) => q.key) as [InterviewKey, ...InterviewKey[]],
@@ -32,6 +33,14 @@ export const personaAction = z.discriminatedUnion("type", [
   z.object({ type: z.literal("coach"), skill: z.string().trim().max(80).nullish() }),
   /** The user asked for a summary of their day. */
   z.object({ type: z.literal("wrap_up") }),
+  /** The user said how they want to be spoken to. */
+  z.object({
+    type: z.literal("set_tone"),
+    length: z.enum(["short", "normal", "detailed"]).nullish(),
+    formality: z.enum(["casual", "neutral", "formal"]).nullish(),
+    playful: z.boolean().nullish(),
+    note: z.string().trim().max(160).nullish(),
+  }),
 ]);
 export type PersonaAction = z.infer<typeof personaAction>;
 
@@ -70,6 +79,8 @@ export interface PersonaState {
   skills: { slug: string; name: string; published: boolean }[];
   /** Open to-dos and reminders. */
   todos: string[];
+  /** How to talk to this user: their explicit choices, else what Persona noticed. */
+  tone: Tone;
   /** The question Persona asked in its last message, if any. */
   lastAsked: InterviewKey | null;
 }

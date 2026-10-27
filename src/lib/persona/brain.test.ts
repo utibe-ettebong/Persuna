@@ -12,6 +12,7 @@ const state = (over: Partial<PersonaState> = {}): PersonaState => ({
   focusSkill: null,
   skills: [{ slug: "meeting-minutes", name: "Meeting minutes", published: true }],
   todos: [],
+  tone: {},
   lastAsked: null,
   ...over,
 });
@@ -123,6 +124,27 @@ describe("personaTurn assistant actions with the offline mock", () => {
     expect(coach.actions).toEqual([{ type: "coach", skill: "meeting-minutes" }]);
     const wrap = await personaTurn(client, state(), [], "Wrap up my day");
     expect(wrap.actions).toEqual([{ type: "wrap_up" }]);
+  });
+});
+
+describe("tone with the offline mock", () => {
+  const client = createMockClient();
+
+  it("records a tone request", async () => {
+    const reply = await personaTurn(client, state(), [], "Please keep it short");
+    expect(reply.actions).toEqual([{ type: "set_tone", length: "short" }]);
+  });
+
+  it("answers in the user's tone", async () => {
+    const long = await personaTurn(client, state(), [], "I'm working on the meeting minutes");
+    const short = await personaTurn(
+      client,
+      state({ tone: { length: "short" } }),
+      [],
+      "I'm working on the meeting minutes",
+    );
+    expect(long.reply.split(/[.!?]\s/).length).toBeGreaterThan(1);
+    expect(short.reply).toBe("Got it: today is the meeting minutes.");
   });
 });
 

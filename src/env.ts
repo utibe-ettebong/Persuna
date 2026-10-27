@@ -117,6 +117,48 @@ export function transcriptionConfig(): ModelRoleConfig {
   );
 }
 
+export interface SpeechConfig {
+  api: "openai" | "elevenlabs";
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  voice: string;
+}
+
+/**
+ * Persona's cloud voice (text to speech), or null when no SPEECH_API_KEY is
+ * set, in which case the browser's own voice is used. Two API shapes:
+ * OpenAI-compatible POST {base}/audio/speech (OpenAI, and the many servers
+ * that copy it), or ElevenLabs. ElevenLabs is chosen when SPEECH_API=elevenlabs
+ * or the base URL is api.elevenlabs.io.
+ */
+export function speechConfig(): SpeechConfig | null {
+  const apiKey = setting("SPEECH_API_KEY");
+  if (!apiKey) return null;
+  const explicit = setting("SPEECH_API");
+  const base = setting("SPEECH_BASE_URL");
+  const api =
+    explicit === "elevenlabs" || (!explicit && /api\.elevenlabs\.io/i.test(base ?? ""))
+      ? "elevenlabs"
+      : "openai";
+  return api === "elevenlabs"
+    ? {
+        api,
+        apiKey,
+        baseUrl: (base ?? "https://api.elevenlabs.io/v1").replace(/\/+$/, ""),
+        model: setting("SPEECH_MODEL") ?? "eleven_flash_v2_5",
+        // "Rachel", one of ElevenLabs' default voices.
+        voice: setting("SPEECH_VOICE") ?? "21m00Tcm4TlvDq8ikWAM",
+      }
+    : {
+        api,
+        apiKey,
+        baseUrl: (base ?? "https://api.openai.com/v1").replace(/\/+$/, ""),
+        model: setting("SPEECH_MODEL") ?? "gpt-4o-mini-tts",
+        voice: setting("SPEECH_VOICE") ?? "nova",
+      };
+}
+
 /** Settings for real payments, validated only when Paystack is switched on. */
 export function paystackConfig() {
   const e = env();

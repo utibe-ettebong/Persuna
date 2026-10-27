@@ -13,6 +13,7 @@ import {
   ForgetButton,
   PersonaProfileForm,
   TeachNoteButton,
+  ToneForm,
 } from "@/components/persona/persona-settings";
 import { Badge, Card, PageHeader, PanelTitle, Prose } from "@/components/ui";
 import { PersonaOrb } from "@/components/persona/orb";
@@ -23,18 +24,20 @@ import {
   ensureHandle,
   listNotes,
   listReminders,
+  toneSummary,
 } from "@/lib/persona/service";
 
 export const dynamic = "force-dynamic";
 
 export default async function PersonaPage() {
   const user = await requireUser();
-  const [{ profile, focusSkill }, notes, reminders, coaching, handle] = await Promise.all([
+  const [{ profile, focusSkill }, notes, reminders, coaching, handle, tone] = await Promise.all([
     companion(user.id),
     listNotes(user.id),
     listReminders(user.id),
     coachingForAll(user.id),
     ensureHandle(user.id),
+    toneSummary(user.id),
   ]);
 
   return (
@@ -73,6 +76,15 @@ export default async function PersonaPage() {
                 .
               </p>
             )}
+          </Card>
+
+          <Card className="p-5">
+            <PanelTitle>How {profile.name} talks to you</PanelTitle>
+            <p className="mb-4 text-sm text-muted">
+              Pick, or just tell {profile.name} (&ldquo;keep it short&rdquo;, &ldquo;you can
+              joke&rdquo;). Anything left on &ldquo;Notice for me&rdquo; follows how you write.
+            </p>
+            <ToneForm tone={tone.explicit} instruction={tone.instruction} />
           </Card>
 
           <Card className="p-5">

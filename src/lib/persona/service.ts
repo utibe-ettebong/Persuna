@@ -4,7 +4,7 @@
  * goes through the skill service, so taught rules arrive as proposals the
  * owner reviews, with names and identifiers removed first.
  */
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import type { PersonaMessage, PersonaNote } from "@/db/schema";
 import { audit, type Actor } from "@/lib/audit";
@@ -30,6 +30,15 @@ import { createJob, getJob, reviewJob } from "@/lib/jobs/service";
 import { personaObserve, personaTurn, HISTORY_TURNS } from "./brain";
 import { coachSkill, type SkillStats } from "./coach";
 import { localToUtc, startOfLocalDay, utcToLocal, type OffsetMinutes } from "./when";
+import { notices, unseen } from "./notices";
+import {
+  applyToneChange,
+  effectiveTone,
+  inferTone,
+  toneInstruction,
+  voiceStyle,
+  type Tone,
+} from "./tone";
 import { buildWrapUp } from "./wrapup";
 import type { PersonaState } from "./types";
 
@@ -102,6 +111,17 @@ export async function checkIn(userId: string, day: string): Promise<PersonaMessa
   return message;
 }
 
+/** The user's explicit tone, filled in with what Persona noticed in their recent messages. */
+async function toneFor(userId: string, explicit: Tone): Promise<Tone> {
+  const recent = await db()
+    .select({ content: personaMessages.content })
+    .from(personaMessages)
+    .where(and(eq(personaMessages.userId, userId), eq(personaMessages.role, "user")))
+    .orderBy(desc(personaMessages.createdAt))
+    .limit(20);
+  return effectiveTone(explicit, inferTone(recent.map((r) => r.content).reverse()));
+}
+
 /** The user's clock, sent by the browser: local day, local time and UTC offset. */
 export interface Clock {
   day: string;
@@ -118,10 +138,11 @@ async function stateFor(userId: string, clock: Clock): Promise<PersonaState> {
     .select()
     .from(personaMessages)
     .where(eq(personaMessages.userId, userId))
-    .orderBy(desc(personaMessages.createdAt))
+    .orderBy(desc(personaMessages.createdAt), asc(personaMessages.role))
     .limit(1);
   return {
     today: clock.day,
+    tone: await toneFor(userId, profile.tone),
     now: clock.now,
     name: profile.name,
     memory: profile.memory,
@@ -179,6 +200,7 @@ export async function chat(
   const owned = await listSkills(userId);
   const focusSkill = owned.find((s) => s.id === profile.focusSkillId) ?? null;
   let memory = [...profile.memory];
+  let tone = profile.tone;
   let focus = profile.focus;
   let focusSkillId = profile.focusSkillId;
   let link: ChatResult["link"] = null;
@@ -240,6 +262,13 @@ export async function chat(
         extra.push(advice.message);
         link = { href: advice.href, label: advice.action };
       }
+    } else if (action.type === "set_tone") {
+      tone = applyToneChange(tone, {
+        length: action.length ?? undefined,
+        formality: action.formality ?? undefined,
+        playful: action.playful ?? undefined,
+        note: action.note ?? undefined,
+      });
     } else if (action.type === "wrap_up") {
       extra.push(`\n\n${await wrapUpText(userId, input.clock)}`);
       await db()
@@ -260,7 +289,7 @@ export async function chat(
 
   await db()
     .update(personaProfiles)
-    .set({ memory, focus, focusSkillId, updatedAt: new Date() })
+    .set({ memory, focus, focusSkillId, tone, updatedAt: new Date() })
     .where(eq(personaProfiles.userId, userId));
 
   const saved = await db()
@@ -862,4 +891,154 @@ export async function personasByOwner(ownerIds: string[]) {
     .from(personaProfiles)
     .where(inArray(personaProfiles.userId, ownerIds));
   return new Map(rows.map((r) => [r.userId, { name: r.name, avatar: r.avatar, handle: r.handle }]));
+}
+
+/* ---------- Tone ---------- */
+
+export async function setTone(userId: string, tone: Tone) {
+  await getProfile(userId);
+  await db()
+    .update(personaProfiles)
+    .set({ tone, updatedAt: new Date() })
+    .where(eq(personaProfiles.userId, userId));
+}
+
+/** What the user chose, and what Persona is going by (choices plus what it noticed). */
+export async function toneSummary(userId: string) {
+  const profile = await getProfile(userId);
+  const effective = await toneFor(userId, profile.tone);
+  return { explicit: profile.tone, instruction: toneInstruction(effective) };
+}
+
+/** How the voice should sound for this user right now. */
+export async function speakingStyle(userId: string): Promise<string> {
+  const profile = await getProfile(userId);
+  return voiceStyle(await toneFor(userId, profile.tone));
+}
+
+/* ---------- Speaking up: notices and reminders ---------- */
+
+export const MAX_NOTICE_KEYS = 300;
+
+/**
+ * Called every half minute by the companion: reminders that came due, plus
+ * anything worth saying unprompted (work waiting, scores moving, new
+ * orders, the job on screen). Each notice is said once; it's also kept in
+ * the conversation.
+ */
+export async function pulse(userId: string, input: { clock: Clock; path: string }) {
+  const reminders = await takeDueReminders(userId);
+  const profile = await getProfile(userId);
+  const owned = await listSkills(userId);
+  const ids = owned.map((s) => s.id);
+  const name = new Map(owned.map((s) => [s.id, s]));
+  const now = new Date();
+
+  const [waiting, runs, orders] = ids.length
+    ? await Promise.all([
+        db()
+          .select({
+            id: jobs.id,
+            skillId: jobs.skillId,
+            createdAt: jobs.createdAt,
+            flags: jobs.flags,
+            origin: jobs.origin,
+          })
+          .from(jobs)
+          .where(and(inArray(jobs.skillId, ids), eq(jobs.status, "review"))),
+        db()
+          .select({
+            id: schema.evalRuns.id,
+            skillId: schema.skillVersions.skillId,
+            score: schema.evalRuns.meanScore,
+          })
+          .from(schema.evalRuns)
+          .innerJoin(
+            schema.skillVersions,
+            eq(schema.evalRuns.skillVersionId, schema.skillVersions.id),
+          )
+          .where(
+            and(
+              inArray(schema.skillVersions.skillId, ids),
+              eq(schema.evalRuns.status, "complete"),
+              isNotNull(schema.evalRuns.meanScore),
+            ),
+          )
+          .orderBy(desc(schema.evalRuns.createdAt)),
+        db()
+          .select({
+            id: jobs.id,
+            skillId: jobs.skillId,
+            renter: jobs.requesterName,
+            createdAt: jobs.createdAt,
+          })
+          .from(jobs)
+          .where(
+            and(
+              inArray(jobs.skillId, ids),
+              eq(jobs.origin, "renter"),
+              ne(jobs.status, "awaiting_payment"),
+              gte(jobs.createdAt, new Date(now.getTime() - 7 * 86_400_000)),
+            ),
+          ),
+      ])
+    : [[], [], []];
+
+  const scores = ids.flatMap((id) => {
+    const [latest, previous] = runs.filter((r) => r.skillId === id);
+    return latest && previous
+      ? [
+          {
+            slug: name.get(id)!.slug,
+            skill: name.get(id)!.name,
+            runId: latest.id,
+            latest: latest.score!,
+            previous: previous.score!,
+          },
+        ]
+      : [];
+  });
+  const viewing = /^\/jobs\/([0-9a-f-]{36})/.exec(input.path)?.[1] ?? null;
+  const fresh = unseen(
+    notices({
+      now,
+      day: input.clock.day,
+      waiting: waiting.map((j) => ({
+        id: j.id,
+        skill: name.get(j.skillId)!.name,
+        createdAt: j.createdAt,
+        flags: j.flags.length,
+        origin: j.origin,
+      })),
+      scores,
+      orders: orders.map((o) => ({
+        id: o.id,
+        skill: name.get(o.skillId)!.name,
+        renter: o.renter,
+        createdAt: o.createdAt,
+      })),
+      viewingJobId: viewing,
+    }),
+    profile.noticeKeys,
+  );
+
+  let said: PersonaMessage[] = [];
+  if (fresh.length) {
+    await db()
+      .update(personaProfiles)
+      .set({
+        noticeKeys: [...profile.noticeKeys, ...fresh.map((n) => n.key)].slice(-MAX_NOTICE_KEYS),
+      })
+      .where(eq(personaProfiles.userId, userId));
+    said = await db()
+      .insert(personaMessages)
+      .values(
+        fresh.map((n) => ({ userId, role: "assistant" as const, kind: "notice", content: n.text })),
+      )
+      .returning();
+  }
+  return {
+    reminders: reminders.map((r) => ({ id: r.id, text: r.text })),
+    notices: said.map((m, i) => ({ message: m, href: fresh[i].href })),
+  };
 }

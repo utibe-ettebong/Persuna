@@ -7,7 +7,9 @@ import {
   personaForgetAction,
   personaProfileAction,
   personaTeachNoteAction,
+  personaToneAction,
 } from "@/app/actions/persona";
+import type { Tone } from "@/lib/persona/tone";
 import { buttonClass, inputClass } from "@/components/ui";
 import { LookPicker } from "./look-picker";
 
@@ -156,5 +158,107 @@ export function TeachNoteButton({ noteId, skillName }: { noteId: string; skillNa
         </span>
       )}
     </span>
+  );
+}
+
+const pill = (on: boolean) =>
+  `rounded-full px-3 py-1.5 text-sm transition-colors ${
+    on ? "bg-accent text-accent-ink" : "bg-subtle text-muted hover:text-foreground"
+  }`;
+
+/** How Persona talks to you. Unset choices follow what it notices in how you write. */
+export function ToneForm({ tone, instruction }: { tone: Tone; instruction: string }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const save = (next: Tone) =>
+    start(async () => {
+      await personaToneAction({ ...next, notes: next.notes ?? [] });
+      router.refresh();
+    });
+  const choice = <K extends "length" | "formality">(
+    key: K,
+    options: { value: NonNullable<Tone[K]>; label: string }[],
+  ) => (
+    <div className="flex flex-wrap gap-1.5">
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => save({ ...tone, [key]: undefined })}
+        className={pill(tone[key] === undefined)}
+      >
+        Notice for me
+      </button>
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          disabled={pending}
+          onClick={() => save({ ...tone, [key]: o.value })}
+          className={pill(tone[key] === o.value)}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+  return (
+    <div className="space-y-4 text-sm">
+      <div className="space-y-1.5">
+        <p className="font-medium">Length</p>
+        {choice("length", [
+          { value: "short", label: "Short" },
+          { value: "normal", label: "Normal" },
+          { value: "detailed", label: "Detailed" },
+        ])}
+      </div>
+      <div className="space-y-1.5">
+        <p className="font-medium">Manner</p>
+        {choice("formality", [
+          { value: "casual", label: "Casual" },
+          { value: "neutral", label: "Neutral" },
+          { value: "formal", label: "Formal" },
+        ])}
+      </div>
+      <div className="space-y-1.5">
+        <p className="font-medium">Humour</p>
+        <div className="flex flex-wrap gap-1.5">
+          {[
+            { value: undefined, label: "Notice for me" },
+            { value: true, label: "Playful" },
+            { value: false, label: "Serious" },
+          ].map((o) => (
+            <button
+              key={String(o.value)}
+              type="button"
+              disabled={pending}
+              onClick={() => save({ ...tone, playful: o.value })}
+              className={pill(tone.playful === o.value)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {(tone.notes?.length ?? 0) > 0 && (
+        <ul className="space-y-1">
+          {tone.notes!.map((n) => (
+            <li key={n} className="flex items-center gap-3">
+              <span className="flex-1">&ldquo;{n}&rdquo;</span>
+              <button
+                type="button"
+                onClick={() => save({ ...tone, notes: tone.notes!.filter((x) => x !== n) })}
+                className="label-mono text-muted hover:text-danger"
+              >
+                Forget
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="rounded-2xl bg-accent-soft px-4 py-3 text-muted">
+        <span className="label-mono block text-accent">Right now</span>
+        {instruction}
+      </p>
+    </div>
   );
 }

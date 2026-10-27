@@ -57,6 +57,13 @@
       "when": 1793123645133,
       "tag": "0007_persona-look",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793126935497,
+      "tag": "0008_persona-tone",
+      "breakpoints": true
     }
   ]
 }
