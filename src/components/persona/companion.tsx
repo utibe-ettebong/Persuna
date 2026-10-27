@@ -8,20 +8,34 @@ import {
   personaChatAction,
   personaCheckInAction,
   personaPulseAction,
+  personaSetupAction,
   personaObserveAction,
   personaTeachNoteAction,
   personaTranscribeAction,
 } from "@/app/actions/persona";
 import { toTranscribableWav } from "@/lib/audio/convert";
 import type { ChatJob } from "@/lib/persona/service";
+import { LOOKS, LOOK_IDS, lookOf } from "@/lib/persona/looks";
+import {
+  SETUP_QUESTIONS,
+  parseFirstTask,
+  parseLook,
+  parseName,
+  type SetupStep,
+} from "@/lib/persona/onboarding";
 import { clock } from "./clock";
 import { Icon } from "./icons";
 import { JobCard } from "./job-card";
 import { PersonaOrb, type OrbState } from "./orb";
 import { MAX_LOOKS, startWatching, type Watcher } from "./screen-watch";
-import { SetupCard } from "./setup-card";
 import { TaskComposer } from "./task-composer";
-import { speak, startConversation, stopSpeaking, type Conversation } from "./voice";
+import {
+  speak,
+  startConversation,
+  stopSpeaking,
+  type Conversation,
+  type UtteranceEnd,
+} from "./voice";
 import { startWakeWord, wakeWordSupported, type WakeListener } from "./wake-listener";
 
 export interface CompanionMessage {
@@ -51,6 +65,12 @@ export interface CompanionProps {
 type Busy = "idle" | "thinking" | "hearing";
 
 const ORB = 88;
+/** Gap between Persona and the thing it perches beside. */
+const PERCH_GAP = 14;
+/** How long Persona stays perched or wandering before flying home. */
+const PERCH_MS = 7000;
+const WANDER_EVERY_MS = [45_000, 90_000] as const;
+const CUT_IN = "Sorry to cut in. ";
 const noSubscribe = () => () => {};
 const WRAP_UP_OFFER = "It's getting late. Want a wrap-up of today?";
 /** After this local hour, Persona offers an end-of-day wrap-up (once a day). */
@@ -109,7 +129,13 @@ export function Companion(props: CompanionProps) {
   const [conversing, setConversing] = useState(false);
   const [level, setLevel] = useState(0);
   const [dozing, setDozing] = useState(false);
-  const [pos, setPos] = useState({ right: 28, bottom: 28 });
+  // Where Persona is (top-left of the orb, in px). It roams and returns home.
+  const [spot, setSpot] = useState<{ x: number; y: number } | null>(null);
+  const [glide, setGlide] = useState(false);
+  const [tilt, setTilt] = useState(0);
+  const [gaze, setGaze] = useState<{ x: number; y: number } | null>(null);
+  const [setupStep, setSetupStep] = useState<SetupStep>("name");
+  const [setupMessages, setSetupMessages] = useState<CompanionMessage[]>([]);
   const [watching, setWatching] = useState(false);
   const [askWatch, setAskWatch] = useState(false);
   const [looks, setLooks] = useState(0);
@@ -122,9 +148,18 @@ export function Companion(props: CompanionProps) {
   const conversation = useRef<Conversation | null>(null);
   const wake = useRef<WakeListener | null>(null);
   const stream = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ x: number; y: number; right: number; bottom: number; moved: boolean }>(
-    null,
-  );
+  const drag = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean }>(null);
+  const home = useRef<{ x: number; y: number } | null>(null);
+  const backHome = useRef(0);
+  const talkingNow = useRef(false);
+  // The first meeting's answers and transcript. Refs, because `send` (which
+  // routes replies here) is created once and must see the latest.
+  const setupDraft = useRef<{
+    name: string;
+    look: string;
+    taskName: string;
+    log: CompanionMessage[];
+  }>({ name: "", look: props.avatar, taskName: "", log: [] });
   const wrapOffered = useRef<string | null>(null);
   const queued = useRef<string | null>(null);
   const captionTimer = useRef(0);
@@ -160,16 +195,29 @@ export function Companion(props: CompanionProps) {
       sentences.length > SPOKEN_SENTENCES
         ? `${sentences.slice(0, SPOKEN_SENTENCES).join(" ")} The rest is on screen.`
         : line;
+    talkingNow.current = true;
     setTalking(true);
     await speak(spoken, setLevel);
+    talkingNow.current = false;
     setTalking(false);
+  }, []);
+
+  /** Stop Persona mid-sentence: tapping it, typing, or talking over it. */
+  const interrupt = useCallback(() => {
+    if (!talkingNow.current) return;
+    stopSpeaking();
+    talkingNow.current = false;
+    setTalking(false);
+    setLevel(0);
   }, []);
 
   /** Persona says something: a caption by the orb (when closed) and out loud. */
   const express = useCallback(
-    (line: string) => {
+    (line: string, lead = "") => {
       if (!live.current.open && !live.current.pip) showCaption(line);
-      void sayAloud(line);
+      // If you're mid-sentence, Persona says so as it cuts in; your words so far are kept.
+      const cutting = conversation.current?.userSpeaking() ? CUT_IN : "";
+      void sayAloud(`${lead || cutting}${line}`);
     },
     [sayAloud, showCaption],
   );
@@ -204,7 +252,14 @@ export function Companion(props: CompanionProps) {
 
   useEffect(() => {
     const restore = requestAnimationFrame(() => {
-      setPos(stored("persona.pos", { right: 28, bottom: 28 }));
+      const saved = stored<{ fx: number; fy: number } | null>("persona.home", null);
+      const start = clampSpot(
+        saved
+          ? { x: saved.fx * window.innerWidth, y: saved.fy * window.innerHeight }
+          : { x: window.innerWidth - ORB - 28, y: window.innerHeight - ORB - 44 },
+      );
+      home.current = start;
+      setSpot(start);
       setVoiceOn(stored("persona.voice", true));
       setWakeOn(stored("persona.wake", false) && wakeWordSupported());
     });
@@ -249,6 +304,8 @@ export function Companion(props: CompanionProps) {
           { ...n.message, role: "assistant", link: { href: n.href, label: "Take a look" } },
         ]);
         express(n.message.content);
+        // If the thing it's talking about is on screen, go and point at it.
+        if (!live.current.open) perchBy(document.querySelector(`main a[href="${n.href}"]`));
       }
     };
     const timer = setInterval(() => void check(), REMINDER_POLL_MS);
@@ -260,6 +317,8 @@ export function Companion(props: CompanionProps) {
       clearTimeout(soon);
       document.removeEventListener("visibilitychange", onVisible);
     };
+    // perchBy only reads refs and the page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [express, path]);
 
   useEffect(() => {
@@ -286,10 +345,12 @@ export function Companion(props: CompanionProps) {
   /* ---------- Talking with Persona ---------- */
 
   const send = useCallback(
-    async (message: string) => {
+    async (message: string, lead = "") => {
       const body = message.trim();
       if (!body || live.current.busy === "thinking") return;
       stopSpeaking();
+      talkingNow.current = false;
+      if (!setupRef.current.done) return setupReply(body);
       setError(null);
       setCaption(null);
       setText("");
@@ -321,6 +382,15 @@ export function Companion(props: CompanionProps) {
         setTask(res.value.task);
         setOpen(true);
       }
+      if (res.value.navigate) {
+        const href = res.value.navigate;
+        // Get out of the way, fly to the top of the page, open it, look at its heading.
+        setOpen(false);
+        live.current.open = false; // so the reply shows as a caption right away
+        flyTo({ x: 24, y: 72 }, -1);
+        window.setTimeout(() => router.push(href), 600);
+        window.setTimeout(() => perchBy(document.querySelector("main h1")), 1600);
+      }
       if (
         res.value.reminderSet &&
         typeof Notification !== "undefined" &&
@@ -328,13 +398,15 @@ export function Companion(props: CompanionProps) {
       ) {
         void Notification.requestPermission();
       }
-      express(reply.content);
+      express(reply.content, lead);
     },
-    [express],
+    // setupReply, flyTo and perchBy read live state through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [express, router],
   );
 
   const hear = useCallback(
-    async (audio: Blob) => {
+    async (audio: Blob, end: UtteranceEnd = "pause") => {
       setBusy("hearing");
       try {
         const wav = await toTranscribableWav(audio, "persona");
@@ -343,7 +415,8 @@ export function Companion(props: CompanionProps) {
         const res = await personaTranscribeAction(form);
         setBusy("idle");
         if (!res.ok) return setError(res.error);
-        if (res.value.trim()) await send(res.value);
+        // A very long turn: Persona cut in, and says so.
+        if (res.value.trim()) await send(res.value, end === "long" ? CUT_IN : "");
       } catch {
         setBusy("idle");
         setError("I couldn't make that out. Try again?");
@@ -366,9 +439,11 @@ export function Companion(props: CompanionProps) {
     }
     try {
       conversation.current = await startConversation({
-        onLevel: (l) => !live.current.talking && setLevel(l),
-        onUtterance: (audio) => void hear(audio),
-        paused: () => live.current.busy !== "idle" || live.current.talking,
+        onLevel: (l) => !talkingNow.current && setLevel(l),
+        onUtterance: (audio, end) => void hear(audio, end),
+        speaking: () => talkingNow.current,
+        busy: () => live.current.busy !== "idle",
+        onBargeIn: interrupt,
       });
       setConversing(true);
       if (!live.current.open) setOpen(true);
@@ -425,6 +500,216 @@ export function Companion(props: CompanionProps) {
     setWakeOn(next);
     store("persona.wake", next);
   }
+
+  /* ---------- First meeting, by conversation ---------- */
+
+  const setupRef = useRef({ done: setupDone, step: setupStep });
+  useEffect(() => {
+    setupRef.current = { done: setupDone, step: setupStep };
+  }, [setupDone, setupStep]);
+
+  function addSetupMessage(m: Omit<CompanionMessage, "id" | "kind">) {
+    const log = setupDraft.current.log;
+    log.push({ ...m, id: `setup-${log.length}`, kind: "chat" });
+    setSetupMessages([...log]);
+  }
+
+  function personaSays(line: string) {
+    addSetupMessage({ role: "assistant", content: line });
+    express(line);
+  }
+
+  // Persona opens the conversation itself (spoken after your first click or key).
+  useEffect(() => {
+    if (props.setupDone) return;
+    const first = window.setTimeout(() => personaSays(SETUP_QUESTIONS.name("")), 600);
+    return () => clearTimeout(first);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function setupReply(answer: string) {
+    setText("");
+    addSetupMessage({ role: "user", content: answer });
+    const step = setupRef.current.step;
+    if (step === "name") {
+      const picked = parseName(answer) ?? "Nova";
+      setupDraft.current.name = picked;
+      setName(picked);
+      setSetupStep("look");
+      personaSays(
+        parseName(answer)
+          ? SETUP_QUESTIONS.look(picked)
+          : `Then I'll be ${picked}. ${SETUP_QUESTIONS.look(picked).split(". ").slice(1).join(". ")}`,
+      );
+    } else if (step === "look") {
+      const chosen = parseLook(answer);
+      if (!chosen) return personaSays("Say a colour, like blue or purple, or tap one of me.");
+      setLook(chosen);
+      setupDraft.current.look = chosen;
+      setSetupStep("task");
+      personaSays(SETUP_QUESTIONS.task(setupDraft.current.name));
+    } else if (step === "task") {
+      const first = parseFirstTask(answer, props.skills);
+      if (first.kind === "new") {
+        setupDraft.current.taskName = first.name;
+        setSetupStep("describe");
+        return personaSays(`${first.name}. ${SETUP_QUESTIONS.describe(setupDraft.current.name)}`);
+      }
+      await finishSetup(first);
+    } else if (answer.length < 10) {
+      personaSays("Tell me a little more: what do you start with, and what do you hand over?");
+    } else {
+      await finishSetup({ kind: "new", name: setupDraft.current.taskName, description: answer });
+    }
+  }
+
+  async function finishSetup(task: Parameters<typeof personaSetupAction>[0]["task"]) {
+    setBusy("thinking");
+    const res = await personaSetupAction({
+      name: setupDraft.current.name || name,
+      avatar: lookOf(setupDraft.current.look),
+      task,
+    });
+    setBusy("idle");
+    if (!res.ok) return personaSays(`Hmm, that didn't work: ${res.error}`);
+    setSetupDone(true);
+    setMessages((all) => [
+      ...all,
+      ...setupDraft.current.log,
+      {
+        ...res.value.message,
+        role: "assistant",
+        link: res.value.href ? { href: res.value.href, label: "Open the skill" } : null,
+      },
+    ]);
+    express(res.value.message.content);
+    router.refresh();
+  }
+
+  /* ---------- Roaming: Persona moves around the screen ---------- */
+
+  function clampSpot(p: { x: number; y: number }) {
+    return {
+      x: Math.min(Math.max(8, p.x), window.innerWidth - ORB - 8),
+      y: Math.min(Math.max(8, p.y), window.innerHeight - ORB - 30),
+    };
+  }
+
+  /** Glide somewhere; unless `stay` is -1, come home again after `stay` ms. */
+  function flyTo(target: { x: number; y: number }, stay = PERCH_MS) {
+    const next = clampSpot(target);
+    setSpot((current) => {
+      if (current) setTilt(Math.max(-12, Math.min(12, (next.x - current.x) / 40)));
+      return next;
+    });
+    setGlide(true);
+    window.setTimeout(() => setTilt(0), 900);
+    window.clearTimeout(backHome.current);
+    if (stay >= 0) backHome.current = window.setTimeout(goHome, stay);
+  }
+
+  function goHome() {
+    setGaze(null);
+    if (home.current && !drag.current) flyTo(home.current, -1);
+  }
+
+  /** Perch beside an element on the page and look at it. */
+  function perchBy(el: Element | null, stay = PERCH_MS) {
+    if (!(el instanceof HTMLElement) || el.closest("[data-persona]")) return;
+    const r = el.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > window.innerHeight || r.width === 0) return;
+    const right = r.right + PERCH_GAP + ORB < window.innerWidth;
+    flyTo(
+      {
+        x: right ? r.right + PERCH_GAP : r.left - PERCH_GAP - ORB,
+        y: r.top + r.height / 2 - ORB / 2,
+      },
+      stay,
+    );
+    setGaze({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+  }
+
+  // Stay on screen when the window changes size.
+  useEffect(() => {
+    const onResize = () => {
+      if (home.current) home.current = clampSpot(home.current);
+      setSpot((p) => (p ? clampSpot(p) : p));
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Keep you company: hover beside the field you're typing in.
+  useEffect(() => {
+    let leave = 0;
+    const onFocus = (e: FocusEvent) => {
+      const el = e.target as HTMLElement;
+      if (live.current.open || el.closest("[data-persona]")) return;
+      if (!el.matches("input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea"))
+        return;
+      window.clearTimeout(leave);
+      perchBy(el, -1);
+    };
+    const onBlur = (e: FocusEvent) => {
+      if ((e.target as HTMLElement).closest("[data-persona]")) return;
+      leave = window.setTimeout(goHome, 1500);
+    };
+    document.addEventListener("focusin", onFocus);
+    document.addEventListener("focusout", onBlur);
+    return () => {
+      document.removeEventListener("focusin", onFocus);
+      document.removeEventListener("focusout", onBlur);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Now and then, when nothing is happening, wander along the edges of the screen.
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let timer = 0;
+    const plan = () => {
+      const [min, max] = WANDER_EVERY_MS;
+      timer = window.setTimeout(wander, min + Math.random() * (max - min));
+    };
+    const wander = () => {
+      const s = live.current;
+      if (
+        !s.open &&
+        !s.pip &&
+        s.busy === "idle" &&
+        !s.talking &&
+        !drag.current &&
+        !document.hidden
+      ) {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        const edge = Math.floor(Math.random() * 3);
+        flyTo(
+          edge === 0
+            ? { x: 16 + Math.random() * 40, y: 120 + Math.random() * (h - 260) }
+            : edge === 1
+              ? { x: w - ORB - 24 - Math.random() * 40, y: 120 + Math.random() * (h - 260) }
+              : { x: 80 + Math.random() * (w - 260), y: h - ORB - 40 },
+          5000,
+        );
+      }
+      plan();
+    };
+    plan();
+    return () => clearTimeout(timer);
+    // flyTo only reads refs and the window.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // A new page: glance at its heading for a moment.
+  useEffect(() => {
+    if (!home.current) return;
+    const t = window.setTimeout(() => {
+      if (!live.current.open) perchBy(document.querySelector("main h1"), 3500);
+    }, 700);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path]);
 
   /* ---------- Watching (only with permission) ---------- */
 
@@ -527,7 +812,8 @@ export function Companion(props: CompanionProps) {
   }
 
   function onPointerDown(e: React.PointerEvent) {
-    drag.current = { x: e.clientX, y: e.clientY, ...pos, moved: false };
+    if (!spot) return;
+    drag.current = { x: e.clientX, y: e.clientY, ox: spot.x, oy: spot.y, moved: false };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
   function onPointerMove(e: React.PointerEvent) {
@@ -537,19 +823,23 @@ export function Companion(props: CompanionProps) {
     const dy = e.clientY - d.y;
     if (!d.moved && Math.hypot(dx, dy) < 5) return;
     d.moved = true;
-    setPos({
-      right: Math.min(Math.max(8, d.right - dx), window.innerWidth - ORB - 8),
-      bottom: Math.min(Math.max(8, d.bottom - dy), window.innerHeight - ORB - 8),
-    });
+    setGlide(false);
+    window.clearTimeout(backHome.current);
+    setSpot(clampSpot({ x: d.ox + dx, y: d.oy + dy }));
   }
   function onPointerUp() {
     const d = drag.current;
     drag.current = null;
     if (!d) return;
-    if (d.moved) store("persona.pos", pos);
-    else toggleOpen();
+    if (d.moved && spot) {
+      // Where you put it becomes home.
+      home.current = spot;
+      store("persona.home", { fx: spot.x / window.innerWidth, fy: spot.y / window.innerHeight });
+    } else toggleOpen();
   }
   function toggleOpen() {
+    // Tapping Persona while it talks just stops it talking.
+    if (talkingNow.current) return interrupt();
     const wrap = caption === WRAP_UP_OFFER;
     setCaption(null);
     setOpen((o) => !o);
@@ -597,23 +887,49 @@ export function Companion(props: CompanionProps) {
       aria-live="polite"
       aria-label={`Conversation with ${name}`}
       className={`persona-stream flex flex-col gap-2.5 overflow-y-auto px-1 pb-2 pt-10 ${
-        column ? "min-h-0 flex-1" : "max-h-[min(62vh,560px)] w-[min(380px,calc(100vw-2rem))]"
+        column
+          ? "min-h-0 flex-1"
+          : "max-h-[min(62vh,560px,var(--room))] w-[min(380px,calc(100vw-2rem))]"
       }`}
     >
       {!setupDone ? (
-        <div className={`persona-in rounded-[26px] ${card}`}>
-          <SetupCard
-            skills={props.skills}
-            onDone={(r) => {
-              setName(r.name);
-              setLook(r.avatar);
-              setSetupDone(true);
-              setMessages((all) => [...all, r.message]);
-              void sayAloud(r.message.content);
-              router.refresh();
-            }}
-          />
-        </div>
+        <>
+          {setupMessages.map((m) => (
+            <Bubble key={m.id} role={m.role}>
+              {m.content}
+            </Bubble>
+          ))}
+          {setupStep === "look" && (
+            <div className="persona-in flex flex-wrap gap-1 self-start" aria-label="Looks">
+              {LOOK_IDS.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => void setupReply(LOOKS[id].label)}
+                  aria-label={`${LOOKS[id].label} look`}
+                  title={LOOKS[id].label}
+                  className="rounded-2xl p-1 hover:bg-accent-soft"
+                >
+                  <PersonaOrb look={id} size={38} animate={false} />
+                </button>
+              ))}
+            </div>
+          )}
+          {setupStep === "task" && (
+            <div className="persona-in flex flex-wrap gap-1.5 self-start">
+              {[...props.skills.map((s) => s.name), "Try the sample", "Later"].map((label) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => void setupReply(label === "Try the sample" ? "sample" : label)}
+                  className={`rounded-full px-3 py-1.5 text-sm ${card} hover:text-accent`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </>
       ) : (
         <>
           {messages.length === 0 && (
@@ -799,7 +1115,7 @@ export function Companion(props: CompanionProps) {
     </div>
   );
 
-  const dock = setupDone && (
+  const dock = (
     <form
       onSubmit={(e) => {
         e.preventDefault();
@@ -829,9 +1145,19 @@ export function Companion(props: CompanionProps) {
       <input
         id="persona-input"
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => {
+          // Typing over Persona stops it talking.
+          interrupt();
+          setText(e.target.value);
+        }}
         autoComplete="off"
-        placeholder={conversing ? "I'm listening… or type" : `Talk to ${name}…`}
+        placeholder={
+          conversing
+            ? "I'm listening… talk over me any time"
+            : setupDone
+              ? `Talk to ${name}…`
+              : "Type, or tap the wave and just talk"
+        }
         className="min-w-0 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-faint"
       />
       <button
@@ -848,7 +1174,13 @@ export function Companion(props: CompanionProps) {
   const orb = (big: boolean) => (
     <div className="flex flex-col items-center">
       <div className={orbState === "sleeping" ? "" : "persona-float"}>
-        <PersonaOrb look={look} state={orbState} level={level} size={big ? 120 : ORB} />
+        <PersonaOrb
+          look={look}
+          state={orbState}
+          level={level}
+          size={big ? 120 : ORB}
+          gaze={big ? null : gaze}
+        />
       </div>
       <span className="label-mono -mt-1 max-w-44 truncate text-[10px] text-muted" role="status">
         {status}
@@ -885,50 +1217,78 @@ export function Companion(props: CompanionProps) {
 
   if (props.standalone) return columnView;
 
+  if (!spot) return pip ? createPortal(columnView, pip.document.body) : null;
+  const onRight = spot.x + ORB / 2 > window.innerWidth / 2;
+  // Open upwards when there's room, like speech rising from Persona; otherwise downwards.
+  const below = spot.y < 360;
+  const room = below ? window.innerHeight - spot.y - ORB - 40 : spot.y - 16;
+
   return (
     <>
       {pip && createPortal(columnView, pip.document.body)}
       <section
+        data-persona
         aria-label={`${name}, your assistant`}
-        className="pointer-events-none fixed z-50 flex flex-col items-end gap-3"
-        style={{ right: pos.right, bottom: pos.bottom }}
+        className="pointer-events-none fixed z-50"
+        style={{
+          left: spot.x,
+          top: spot.y,
+          width: ORB,
+          transition: glide
+            ? "left 1.1s cubic-bezier(.45,.05,.25,1), top 1.1s cubic-bezier(.45,.05,.25,1)"
+            : "none",
+        }}
       >
         {open && !pip && (
-          <div className="pointer-events-auto flex flex-col items-end gap-2">
-            {conversationView}
+          <div
+            className={`pointer-events-auto absolute flex flex-col gap-2 ${
+              onRight ? "right-0 items-end" : "left-0 items-start"
+            }`}
+            style={below ? { top: "calc(100% + 10px)" } : { bottom: "calc(100% + 10px)" }}
+          >
+            <div style={{ "--room": `${Math.max(180, room - 110)}px` } as React.CSSProperties}>
+              {conversationView}
+            </div>
             {actions && <div className={`rounded-full px-1.5 py-1 ${glass}`}>{actions}</div>}
             {dock}
           </div>
         )}
-        <div className="flex items-end gap-3">
-          {caption && !open && !pip && (
-            <button
-              type="button"
-              onClick={toggleOpen}
-              className={`persona-in pointer-events-auto mb-8 max-w-72 rounded-[22px] rounded-br-md px-4 py-2.5 text-left text-sm leading-snug ${glass}`}
-            >
-              {caption.length > 220 ? `${caption.slice(0, 220)}…` : caption}
-            </button>
-          )}
+        {caption && !open && !pip && (
           <button
             type="button"
-            aria-label={`${open ? "Close" : "Open"} ${name} (${status})`}
-            aria-expanded={open}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                toggleOpen();
-              }
-            }}
-            style={{ touchAction: "none" }}
-            className="pointer-events-auto cursor-grab select-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent active:cursor-grabbing"
+            onClick={toggleOpen}
+            className={`persona-in pointer-events-auto absolute top-2 w-max max-w-72 px-4 py-2.5 text-left text-sm leading-snug ${glass} ${
+              onRight
+                ? "right-[calc(100%+10px)] rounded-[22px] rounded-tr-md"
+                : "left-[calc(100%+10px)] rounded-[22px] rounded-tl-md"
+            }`}
           >
-            {orb(false)}
+            {caption.length > 220 ? `${caption.slice(0, 220)}…` : caption}
           </button>
-        </div>
+        )}
+        <button
+          type="button"
+          aria-label={`${open ? "Close" : "Open"} ${name} (${status})`}
+          aria-expanded={open}
+          title={talking ? "Tap to interrupt" : undefined}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              toggleOpen();
+            }
+          }}
+          style={{
+            touchAction: "none",
+            transform: `rotate(${tilt}deg)`,
+            transition: "transform .6s ease",
+          }}
+          className="pointer-events-auto cursor-grab select-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent active:cursor-grabbing"
+        >
+          {orb(false)}
+        </button>
       </section>
     </>
   );

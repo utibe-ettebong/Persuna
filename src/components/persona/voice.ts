@@ -195,20 +195,38 @@ export function stopSpeaking() {
 
 export interface Conversation {
   stop(): void;
+  /** True while the user is mid-utterance. */
+  userSpeaking(): boolean;
 }
 
 const START_LEVEL = 0.08;
+/** Talking over Persona needs a clearly louder voice, held, so its own audio doesn't count. */
+const BARGE_LEVEL = 0.22;
+const BARGE_HOLD_MS = 280;
 const SILENCE_MS = 1100;
 const MIN_SPEECH_MS = 350;
-const MAX_UTTERANCE_MS = 30_000;
+/** Persona cuts in after this much uninterrupted talking. */
+export const LONG_TURN_MS = 25_000;
 
+export type UtteranceEnd = "pause" | "long" | "persona";
+
+/**
+ * Hands-free conversation, both ways:
+ * - you can talk over Persona: a clear, sustained voice while it speaks
+ *   stops it (`onBargeIn`) and your words are recorded;
+ * - Persona can talk over you: if it starts speaking (an urgent reminder),
+ *   or you talk for {@link LONG_TURN_MS}, your turn ends there and what you
+ *   said so far is kept, with `end` saying why.
+ */
 export async function startConversation(handlers: {
-  /** 0–1 loudness, about 30 times a second. */
   onLevel: (level: number) => void;
-  /** A finished utterance (the browser's recording format). */
-  onUtterance: (audio: Blob) => void;
-  /** True while Persona is thinking or talking: don't record then. */
-  paused: () => boolean;
+  onUtterance: (audio: Blob, end: UtteranceEnd) => void;
+  /** Persona is speaking. */
+  speaking: () => boolean;
+  /** Persona is thinking: don't start a new turn. */
+  busy: () => boolean;
+  /** You started talking over Persona. */
+  onBargeIn: () => void;
 }): Promise<Conversation> {
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -224,25 +242,29 @@ export async function startConversation(handlers: {
   let chunks: Blob[] = [];
   let speechStart = 0;
   let lastLoud = 0;
+  let loudSince = 0;
+  let bargeUntil = 0;
   let stopped = false;
 
   const begin = () => {
     chunks = [];
     recorder = new MediaRecorder(stream);
     recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-    const rec = recorder;
-    rec.onstop = () => {
-      const long = performance.now() - speechStart - SILENCE_MS >= MIN_SPEECH_MS;
-      if (!stopped && long && chunks.length) {
-        handlers.onUtterance(new Blob(chunks, { type: rec.mimeType || "audio/webm" }));
-      }
-    };
     recorder.start(200);
     speechStart = performance.now();
+    lastLoud = speechStart;
   };
-  const end = () => {
-    if (recorder && recorder.state !== "inactive") recorder.stop();
+  const end = (why: UtteranceEnd) => {
+    const rec = recorder;
     recorder = null;
+    if (!rec || rec.state === "inactive") return;
+    const spoke = lastLoud - speechStart >= MIN_SPEECH_MS || why !== "pause";
+    rec.onstop = () => {
+      if (!stopped && spoke && chunks.length) {
+        handlers.onUtterance(new Blob(chunks, { type: rec.mimeType || "audio/webm" }), why);
+      }
+    };
+    rec.stop();
   };
 
   const timer = window.setInterval(() => {
@@ -251,31 +273,40 @@ export async function startConversation(handlers: {
     for (const v of data) sum += v * v;
     const level = Math.min(1, Math.sqrt(sum / data.length) * 6);
     const now = performance.now();
-    if (handlers.paused()) {
-      handlers.onLevel(0);
-      if (recorder) {
-        stopped = true; // drop a half-said utterance cut off by Persona talking
-        end();
-        stopped = false;
+
+    if (handlers.speaking() && now > bargeUntil) {
+      // Persona started talking while you were mid-sentence: keep what you said.
+      if (recorder) end("persona");
+      loudSince = level > BARGE_LEVEL ? loudSince || now : 0;
+      if (loudSince && now - loudSince >= BARGE_HOLD_MS) {
+        loudSince = 0;
+        // Persona takes a moment to fall silent; keep this recording meanwhile.
+        bargeUntil = now + 1500;
+        handlers.onBargeIn();
+        begin();
       }
       return;
     }
     handlers.onLevel(level);
+    if (handlers.busy() && !recorder) return;
     if (level > START_LEVEL) {
       lastLoud = now;
       if (!recorder) begin();
     }
-    if (recorder && (now - lastLoud > SILENCE_MS || now - speechStart > MAX_UTTERANCE_MS)) end();
+    if (!recorder) return;
+    if (now - lastLoud > SILENCE_MS) end("pause");
+    else if (now - speechStart > LONG_TURN_MS) end("long");
   }, 33);
 
   return {
     stop() {
       stopped = true;
       clearInterval(timer);
-      end();
+      end("pause");
       stream.getTracks().forEach((t) => t.stop());
       void ctx.close();
       handlers.onLevel(0);
     },
+    userSpeaking: () => Boolean(recorder),
   };
 }

@@ -132,6 +132,37 @@ function mockPersonaTurn(user: string): {
     );
   };
 
+  const open = text.match(/\b(?:open|show(?: me)?|go to|take me to|bring up)\s+(?:my |the )?(.+)/i);
+  if (open) {
+    const what = open[1].toLowerCase();
+    const page = /job|review|work|order/.test(what)
+      ? "jobs"
+      : /market|rent/.test(what)
+        ? "market"
+        : /earn|money|pay/.test(what)
+          ? "earnings"
+          : /audit|log|history/.test(what)
+            ? "audit"
+            : /to-?do|remind/.test(what)
+              ? "todos"
+              : /note|memory|persona|profile/.test(what)
+                ? "persona"
+                : /skill/.test(what)
+                  ? "skills"
+                  : null;
+    const slug = matchSkill();
+    if (page || slug) {
+      return {
+        reply: "On it, taking you there.",
+        actions: [
+          slug && !page
+            ? { type: "open_page", page: "skill", skill: slug }
+            : { type: "open_page", page: page ?? "skills", skill: null },
+        ],
+      };
+    }
+  }
+
   const toneChange = toneFromMessage(text);
   if (toneChange) {
     const said = [

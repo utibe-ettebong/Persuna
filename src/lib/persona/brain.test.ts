@@ -127,6 +127,26 @@ describe("personaTurn assistant actions with the offline mock", () => {
   });
 });
 
+describe("open_page with the offline mock", () => {
+  const client = createMockClient();
+  it("takes the user to a page or one of their skills", async () => {
+    expect((await personaTurn(client, state(), [], "show me my jobs")).actions).toEqual([
+      { type: "open_page", page: "jobs", skill: null },
+    ]);
+    expect((await personaTurn(client, state(), [], "open the meeting minutes")).actions).toEqual([
+      { type: "open_page", page: "skill", skill: "meeting-minutes" },
+    ]);
+  });
+  it("never opens someone else's skill", () => {
+    expect(
+      tidyReply(
+        { reply: "ok", actions: [{ type: "open_page", page: "skill", skill: "theirs" }] },
+        state(),
+      ).actions,
+    ).toEqual([{ type: "open_page", page: "skills", skill: null }]);
+  });
+});
+
 describe("tone with the offline mock", () => {
   const client = createMockClient();
 
