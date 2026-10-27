@@ -31,13 +31,14 @@ export default function SiteLayout({ children }: Readonly<{ children: React.Reac
             </ul>
           </nav>
           <div className="ml-auto flex items-center gap-2">
-            <span className="hidden sm:block">
-              <Link href="/market" className={buttonClass("secondary")}>
-                Marketplace
-              </Link>
-            </span>
-            <Link href="/skills" className={buttonClass("primary")}>
-              Open studio
+            <Link
+              href="/sign-in"
+              className="label-mono hidden px-2 text-muted hover:text-foreground sm:inline"
+            >
+              Sign in
+            </Link>
+            <Link href="/sign-up" className={buttonClass("primary")}>
+              Try it free
             </Link>
           </div>
         </div>

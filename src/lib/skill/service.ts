@@ -2,6 +2,7 @@
  * Storage-backed wrappers around the engine. The CLI and the web app both
  * call these, so a run from the terminal and a run from the UI are identical.
  */
+import path from "node:path";
 import { and, asc, desc, eq, inArray, max, notInArray, sql } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import type { Example, SkillVersion } from "@/db/schema";
@@ -172,6 +173,24 @@ export async function createSkill(definition: SkillDefinition, ownerId: string, 
     details: { slug: row.slug },
   });
   return row;
+}
+
+/**
+ * Gives a new user their own copy of the invented meeting-minutes sample
+ * (skill plus example pairs), so they can try the whole loop at once.
+ */
+export async function createSampleSkill(ownerId: string, actor: Actor) {
+  const { loadSkillFolder } = await import("./pairs-fs");
+  const { definition, pairs } = await loadSkillFolder(
+    path.join(process.cwd(), "data/skills/meeting-minutes"),
+  );
+  const skill = await createSkill(
+    { ...definition, name: `${definition.name} (sample)` },
+    ownerId,
+    actor,
+  );
+  await importPairs(skill.id, pairs);
+  return skill;
 }
 
 /** Step 2: the owner's answers to the guided interview. */

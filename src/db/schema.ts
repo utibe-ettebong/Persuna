@@ -375,6 +375,20 @@ export const auditEvents = pgTable(
   (t) => [index().on(t.at), index().on(t.skillId)],
 );
 
+/** One live model call by a user, for the daily per-user limit. */
+export const modelUsage = pgTable(
+  "model_usage",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    role: text("role").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.userId, t.at)],
+);
+
 export type Skill = typeof skills.$inferSelect;
 export type SkillVersion = typeof skillVersions.$inferSelect;
 export type Example = typeof examples.$inferSelect;

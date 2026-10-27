@@ -26,6 +26,8 @@ const envSchema = z.object({
   JOB_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
   PLATFORM_FEE_PERCENT: z.coerce.number().min(0).max(50).default(20),
   LISTING_MIN_SCORE: z.coerce.number().min(0).max(100).default(80),
+  /** Live model calls each signed-in user may make per 24 hours. Admins are exempt. */
+  DAILY_MODEL_CALLS_PER_USER: z.coerce.number().int().min(1).default(150),
   TRUST_L1_MIN_JOBS: z.coerce.number().int().min(1).default(20),
   TRUST_L1_MIN_CLEAN_PERCENT: z.coerce.number().min(0).max(100).default(90),
   TRUST_L2_MIN_JOBS: z.coerce.number().int().min(1).default(50),
@@ -82,7 +84,6 @@ const ROLE_PREFIXES = {
 export function modelSettingsStatus() {
   return (Object.keys(ROLE_PREFIXES) as (keyof typeof ROLE_PREFIXES)[]).map((role) => {
     const prefix = ROLE_PREFIXES[role];
-    const own = (key: string) => setting(`${prefix}_${key}`);
     const resolved = rolePicker(prefix);
     return {
       role,
@@ -92,7 +93,7 @@ export function modelSettingsStatus() {
       /** A usable key is available, its own or EXTRACT_API_KEY. */
       keySet: Boolean(resolved("API_KEY")),
       /** This role has its own key rather than borrowing EXTRACT_*. */
-      ownKey: Boolean(own("API_KEY")),
+      ownKey: Boolean(roleKey(prefix)),
     };
   });
 }
@@ -148,22 +149,41 @@ export function modelConfig(role: ModelRole): ModelRoleConfig {
 
 /**
  * How a role resolves its settings:
- * - with its own key, it uses its own values (missing ones fall back to EXTRACT_*);
- * - with its own base URL but no key yet (another provider, slot not filled),
- *   it borrows EXTRACT_* as a whole, so that URL is never sent another provider's key;
+ * - with a key (its own, or one from another role on the same base URL, so
+ *   one Baseten key covers drafting and scoring), it uses its own values,
+ *   with missing ones falling back to EXTRACT_*;
+ * - with its own base URL but no key for it, it borrows EXTRACT_* as a whole,
+ *   so that URL is never sent another provider's key;
  * - with neither, it is the same provider as EXTRACT_* and may still set its own model.
  */
 function rolePicker(prefix: string) {
-  const ownKey = Boolean(setting(`${prefix}_API_KEY`));
+  const key = roleKey(prefix);
   const ownUrl = Boolean(setting(`${prefix}_BASE_URL`));
-  return (key: "BASE_URL" | "API_KEY" | "MODEL") => {
-    const own = setting(`${prefix}_${key}`);
-    const fallback = setting(`EXTRACT_${key}`);
-    if (ownKey) return own ?? fallback;
-    if (!ownUrl && key === "MODEL") return own ?? fallback;
+  return (field: "BASE_URL" | "API_KEY" | "MODEL") => {
+    const own = field === "API_KEY" ? key : setting(`${prefix}_${field}`);
+    const fallback = setting(`EXTRACT_${field}`);
+    if (key) return own ?? fallback;
+    if (!ownUrl && field === "MODEL") return own ?? fallback;
     return fallback;
   };
 }
+
+const ALL_PREFIXES = ["EXTRACT", "DRAFT", "EVAL", "TRANSCRIBE"];
+
+/** A role's own key, or the key of another role configured for the same base URL. */
+function roleKey(prefix: string): string | undefined {
+  const own = setting(`${prefix}_API_KEY`);
+  const url = normaliseUrl(setting(`${prefix}_BASE_URL`));
+  if (own || !url) return own;
+  for (const other of ALL_PREFIXES) {
+    if (other === prefix) continue;
+    const otherKey = setting(`${other}_API_KEY`);
+    if (otherKey && normaliseUrl(setting(`${other}_BASE_URL`)) === url) return otherKey;
+  }
+  return undefined;
+}
+
+const normaliseUrl = (url: string | undefined) => url?.replace(/\/+$/, "").toLowerCase();
 
 function parseOrThrow<T>(schema: z.ZodType<T>, input: unknown, label: string): T {
   const result = schema.safeParse(input);

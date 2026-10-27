@@ -19,10 +19,10 @@ export async function createJobAction(_: ActionState, form: FormData): Promise<A
     // A voice note is transcribed and becomes the job's input.
     const audio = readAudio(form.get("audio"));
     const input = audio
-      ? (await createTranscriber().transcribe(audio, audio.name)).text
+      ? (await createTranscriber(await requireUser()).transcribe(audio, audio.name)).text
       : ((await readUploadedText(form.get("inputFile"))) ?? String(form.get("inputText") ?? ""));
     if (!input.trim()) throw new Error("Paste the notes, upload a file or record a voice note.");
-    const job = await createJob(createModelClient(), {
+    const job = await createJob(createModelClient(await requireUser()), {
       skillId,
       origin: "owner",
       requesterName: user.name,
@@ -59,7 +59,11 @@ export async function teachFromJobAction(_: ActionState, form: FormData): Promis
       .string()
       .max(500)
       .parse(form.get("reason") ?? "");
-    const correction = await proposeCorrectionFromJob(createModelClient(), jobId, reason);
+    const correction = await proposeCorrectionFromJob(
+      createModelClient(await requireUser()),
+      jobId,
+      reason,
+    );
     return `/corrections/${correction.id}`;
   });
 }

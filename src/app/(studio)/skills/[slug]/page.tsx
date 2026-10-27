@@ -16,7 +16,10 @@ import { RULE_CATEGORIES } from "@/lib/skill/types";
 
 export const dynamic = "force-dynamic";
 
-type Params = { params: Promise<{ slug: string }> };
+type Params = {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ sample?: string }>;
+};
 
 const load = async (slug: string) => orNotFound(() => getSkillOverview(slug));
 
@@ -25,7 +28,8 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
   return { title: skill.name };
 }
 
-export default async function SkillPage({ params }: Params) {
+export default async function SkillPage({ params, searchParams }: Params) {
+  const { sample } = await searchParams;
   const { skill, versions, counts, corrections } = await load((await params).slug);
   const current = versions.find((v) => v.id === skill.currentVersionId) ?? null;
   const published = versions.find((v) => v.id === skill.publishedVersionId) ?? null;
@@ -77,6 +81,24 @@ export default async function SkillPage({ params }: Params) {
       </PageHeader>
 
       <SkillTabs slug={skill.slug} active="Overview" />
+
+      {sample && !current && (
+        <Card className="border-accent/50 bg-accent-soft/40 p-5 text-sm">
+          <p className="font-medium">Your sample skill is ready. Try the loop in four steps:</p>
+          <ol className="mt-2 list-decimal space-y-1 pl-5 text-muted">
+            <li>
+              <strong className="text-foreground">Extract rules</strong> (top right): the AI reads
+              the four training examples and writes the method down.
+            </li>
+            <li>
+              <strong className="text-foreground">Run tests</strong>: it drafts the two held-back
+              meetings and scores itself against the real minutes.
+            </li>
+            <li>Open the test run, edit a draft, and accept the rule change it proposes.</li>
+            <li>Publish, then submit your own notes under Jobs.</li>
+          </ol>
+        </Card>
+      )}
 
       {!canTest && (
         <Card className="p-5 text-sm">

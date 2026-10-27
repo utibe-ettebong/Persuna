@@ -28,6 +28,7 @@ export default defineRailway(() => {
       JOB_RETENTION_DAYS: preserve(),
       PLATFORM_FEE_PERCENT: preserve(),
       LISTING_MIN_SCORE: preserve(),
+      DAILY_MODEL_CALLS_PER_USER: preserve(),
       PAYMENTS_PROVIDER: preserve(),
       PAYSTACK_SECRET_KEY: preserve(),
       APP_URL: preserve(),

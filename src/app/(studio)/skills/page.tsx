@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { trySampleSkillAction } from "@/app/actions/skills";
+import { ActionForm } from "@/components/action-form";
 import { SectionLabel } from "@/components/brand";
 import { Badge, buttonClass, Card, PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/auth/session";
@@ -27,14 +29,22 @@ export default async function SkillsPage() {
           <div className="mx-auto max-w-md rounded-md border border-line bg-card p-6">
             <SectionLabel index="01">Start here</SectionLabel>
             <p className="mt-3 font-display text-xl font-medium tracking-[-0.02em]">
-              Name one task you do often
+              Try it on a sample first
             </p>
             <p className="mt-2 text-sm text-muted">
-              Then add 10–15 before-and-after examples and let the agent learn your method.
+              Get your own copy of a meeting-minutes skill with six invented before-and-after
+              examples. Extract its rules, test it, correct a draft and watch the score move.
             </p>
-            <Link href="/skills/new" className={`${buttonClass("primary")} mt-5`}>
-              Create a skill
-            </Link>
+            <div className="mt-5 flex flex-wrap justify-center gap-2">
+              <ActionForm
+                action={trySampleSkillAction}
+                label="Try the sample skill"
+                pendingLabel="Setting it up…"
+              />
+              <Link href="/skills/new" className={buttonClass("secondary")}>
+                Create your own
+              </Link>
+            </div>
           </div>
         </Card>
       ) : (
