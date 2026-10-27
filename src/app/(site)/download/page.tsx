@@ -132,7 +132,7 @@ export default async function DownloadPage() {
           {[
             [
               "Open it the first time",
-              "The app isn't signed with an Apple or Microsoft certificate yet. On a Mac, drag Persuna to Applications, then right-click it and choose Open, then Open again. On Windows, if SmartScreen warns, choose More info, then Run anyway. After that it opens normally.",
+              "The app isn't signed with an Apple or Microsoft certificate yet. On a Mac, drag Persuna to Applications and open it; when macOS says it can't check it, open System Settings → Privacy & Security and click Open Anyway. On Windows, if SmartScreen warns, choose More info, then Run anyway. After that it opens normally.",
             ],
             [
               "Permission once, not sharing each time",
