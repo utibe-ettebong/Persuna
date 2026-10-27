@@ -7,17 +7,20 @@
  */
 import { tokenize } from "@/lib/skill/retrieve";
 import type { RuleCategory } from "@/lib/skill/types";
-import type { ChatMessage, ModelClient } from "./gateway";
+import { textOf, type ChatMessage, type ModelClient } from "./gateway";
 
 export const MOCK_MODEL = "mock";
 
 export function createMockClient(): ModelClient {
   return {
     async complete(role, messages) {
-      const user = messages.findLast((m) => m.role === "user")?.content ?? "";
-      const system = messages.find((m) => m.role === "system")?.content ?? "";
+      const lastUser = messages.findLast((m) => m.role === "user");
+      const user = lastUser ? textOf(lastUser.content) : "";
+      const system = textOf(messages.find((m) => m.role === "system")?.content ?? "");
       let text: string;
       if (role === "draft") text = mockDraft(user, system);
+      else if (user.includes("<screen_walkthrough>"))
+        text = mockScreenSteps(lastUser?.content ?? "");
       else if (user.includes("<self_check_draft>")) text = JSON.stringify(mockSelfCheck(user));
       else if (role === "evaluate") text = JSON.stringify(mockEvaluate(user));
       else if (user.includes("<redact_text>")) text = JSON.stringify(mockEntities(user));
@@ -35,7 +38,24 @@ export function createMockClient(): ModelClient {
 }
 
 function estimateTokens(messages: ChatMessage[]): number {
-  return Math.ceil(messages.reduce((n, m) => n + m.content.length, 0) / 4);
+  return Math.ceil(messages.reduce((n, m) => n + textOf(m.content).length, 0) / 4);
+}
+
+/** Stand-in for describing screen frames: counts the frames and echoes the narration. */
+function mockScreenSteps(content: ChatMessage["content"]): string {
+  const frames = Array.isArray(content) ? content.filter((p) => p.type === "image_url").length : 0;
+  const narration = blocks(textOf(content), "narration")[0] ?? "";
+  return [
+    `Mock description of ${frames} screen frame(s).`,
+    "1. Opens the raw notes beside a blank minutes template.",
+    "2. Fills the header block first: date, chair, present, apologies.",
+    "3. Writes each decision on its own line in bold.",
+    "4. Moves action items into a table with owner and due date.",
+    "5. Deletes asides that led to no decision before saving.",
+    narration ? `Narration: ${narration}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function blocks(text: string, tag: string): string[] {

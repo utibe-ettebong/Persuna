@@ -14,6 +14,7 @@ import { actorOf, requireAdmin, requireUser } from "@/lib/auth/session";
 import { readUploadedText } from "@/lib/docs/read-file";
 import { normalizeText } from "@/lib/text";
 import { createModelClient, createTranscriber } from "@/lib/models";
+import { solidPng, toneWav } from "@/lib/models/probe";
 import { readAudio, transcriptionCheck } from "@/lib/models/transcribe";
 import { INTERVIEW_QUESTIONS, interviewText, type InterviewAnswers } from "@/lib/skill/interview";
 import type { Finding } from "@/lib/skill/redact";
@@ -21,6 +22,7 @@ import {
   acceptCorrection,
   addPair,
   createSampleSkill,
+  learnFromScreenWalkthrough,
   proposeFromMethodNotes,
   saveInterview,
   scanPair,
@@ -347,10 +349,97 @@ export async function testModelsAction(): Promise<ModelCheckState> {
         }
       }),
     );
-    const voice = transcriptionCheck();
-    return { error: null, results: [...results, { role: "transcribe", ms: 0, ...voice }] };
+    // Can the Learn model see? (Screen walkthroughs depend on it.)
+    const visionStart = Date.now();
+    const vision = await client
+      .complete(
+        "extract",
+        [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "What colour is this square? Answer with one word." },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:image/png;base64,${solidPng(32, [220, 30, 30]).toString("base64")}`,
+                },
+              },
+            ],
+          },
+        ],
+        { maxTokens: 20 },
+      )
+      .then((r) => ({
+        ok: /red/i.test(r.text),
+        detail: `${r.model}: “${r.text.trim().slice(0, 40)}” (expected red)`,
+      }))
+      .catch((e: Error) => ({ ok: false, detail: e.message.slice(0, 300) }));
+
+    // Transcription: one second of tone. Success means the API accepted the audio.
+    const voiceStart = Date.now();
+    const voice = await createTranscriber()
+      .transcribe(toneWav(), "check.wav")
+      .then((t) => ({
+        ok: true,
+        detail: `${t.model} accepted the audio (${transcriptionCheck().detail}). Heard: “${t.text.slice(0, 40)}”`,
+      }))
+      .catch((e: Error) => ({ ok: false, detail: e.message.slice(0, 300) }));
+
+    return {
+      error: null,
+      results: [
+        ...results,
+        { role: "vision", ms: Date.now() - visionStart, ...vision },
+        { role: "transcribe", ms: Date.now() - voiceStart, ...voice },
+      ],
+    };
   } catch (error) {
     unstable_rethrow(error);
     return { error: error instanceof Error ? error.message : "Check failed" };
   }
+}
+
+const FRAME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const MAX_FRAME_BYTES = 2.5 * 1024 * 1024;
+
+/**
+ * Screen walkthrough: the frames the owner kept, plus optional narration,
+ * become method steps (redacted) and then proposed rules. Nothing is stored
+ * except the result.
+ */
+export async function screenWalkthroughAction(
+  _: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  return attempt(async () => {
+    const slug = slugField.parse(form.get("slug"));
+    const user = await requireUser();
+    const skill = await ownedSkillBySlug(user, slug);
+    const files = form.getAll("frames").filter((f): f is File => f instanceof File && f.size > 0);
+    if (files.length === 0)
+      throw new Error("Record a walkthrough first: share a window and capture a few steps.");
+    if (files.length > 24) throw new Error("Keep it to 24 frames or fewer.");
+    for (const f of files) {
+      if (!FRAME_TYPES.has(f.type)) throw new Error("Frames must be JPEG, PNG or WebP images.");
+      if (f.size > MAX_FRAME_BYTES) throw new Error("One of the frames is too large.");
+    }
+    const frames = await Promise.all(
+      files.map(
+        async (f) =>
+          `data:${f.type};base64,${Buffer.from(await f.arrayBuffer()).toString("base64")}`,
+      ),
+    );
+    const audio = readAudio(form.get("audio"));
+    const narration = audio
+      ? (await createTranscriber(user).transcribe(audio, audio.name)).text
+      : "";
+    const { proposal } = await learnFromScreenWalkthrough(createModelClient(user), skill.id, {
+      frames,
+      narration,
+      actor: actorOf(user),
+    });
+    revalidatePath(`/skills/${slug}/interview`);
+    return proposal ? `/corrections/${proposal.id}` : `/skills/${slug}/interview?screen=1`;
+  });
 }

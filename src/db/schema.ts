@@ -30,6 +30,7 @@ export const proposalSource = pgEnum("proposal_source", [
   "job",
   "interview",
   "walkthrough",
+  "screen",
 ]);
 export const jobOrigin = pgEnum("job_origin", ["owner", "renter"]);
 export const jobStatus = pgEnum("job_status", [

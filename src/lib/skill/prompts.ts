@@ -200,3 +200,32 @@ ${renderSheet(sheet)}`,
     { role: "user", content: fence("method_notes", notes) },
   ];
 }
+
+/**
+ * A recorded screen walkthrough: frames of one window plus the owner's
+ * narration. The model describes the method it shows, never the content.
+ */
+export function screenWalkthroughMessages(
+  meta: SkillMeta,
+  narration: string,
+  frames: string[],
+): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: `You watch a short recording of a person doing one task on their computer, as a sequence of screenshots in time order, plus anything they said while recording. Describe their METHOD as numbered steps another person could follow: what they open first, the order they work in, how they structure the output, what they check, what they leave out, and any conventions (headings, formatting, naming, tone).
+
+Describe the method, not the material. Never copy names of people or organisations, figures, dates, email addresses, account numbers or other client details from the screens: refer to them generically ("the client's name", "the amount"). If a screen shows nothing relevant to the task, skip it. Reply with plain numbered steps and nothing else.`,
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: `<screen_walkthrough>\nTask: ${meta.name}: ${meta.taskDescription}\n${frames.length} screenshots follow, in order.\n${fence("narration", narration || "(no narration)")}`,
+        },
+        ...frames.map((url) => ({ type: "image_url" as const, image_url: { url } })),
+      ],
+    },
+  ];
+}

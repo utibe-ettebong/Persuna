@@ -39,6 +39,7 @@ export default defineRailway(() => {
       TRANSCRIBE_BASE_URL: preserve(),
       TRANSCRIBE_API_KEY: preserve(),
       TRANSCRIBE_MODEL: preserve(),
+      TRANSCRIBE_API: preserve(),
       EXTRACT_BASE_URL: preserve(),
       EXTRACT_API_KEY: preserve(),
       EXTRACT_MODEL: preserve(),

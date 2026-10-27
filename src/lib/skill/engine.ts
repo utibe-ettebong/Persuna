@@ -18,6 +18,7 @@ import {
   extractMessages,
   methodNotesMessages,
   redactMessages,
+  screenWalkthroughMessages,
   selfCheckMessages,
   type SkillMeta,
 } from "./prompts";
@@ -143,6 +144,26 @@ export async function proposeFromNotes(
     throw new Error(`Proposal referenced unknown rules: ${applied.unknownIds.join(", ")}`);
   }
   return { proposal: value, sheet: applied.sheet, model: completion.model };
+}
+
+/** Turns screenshots of a recorded walkthrough (plus narration) into method steps. */
+export async function describeScreens(
+  client: ModelClient,
+  meta: SkillMeta,
+  narration: string,
+  frames: string[],
+): Promise<string> {
+  if (frames.length === 0) throw new Error("Capture at least one screen first");
+  const reply = await client.complete(
+    "extract",
+    screenWalkthroughMessages(meta, narration, frames),
+    {
+      maxTokens: 2048,
+    },
+  );
+  const steps = reply.text.trim();
+  if (!steps) throw new Error("The model returned no steps for this walkthrough");
+  return steps;
 }
 
 /** Names of people, organisations and places in the texts, for anonymising examples. */

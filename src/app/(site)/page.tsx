@@ -69,7 +69,7 @@ const FAQ = [
   ],
   [
     "Does it watch my screen?",
-    "No. Skills are captured deliberately, from material you choose to share. A recorded walkthrough of one task is on the roadmap, always opt-in and reviewed by you.",
+    "Only when you choose to. A screen walkthrough records one window you pick, while you do the task once and talk it through. You review every captured frame and can delete any before sending. The AI describes your method from them, names and numbers are removed, and the frames and audio are discarded. Nothing watches you in the background.",
   ],
   [
     "What do renters see?",

@@ -1,9 +1,20 @@
 import { z } from "zod";
 import { env, modelConfig, type ModelRole, type ModelRoleConfig } from "@/env";
 
+/** Text, or (in user messages) text and images, as OpenAI-style content parts. */
+export type ContentPart =
+  { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | ContentPart[];
+}
+
+/** The text of a message, ignoring any images. */
+export function textOf(content: ChatMessage["content"]): string {
+  return typeof content === "string"
+    ? content
+    : content.map((p) => (p.type === "text" ? p.text : "")).join("\n");
 }
 
 export interface Completion {
