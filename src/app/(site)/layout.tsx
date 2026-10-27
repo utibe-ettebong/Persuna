@@ -85,8 +85,7 @@ function SiteFooter() {
               <Mark /> Persuna
             </p>
             <p className="mt-3 max-w-xs text-sm leading-relaxed text-white/60">
-              Your method, multiplied. Built for the Meta Global AI Developer Hackathon by GAMAID
-              Foundation.
+              Your method, multiplied. Built for the Meta Global AI Developer Hackathon.
             </p>
           </div>
           {columns.map((c) => (
@@ -111,7 +110,7 @@ function SiteFooter() {
           Persuna
         </p>
         <div className="mt-8 flex flex-wrap items-center justify-between gap-4 border-t border-white/10 pt-6 text-sm text-white/45">
-          <span>© {new Date().getFullYear()} GAMAID Foundation · MIT licensed</span>
+          <span>© {new Date().getFullYear()} Persuna · MIT licensed</span>
           <span className="label-mono">AI-produced · owner-approved</span>
         </div>
       </div>

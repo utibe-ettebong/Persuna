@@ -1,4 +1,6 @@
 import type { ChatMessage } from "@/lib/models/gateway";
+import type { PersonaState, PersonaTurn } from "@/lib/persona/types";
+import { INTERVIEW_QUESTIONS } from "./interview";
 import { renderSheet } from "./sheet";
 import { CRITERIA, RULE_CATEGORIES, type Pair, type SkillSheet } from "./types";
 
@@ -225,6 +227,85 @@ Describe the method, not the material. Never copy names of people or organisatio
           text: `<screen_walkthrough>\nTask: ${meta.name}: ${meta.taskDescription}\n${frames.length} screenshots follow, in order.\n${fence("narration", narration || "(no narration)")}`,
         },
         ...frames.map((url) => ({ type: "image_url" as const, image_url: { url } })),
+      ],
+    },
+  ];
+}
+
+/* ---------- Persona, the on-screen assistant ---------- */
+
+/**
+ * One chat turn with Persona. It talks briefly, asks one thing at a time, and
+ * acts through a short list of actions the service applies.
+ */
+export function personaChatMessages(
+  state: PersonaState,
+  history: PersonaTurn[],
+  text: string,
+): ChatMessage[] {
+  const keys = INTERVIEW_QUESTIONS.map((q) => q.key);
+  return [
+    {
+      role: "system",
+      content: `You are ${state.name}, a personal AI assistant that lives as a small avatar on the user's screen. You help them through their day: keep track of what they're working on, take notes when asked, remember things they tell you, and learn how they do their work so you can do it for them later.
+
+How you talk: warm, plain and brief (one to three sentences). Ask ONE question at a time. Never invent facts about the user or their work.
+
+You act by adding actions to your reply:
+- remember: a short fact the user wants you to keep (preferences, how they like things done).
+- note: a note the user asked for, with a short title.
+- set_focus: what the user is working on today; "skill" is the slug of their matching skill from the state, or null.
+- answer: when your last message asked an interview question (state.lastAsked) and the user answered it, save their answer under that key.
+- learn: when the user explains HOW they do the focus skill's task (a rule, a step, a habit), the method in their words.
+
+Training: when the user wants to teach you their focus skill and it has unanswered questions, ask the next one in your own words and set "asked" to its key. If they say skip or later, move on. Learn the method, never the material: in answers and learn actions, keep the steps and rules but leave out names of people or clients, figures and other client details.
+
+The user's state is in <persona_state>. Their latest message is in <persona_user>.
+
+Reply with one JSON object and nothing else:
+{
+  "reply": "what you say",
+  "actions": [ { "type": "remember", "fact": "..." } | { "type": "note", "title": "...", "body": "..." } | { "type": "set_focus", "focus": "...", "skill": "slug or null" } | { "type": "answer", "key": one of ${JSON.stringify(keys)}, "answer": "..." } | { "type": "learn", "method": "..." } ],
+  "asked": one of ${JSON.stringify(keys)} or null
+}`,
+    },
+    ...history.map((m) => ({ role: m.role, content: m.content })),
+    {
+      role: "user",
+      content: `${fence("persona_state", JSON.stringify(state, null, 1))}\n\n${fence("persona_user", text)}`,
+    },
+  ];
+}
+
+/**
+ * Persona looks at one frame of the window the user chose to share. It stays
+ * quiet unless something is worth saying, and records method steps only.
+ */
+export function personaObserveMessages(
+  name: string,
+  focus: string | null,
+  recentSteps: string[],
+  frame: string,
+): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: `You are ${name}, a personal assistant. The user has allowed you to watch one window while they work so you can learn how they do it. You get one screenshot at a time.
+
+Record what they are doing as ONE short method step (for example "Moves action items into a table with owner and due date"), or null if nothing new happened since the recent steps. Describe the method, never the material: no names of people or organisations, figures, dates, emails or other client details.
+
+Usually say nothing (null). Only "say" something short when it would genuinely help: they seem stuck, they repeat a step, or they finished something.
+
+Reply with one JSON object and nothing else: { "say": "..." or null, "step": "..." or null }`,
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: `<persona_observe>\nToday's focus: ${focus ?? "(not set)"}\n${fence("recent_steps", recentSteps.join("\n") || "(none yet)")}\n</persona_observe>`,
+        },
+        { type: "image_url", image_url: { url: frame } },
       ],
     },
   ];

@@ -1,14 +1,17 @@
 import Link from "next/link";
 import { Logo } from "@/components/brand";
+import { Companion } from "@/components/persona/companion";
 import { StudioNav } from "@/components/studio-nav";
 import { SignOutButton } from "@/components/sign-out-button";
 import { modelProvider } from "@/env";
 import { requireUser } from "@/lib/auth/session";
+import { companion } from "@/lib/persona/service";
 
 /** The signed-in studio: framed page, mono navigation, mock-model notice. */
 export default async function StudioLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const user = await requireUser();
   const mock = modelProvider() === "mock";
+  const persona = await companion(user.id);
   return (
     <>
       <header className="sticky top-0 z-20 border-b border-line bg-background/90 backdrop-blur">
@@ -49,6 +52,18 @@ export default async function StudioLayout({ children }: Readonly<{ children: Re
         </main>
         <div aria-hidden className="hatch hidden flex-1 lg:block" />
       </div>
+      <Companion
+        name={persona.profile.name}
+        avatar={persona.profile.avatar}
+        focus={persona.profile.focus}
+        focusSkill={persona.focusSkill}
+        messages={persona.messages.map((m) => ({
+          id: m.id,
+          role: m.role,
+          kind: m.kind,
+          content: m.content,
+        }))}
+      />
     </>
   );
 }

@@ -31,6 +31,7 @@ export const proposalSource = pgEnum("proposal_source", [
   "interview",
   "walkthrough",
   "screen",
+  "companion",
 ]);
 export const jobOrigin = pgEnum("job_origin", ["owner", "renter"]);
 export const jobStatus = pgEnum("job_status", [
@@ -376,6 +377,62 @@ export const auditEvents = pgTable(
   (t) => [index().on(t.at), index().on(t.skillId)],
 );
 
+/* ---------- Persona: the personal assistant that learns from its user ---------- */
+
+/** One per user: what Persona is called, what it knows about them, today's focus. */
+export const personaProfiles = pgTable("persona_profiles", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => authUsers.id, { onDelete: "cascade" }),
+  name: text("name").notNull().default("Persona"),
+  /** An emoji the user picked for the on-screen companion. */
+  avatar: text("avatar").notNull().default("🦉"),
+  /** Short facts the user asked Persona to remember, newest last. */
+  memory: jsonb("memory").$type<string[]>().notNull().default([]),
+  focus: text("focus"),
+  focusSkillId: uuid("focus_skill_id").references(() => skills.id, { onDelete: "set null" }),
+  /** The day (YYYY-MM-DD, UTC) Persona last asked what you're working on. */
+  checkinDay: text("checkin_day"),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const personaMessages = pgTable(
+  "persona_messages",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    role: text("role", { enum: ["user", "assistant"] }).notNull(),
+    /** chat, checkin, or observation (said while watching the screen). */
+    kind: text("kind").notNull().default("chat"),
+    content: text("content").notNull(),
+    skillId: uuid("skill_id").references(() => skills.id, { onDelete: "set null" }),
+    /** For interview turns: which question Persona just asked. */
+    askedKey: text("asked_key"),
+    createdAt: createdAt(),
+  },
+  (t) => [index().on(t.userId, t.createdAt)],
+);
+
+export const personaNotes = pgTable(
+  "persona_notes",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    /** chat or screen. */
+    source: text("source").notNull().default("chat"),
+    skillId: uuid("skill_id").references(() => skills.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index().on(t.userId, t.createdAt)],
+);
+
 /** One live model call by a user, for the daily per-user limit. */
 export const modelUsage = pgTable(
   "model_usage",
@@ -401,3 +458,6 @@ export type Listing = typeof listings.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
 export type AuditEvent = typeof auditEvents.$inferSelect;
 export type AuthUser = typeof authUsers.$inferSelect;
+export type PersonaProfile = typeof personaProfiles.$inferSelect;
+export type PersonaMessage = typeof personaMessages.$inferSelect;
+export type PersonaNote = typeof personaNotes.$inferSelect;

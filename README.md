@@ -8,12 +8,21 @@ This repository is the hackathon build. The first skill is turning raw meeting n
 
 - `/`: the public landing page (open without the app password).
 - `/sign-in`, `/sign-up`: accounts (email and password, via [Better Auth](https://www.better-auth.com)).
+- `/persona`: your assistant's profile, what it remembers, and its notes.
 - `/skills`, `/jobs`, `/market`, `/earnings`, `/audit`: the studio, for signed-in users. Each person sees only their own skills, jobs, earnings and activity; renters see their own orders. Admins (`ADMIN_EMAILS`) see everything and the Models & keys page.
 - `/approvals/<token>`: an employer's approval link (open; the token is the credential).
 
 The design follows a framed, rule-drawn system: an off-white page inside vertical rules, mono uppercase labels and buttons (DM Mono), display type in Instrument Sans, one purple brand colour, plum bands, and diagonal hatching in empty space. Tokens live in `src/app/globals.css`; shared pieces are in `src/components/ui.tsx` and `src/components/brand.tsx`.
 
 ## What works
+
+**Persona, your assistant** (the avatar in the corner of every studio page)
+
+- A small avatar you can drag anywhere. Click it to chat; it reads replies aloud if you turn on 🔊, and the 🎙 button is push-to-talk (transcribed, then sent). In Chrome, ⧉ pops it into a floating window that stays above your other apps.
+- Once a day it asks what you're working on. Tell it ("I'm working on the board minutes") and it sets today's focus and links it to your matching skill.
+- "Take a note: …" saves a note; "Remember that …" saves a fact it uses in later conversations. Both are on the _Persona_ page, where you can delete notes, make it forget facts, rename it and change its avatar.
+- **Training by conversation:** say "teach me" and it asks the skill's interview questions one at a time, saving each answer to the skill. State a rule ("I always put decisions in bold") and it becomes a proposed rule change you review, with names and identifiers removed first.
+- **Watching, only with permission:** "Watch my screen" explains what happens, then asks you to share one window. It looks every 30 seconds, only when the window has changed (at most 40 looks a session), and writes the steps it sees into a note. Screenshots are never stored. When you stop, "Teach it" sends those steps to the focus skill. Without permission it just sits there.
 
 **Train a skill** (Skills → a skill)
 
@@ -85,6 +94,8 @@ src/lib/skill/engine.ts          the loop itself, with no storage: extract, draf
 src/lib/skill/service.ts         skills, pairs, versions, test runs, corrections, publishing (Postgres)
 src/lib/skill/prompts.ts         every prompt in one place
 src/lib/skill/redact.ts          identifier scan for example pairs
+src/lib/persona/                 the assistant: brain (no storage), service, types
+src/components/persona/          the on-screen companion, screen watcher, Persona page pieces
 src/lib/jobs/                    real jobs: draft, review, edit size, retention
 src/lib/market/                  listings, rent, mock escrow, payouts
 src/lib/docs/                    .docx export and .md/.txt/.docx upload reading
