@@ -5,11 +5,13 @@ import type { PersonaState } from "./types";
 
 const state = (over: Partial<PersonaState> = {}): PersonaState => ({
   today: "2026-10-27",
+  now: "2026-10-27T10:15",
   name: "Persona",
   memory: [],
   focus: null,
   focusSkill: null,
-  skills: [{ slug: "meeting-minutes", name: "Meeting minutes" }],
+  skills: [{ slug: "meeting-minutes", name: "Meeting minutes", published: true }],
+  todos: [],
   lastAsked: null,
   ...over,
 });
@@ -21,6 +23,7 @@ const training = state({
     name: "Meeting minutes",
     task: "Notes to minutes",
     hasRules: false,
+    published: true,
     unanswered: [
       { key: "steps", question: "Walk through how you do this task, step by step." },
       { key: "tone", question: "What tone and voice do you write in?" },
@@ -95,6 +98,31 @@ describe("personaTurn with the offline mock", () => {
   it("learns a rule the user states", async () => {
     const reply = await personaTurn(client, training, [], "I always put decisions in bold");
     expect(reply.actions).toEqual([{ type: "learn", method: "I always put decisions in bold" }]);
+  });
+});
+
+describe("personaTurn assistant actions with the offline mock", () => {
+  const client = createMockClient();
+
+  it("sets a reminder at a local time, or a to-do without one", async () => {
+    const timed = await personaTurn(client, state(), [], "Remind me at 4pm to send the minutes");
+    expect(timed.actions).toEqual([
+      { type: "remind", text: "send the minutes", at: "2026-10-27T16:00" },
+    ]);
+    const todo = await personaTurn(client, state(), [], "todo: book the room");
+    expect(todo.actions).toEqual([{ type: "remind", text: "book the room", at: null }]);
+  });
+
+  it("asks to run a task with the matching skill", async () => {
+    const reply = await personaTurn(client, state(), [], "Turn these notes into meeting minutes");
+    expect(reply.actions).toEqual([{ type: "run_task", skill: "meeting-minutes" }]);
+  });
+
+  it("coaches and wraps up", async () => {
+    const coach = await personaTurn(client, state(), [], "How is my meeting minutes skill doing?");
+    expect(coach.actions).toEqual([{ type: "coach", skill: "meeting-minutes" }]);
+    const wrap = await personaTurn(client, state(), [], "Wrap up my day");
+    expect(wrap.actions).toEqual([{ type: "wrap_up" }]);
   });
 });
 

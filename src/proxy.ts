@@ -2,7 +2,7 @@ import { getSessionCookie } from "better-auth/cookies";
 import { type NextRequest, NextResponse } from "next/server";
 
 /** Pages anyone may open. Everything else needs a signed-in account. */
-const PUBLIC = [/^\/$/, /^\/sign-(in|up)$/, /^\/approvals\//, /^\/api\/auth\//];
+const PUBLIC = [/^\/$/, /^\/sign-(in|up)$/, /^\/approvals\//, /^\/personas\//, /^\/api\/auth\//];
 
 export function isPublicPath(pathname: string): boolean {
   return PUBLIC.some((re) => re.test(pathname));

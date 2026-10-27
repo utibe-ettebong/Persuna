@@ -8,7 +8,9 @@ This repository is the hackathon build. The first skill is turning raw meeting n
 
 - `/`: the public landing page (open without the app password).
 - `/sign-in`, `/sign-up`: accounts (email and password, via [Better Auth](https://www.better-auth.com)).
-- `/persona`: your assistant's profile, what it remembers, and its notes.
+- `/persona`: your assistant's profile, what it remembers, coaching on your skills, to-dos and notes.
+- `/personas/<handle>`: a persona's public profile (open to anyone): listed skills, scores, renters, reviews.
+- `/companion`: the companion on its own page (used by the desktop app).
 - `/skills`, `/jobs`, `/market`, `/earnings`, `/audit`: the studio, for signed-in users. Each person sees only their own skills, jobs, earnings and activity; renters see their own orders. Admins (`ADMIN_EMAILS`) see everything and the Models & keys page.
 - `/approvals/<token>`: an employer's approval link (open; the token is the credential).
 
@@ -22,7 +24,13 @@ The design follows a framed, rule-drawn system: an off-white page inside vertica
 - Once a day it asks what you're working on. Tell it ("I'm working on the board minutes") and it sets today's focus and links it to your matching skill.
 - "Take a note: …" saves a note; "Remember that …" saves a fact it uses in later conversations. Both are on the _Persona_ page, where you can delete notes, make it forget facts, rename it and change its avatar.
 - **Training by conversation:** say "teach me" and it asks the skill's interview questions one at a time, saving each answer to the skill. State a rule ("I always put decisions in bold") and it becomes a proposed rule change you review, with names and identifiers removed first.
-- **Watching, only with permission:** "Watch my screen" explains what happens, then asks you to share one window. It looks every 30 seconds, only when the window has changed (at most 40 looks a session), and writes the steps it sees into a note. Screenshots are never stored. When you stop, "Teach it" sends those steps to the focus skill. Without permission it just sits there.
+- **First meeting:** the first time, it opens by itself and asks what to call it, how it should look, and which task to learn first (an existing skill, a new one, or the sample). That task becomes today's focus.
+- **Work from the chat:** "Turn these notes into minutes" (or 📎) opens a small form: pick a published skill, paste the input or upload a file, and it drafts the result as a normal owner job. Approve, edit or send it back right in the chat. The input and draft stay in `jobs` (purged after retention); the chat only records that a task ran.
+- **Reminders and to-dos:** "Remind me at 4pm to send the minutes" or "in 20 minutes", or "todo: book the room". Times are the user's local time. Due reminders show in the chat, are read aloud if 🔊 is on, and appear as browser notifications once allowed. Manage them on the _Persona_ page.
+- **Coaching:** "How is my minutes skill doing?" gives where it stands and the next step to a listing, e.g. its score against `LISTING_MIN_SCORE` with a rough number of examples to add. The _Persona_ page shows this for every skill. The estimate is a rule of thumb (`src/lib/persona/coach.ts`) and says so.
+- **End-of-day wrap-up:** after 5pm it offers once; or say "wrap up my day". Built from what actually happened (focus, tasks drafted and approved, notes, done and open to-dos), with no model call.
+- **Public profile:** every persona gets `/personas/<handle>` with its listed skills, scores, trust level, how many people rented it in the last 30 days, and renters' ratings. Marketplace cards link to it. Never the owner's notes, memory or chats.
+- **Watching, only with permission:** "Watch my screen" explains what happens, then asks you to share one window. It looks every 30 seconds, only when the window has changed (at most 40 looks a session), and writes the steps it sees into a note. Screenshots are never stored. When you stop, "Teach it" sends those steps to the focus skill. Without permission it just sits there. The browser's picker can share any app's window (Figma, a video editor), and **Persona Desktop** (`desktop/`, see its README) keeps the companion in a small always-on-top window beside those apps.
 
 **Train a skill** (Skills → a skill)
 
@@ -95,7 +103,8 @@ src/lib/skill/service.ts         skills, pairs, versions, test runs, corrections
 src/lib/skill/prompts.ts         every prompt in one place
 src/lib/skill/redact.ts          identifier scan for example pairs
 src/lib/persona/                 the assistant: brain (no storage), service, types
-src/components/persona/          the on-screen companion, screen watcher, Persona page pieces
+src/components/persona/          the on-screen companion, setup, task runner, screen watcher, Persona page pieces
+desktop/                         Persona Desktop: Electron shell around /companion
 src/lib/jobs/                    real jobs: draft, review, edit size, retention
 src/lib/market/                  listings, rent, mock escrow, payouts
 src/lib/docs/                    .docx export and .md/.txt/.docx upload reading

@@ -3,14 +3,30 @@ import { isPublicPath } from "./proxy";
 import { matchesList, parseList, signUpAllowed } from "./lib/auth/policy";
 
 describe("isPublicPath", () => {
-  it("opens the landing page, auth pages, auth API and employer links", () => {
-    for (const p of ["/", "/sign-in", "/sign-up", "/api/auth/sign-in/email", "/approvals/abc"]) {
+  it("opens the landing page, auth pages, auth API and employer links and public persona profiles", () => {
+    for (const p of [
+      "/",
+      "/sign-in",
+      "/sign-up",
+      "/api/auth/sign-in/email",
+      "/approvals/abc",
+      "/personas/owl-ab12c",
+    ]) {
       expect(isPublicPath(p)).toBe(true);
     }
   });
 
   it("keeps the studio behind sign-in", () => {
-    for (const p of ["/skills", "/jobs/1", "/market", "/settings", "/sign-in-x", "/approvals"]) {
+    for (const p of [
+      "/skills",
+      "/jobs/1",
+      "/market",
+      "/settings",
+      "/sign-in-x",
+      "/approvals",
+      "/persona",
+      "/companion",
+    ]) {
       expect(isPublicPath(p)).toBe(false);
     }
   });

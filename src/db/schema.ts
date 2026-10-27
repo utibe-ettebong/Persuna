@@ -387,12 +387,18 @@ export const personaProfiles = pgTable("persona_profiles", {
   name: text("name").notNull().default("Persona"),
   /** An emoji the user picked for the on-screen companion. */
   avatar: text("avatar").notNull().default("🦉"),
+  /** Set once the first-meeting setup (name, avatar, first task) is done or skipped. */
+  setupDone: boolean("setup_done").notNull().default(false),
+  /** Public profile address: /personas/<handle>. */
+  handle: text("handle").unique(),
   /** Short facts the user asked Persona to remember, newest last. */
   memory: jsonb("memory").$type<string[]>().notNull().default([]),
   focus: text("focus"),
   focusSkillId: uuid("focus_skill_id").references(() => skills.id, { onDelete: "set null" }),
-  /** The day (YYYY-MM-DD, UTC) Persona last asked what you're working on. */
+  /** The user's local day (YYYY-MM-DD) Persona last asked what you're working on. */
   checkinDay: text("checkin_day"),
+  /** The local day of the last end-of-day wrap-up. */
+  wrapupDay: text("wrapup_day"),
   createdAt: createdAt(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -411,6 +417,8 @@ export const personaMessages = pgTable(
     skillId: uuid("skill_id").references(() => skills.id, { onDelete: "set null" }),
     /** For interview turns: which question Persona just asked. */
     askedKey: text("asked_key"),
+    /** A job Persona ran from the chat. The job's text stays in `jobs`, never here. */
+    jobId: uuid("job_id").references(() => jobs.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
   (t) => [index().on(t.userId, t.createdAt)],
@@ -431,6 +439,23 @@ export const personaNotes = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index().on(t.userId, t.createdAt)],
+);
+
+/** To-dos, and reminders when they have a due time. */
+export const personaReminders = pgTable(
+  "persona_reminders",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    text: text("text").notNull(),
+    dueAt: timestamp("due_at", { withTimezone: true }),
+    notifiedAt: timestamp("notified_at", { withTimezone: true }),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index().on(t.userId, t.doneAt)],
 );
 
 /** One live model call by a user, for the daily per-user limit. */
@@ -461,3 +486,4 @@ export type AuthUser = typeof authUsers.$inferSelect;
 export type PersonaProfile = typeof personaProfiles.$inferSelect;
 export type PersonaMessage = typeof personaMessages.$inferSelect;
 export type PersonaNote = typeof personaNotes.$inferSelect;
+export type PersonaReminder = typeof personaReminders.$inferSelect;
