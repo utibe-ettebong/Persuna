@@ -58,13 +58,20 @@ export interface CompanionProps {
   setupDone: boolean;
   wrapupDay: string | null;
   skills: { slug: string; name: string; published: boolean }[];
-  /** Fills its window: the /companion page and the desktop app. */
+  /** Fills its window: the /companion page in a browser. */
   standalone?: boolean;
+  /** Inside Persona Desktop's see-through layer over the whole screen. */
+  overlay?: boolean;
 }
 
 type Busy = "idle" | "thinking" | "hearing";
 
 const ORB = 88;
+
+/** What Persona Desktop's preload exposes to the page. */
+type DesktopWindow = Window & {
+  personaDesktop?: { overlay: boolean; setInteractive(on: boolean): void; hide(): void };
+};
 /** Gap between Persona and the thing it perches beside. */
 const PERCH_GAP = 14;
 /** How long Persona stays perched or wandering before flying home. */
@@ -711,6 +718,29 @@ export function Companion(props: CompanionProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path]);
 
+  /* ---------- Persona Desktop: clicks pass through except on Persona ---------- */
+
+  useEffect(() => {
+    const desktop = (window as DesktopWindow).personaDesktop;
+    if (!props.overlay || !desktop) return;
+    let interactive = false;
+    const onMove = (e: MouseEvent) => {
+      // While dragging Persona, keep it holding the pointer.
+      if (e.buttons && interactive) return;
+      const hit = Boolean(
+        (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest(
+          ".pointer-events-auto",
+        ),
+      );
+      if (hit !== interactive) {
+        interactive = hit;
+        desktop.setInteractive(hit);
+      }
+    };
+    window.addEventListener("mousemove", onMove);
+    return () => window.removeEventListener("mousemove", onMove);
+  }, [props.overlay]);
+
   /* ---------- Watching (only with permission) ---------- */
 
   async function startWatch() {
@@ -869,7 +899,7 @@ export function Companion(props: CompanionProps) {
   }[orbState];
   const pipSupported = useSyncExternalStore(
     noSubscribe,
-    () => !props.standalone && "documentPictureInPicture" in window,
+    () => !props.standalone && !props.overlay && "documentPictureInPicture" in window,
     () => false,
   );
   const canWake = useSyncExternalStore(noSubscribe, wakeWordSupported, () => false);
@@ -993,10 +1023,19 @@ export function Companion(props: CompanionProps) {
           {askWatch && (
             <div className={`persona-in space-y-2 rounded-[22px] p-4 text-sm ${card}`}>
               <p>
-                <strong>Pick one window for me to watch.</strong> It can be any app (Figma, your
-                video editor, a spreadsheet): choose it under &ldquo;Window&rdquo;. I look every 30
-                seconds while it changes, write down your <em>steps</em>, skip names and figures,
-                and keep no screenshots. Stop any time.
+                {props.overlay ? (
+                  <>
+                    <strong>Let me watch while you work.</strong> I&apos;ll watch your whole screen
+                    or one app you choose (I&apos;ll ask once, and remember). I never see myself.
+                  </>
+                ) : (
+                  <>
+                    <strong>Pick one window for me to watch.</strong> It can be any app (Figma, your
+                    video editor, a spreadsheet): choose it under &ldquo;Window&rdquo;.
+                  </>
+                )}{" "}
+                I look every 30 seconds while it changes, write down your <em>steps</em>, skip names
+                and figures, and keep no screenshots. Stop any time.
               </p>
               <div className="flex gap-2">
                 <button
@@ -1004,7 +1043,7 @@ export function Companion(props: CompanionProps) {
                   onClick={() => void startWatch()}
                   className="rounded-full bg-accent px-4 py-1.5 text-sm text-accent-ink"
                 >
-                  Choose a window
+                  {props.overlay ? "Start watching" : "Choose a window"}
                 </button>
                 <button
                   type="button"
@@ -1095,6 +1134,14 @@ export function Companion(props: CompanionProps) {
           onClick={() => (wakeOn ? setWake(false) : setAskWake((v) => !v))}
         >
           <Icon name="ear" />
+        </Chip>
+      )}
+      {props.overlay && (
+        <Chip
+          label={`Hide ${name} (bring it back from the menu bar)`}
+          onClick={() => (window as DesktopWindow).personaDesktop?.hide()}
+        >
+          <Icon name="hide" />
         </Chip>
       )}
       {pipSupported && (

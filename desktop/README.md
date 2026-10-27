@@ -1,8 +1,26 @@
 # Persona Desktop
 
-Persona in a see-through, frameless window that floats on top of your other apps (drag it by Persona itself), so it can sit beside Figma, a video editor or a spreadsheet and, **only when you choose a window**, watch it to learn your steps.
+Persona, your PERSUNA assistant, over your whole screen. It lives in a see-through layer above every app, even full-screen ones. Clicks pass straight through to your apps except on Persona and its conversation. It sits in the menu bar (Mac) or system tray (Windows), not the Dock or taskbar.
 
-It is a thin [Electron](https://www.electronjs.org) shell around your PERSUNA server's `/companion` page. Sign in once in the window; chat, voice, reminders, tasks and notes work as on the web.
+**Download:** [the latest release](https://github.com/utibe-ettebong/Persuna/releases/latest).
+
+| Computer                              | File                              |
+| ------------------------------------- | --------------------------------- |
+| Mac with Apple silicon (M1 and later) | `Persona-<version>-mac-arm64.dmg` |
+| Mac with Intel                        | `Persona-<version>-mac-x64.dmg`   |
+| Windows PC                            | `Persona-<version>-win-x64.exe`   |
+| Windows on Arm                        | `Persona-<version>-win-arm64.exe` |
+
+## Permissions
+
+- **Watching your screen.** The first time you turn watching on, Persona asks what to watch (your whole screen or one app) and can remember it. After that, turning watching on just starts, with no picker. On a Mac, macOS also asks once for **Screen Recording** permission (System Settings → Privacy & Security → Screen Recording). Persona only watches while watching is on, never keeps screenshots, and never sees itself. Change the remembered choice from the menu bar icon.
+- **Microphone.** Asked the first time you talk to Persona.
+
+## How it works
+
+It's a thin [Electron](https://www.electronjs.org) app around your PERSUNA server's `/companion?overlay=1` page. Sign in once; chat, voice, reminders, tasks and notes work as on the web. `main.js` holds the overlay window, click-through, tray menu and screen-watch permissions; `preload.js` is the only bridge to the page.
+
+Run from source:
 
 ```bash
 cd desktop
@@ -10,14 +28,30 @@ npm install
 PERSUNA_URL=https://persuna-production.up.railway.app npm start
 ```
 
-`PERSUNA_URL` defaults to the hosted app. Use `http://localhost:3000` for a local server.
+## Building and releasing
 
-## Watching other apps
+`.github/workflows/desktop.yml` builds on GitHub's Mac and Windows machines. Pull requests that touch `desktop/` check the builds. To publish:
 
-Open the companion, press **Watch my screen**, then **Choose a window**. On recent macOS you get the system picker; elsewhere a list of open windows. Persona's own window is never offered. The first time on macOS, allow screen recording for "Electron" (System Settings → Privacy & Security → Screen Recording), then restart the app.
+1. Bump `version` in `desktop/package.json`.
+2. Push a matching tag, for example `git tag desktop-v0.2.0 && git push origin desktop-v0.2.0`.
 
-Persona looks every 30 seconds, only when the window has changed, writes the steps into a note, and keeps no screenshots. Stop it from the companion at any time.
+The workflow attaches the `.dmg`, `.zip` and `.exe` files to a GitHub Release.
 
-## What this is not (yet)
+Locally: `npm run dist:mac` (both Mac chips) or `npm run dist:win`.
 
-Not a signed, installable app: run it from source as above. Packaging (electron-builder, code signing, auto-update) is the next step for distribution.
+## Signing (the platform standard)
+
+Without certificates the builds are unsigned (Mac builds are signed ad hoc so they run on Apple silicon). People then see a warning the first time:
+
+- **Mac:** "Persona can't be opened". Right-click Persona in Applications, choose Open, then Open again.
+- **Windows:** SmartScreen warns. Choose More info, then Run anyway.
+
+To remove those warnings, add these repository secrets (Settings → Secrets and variables → Actions); the workflow signs and notarizes by itself:
+
+| Platform         | Secrets                                                    | Where from                                                                                                                                             |
+| ---------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Mac signing      | `MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD`                 | A "Developer ID Application" certificate from an [Apple Developer](https://developer.apple.com/programs/) account, exported as .p12 and base64-encoded |
+| Mac notarization | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | Your Apple ID, an app-specific password from appleid.apple.com, and your team ID                                                                       |
+| Windows          | `WIN_CERT_PFX_BASE64`, `WIN_CERT_PASSWORD`                 | An OV or EV code-signing certificate, exported as .pfx and base64-encoded                                                                              |
+
+Not included yet: automatic updates (they need signed builds) and Linux.

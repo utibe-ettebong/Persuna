@@ -1,14 +1,89 @@
 {
   "name": "persona-desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Persona in a small always-on-top window that can watch any app you choose.",
+  "description": "Persona, your PERSUNA assistant, over your whole screen.",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist:mac": "electron-builder --mac --x64 --arm64 --publish never",
+    "dist:win": "electron-builder --win --x64 --arm64 --publish never"
   },
   "license": "MIT",
   "devDependencies": {
-    "electron": "44.7.0"
+    "electron": "44.7.0",
+    "electron-builder": "26.17.0"
+  },
+  "author": {
+    "name": "Persuna",
+    "email": "hello@gamaidfoundation.org"
+  },
+  "homepage": "https://persuna-production.up.railway.app",
+  "build": {
+    "appId": "app.persuna.persona",
+    "productName": "Persona",
+    "copyright": "\u00a9 Persuna. MIT licensed.",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      "build/tray*.png"
+    ],
+    "artifactName": "Persona-${version}-${os}-${arch}.${ext}",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "minimumSystemVersion": "12.0",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Persona listens when you talk to it.",
+        "LSUIElement": true
+      }
+    },
+    "dmg": {
+      "title": "Persona ${version}"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Persona"
+    }
   }
 }
