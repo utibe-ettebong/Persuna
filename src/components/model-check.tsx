@@ -8,6 +8,7 @@ const NAMES: Record<string, string> = {
   extract: "Learn",
   draft: "Draft",
   evaluate: "Score",
+  vision: "Sees images",
   transcribe: "Transcribe",
 };
 

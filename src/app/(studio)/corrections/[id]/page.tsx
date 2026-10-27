@@ -18,6 +18,7 @@ const SOURCE_LABEL = {
   job: "your edit of a real job",
   interview: "your interview answers",
   walkthrough: "your voice walkthrough",
+  screen: "your screen walkthrough",
 } as const;
 
 export default async function CorrectionPage({ params }: Params) {

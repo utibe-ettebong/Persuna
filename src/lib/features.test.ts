@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { encodeWav } from "./audio/wav";
 import { describe, expect, it, vi } from "vitest";
 import { deterministicFlags, mergeFlags } from "./jobs/self-check";
 import {
@@ -178,7 +179,7 @@ describe("interview and voice", () => {
   });
 
   it("accepts recorded blobs and audio uploads, rejects other files", () => {
-    expect(readAudio(new File(["x"], "blob", { type: "audio/webm" }))?.name).toBe("recording.webm");
+    expect(readAudio(new File(["x"], "blob", { type: "audio/wav" }))?.name).toBe("recording.wav");
     expect(readAudio(new File(["x"], "talk.m4a"))?.name).toBe("talk.m4a");
     expect(readAudio(null)).toBeNull();
     expect(() => readAudio(new File(["x"], "notes.pdf"))).toThrow(/audio file/);
@@ -315,25 +316,97 @@ describe("key slots", () => {
   });
 });
 
-describe("transcription check", () => {
-  it("flags Meta's non-OpenAI transcription API and accepts an OpenAI-style one", async () => {
-    const { transcriptionCheck } = await import("./models/transcribe");
-    const saved = { ...process.env };
-    try {
-      delete process.env.MODEL_PROVIDER;
-      process.env.EXTRACT_API_KEY = "real-meta-key";
-      process.env.EXTRACT_BASE_URL = "https://api.meta.ai/v1";
-      process.env.EXTRACT_MODEL = "muse-spark-1.3";
-      process.env.TRANSCRIBE_MODEL = "muse-voice-transcribe-1.0";
-      expect(transcriptionCheck().ok).toBe(false);
+describe("transcription", () => {
+  const wav = () => new Blob([encodeWav(new Float32Array(16_000), 16_000)], { type: "audio/wav" });
 
-      process.env.TRANSCRIBE_BASE_URL =
-        "https://model-abc.api.baseten.co/environments/production/sync/v1";
-      process.env.TRANSCRIBE_API_KEY = "real-baseten-key";
-      process.env.TRANSCRIBE_MODEL = "Qwen/Qwen3-ASR-1.7B";
-      expect(transcriptionCheck()).toMatchObject({ ok: true });
+  it("sends Meta's native request: JSON settings part plus a WAV audio part", async () => {
+    const saved = { ...process.env };
+    process.env.MODEL_PROVIDER = "live";
+    process.env.DATABASE_URL ??= "postgres://test";
+    try {
+      const { createTranscriber } = await import("./models/transcribe");
+      const fetchImpl = vi.fn(
+        async () => new Response(JSON.stringify({ transcript: " Hello there. " })),
+      );
+      const t = createTranscriber(
+        () => ({
+          baseUrl: "https://api.meta.ai/v1/",
+          apiKey: "k",
+          model: "muse-voice-transcribe-1.0",
+        }),
+        fetchImpl as typeof fetch,
+      );
+      expect(await t.transcribe(wav(), "recording.webm")).toEqual({
+        text: "Hello there.",
+        model: "muse-voice-transcribe-1.0",
+      });
+      const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe("https://api.meta.ai/v1/asr/transcribe");
+      const form = init.body as FormData;
+      const request = JSON.parse(await (form.get("request") as Blob).text());
+      expect(request).toEqual({
+        model: "muse-voice-transcribe-1.0",
+        mode: "PUSH_TO_TALK",
+        audioEncoding: "WAV",
+      });
+      expect((form.get("request") as Blob).type).toBe("application/json");
+      expect((form.get("audio") as File).name).toBe("recording.wav");
     } finally {
       process.env = saved;
     }
+  });
+
+  it("refuses audio Meta can't take before calling it", async () => {
+    const saved = { ...process.env };
+    process.env.MODEL_PROVIDER = "live";
+    try {
+      const { createTranscriber } = await import("./models/transcribe");
+      const fetchImpl = vi.fn();
+      const t = createTranscriber(
+        () => ({ baseUrl: "https://api.meta.ai/v1", apiKey: "k", model: "m" }),
+        fetchImpl as typeof fetch,
+      );
+      await expect(t.transcribe(new Blob(["webm bytes, not wav"]), "a.webm")).rejects.toThrow(
+        /isn't a WAV/,
+      );
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      process.env = saved;
+    }
+  });
+
+  it("uses the OpenAI-style route for other providers", async () => {
+    const saved = { ...process.env };
+    process.env.MODEL_PROVIDER = "live";
+    process.env.DATABASE_URL ??= "postgres://test";
+    try {
+      const { createTranscriber } = await import("./models/transcribe");
+      const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ text: "Hi" })));
+      const base = "https://model-abc.api.baseten.co/environments/production/sync/v1";
+      const t = createTranscriber(
+        () => ({ baseUrl: base, apiKey: "k", model: "Qwen/Qwen3-ASR-1.7B" }),
+        fetchImpl as typeof fetch,
+      );
+      expect((await t.transcribe(wav(), "a.wav")).text).toBe("Hi");
+      expect((fetchImpl.mock.calls[0] as unknown as [string])[0]).toBe(
+        `${base}/audio/transcriptions`,
+      );
+    } finally {
+      process.env = saved;
+    }
+  });
+});
+
+describe("model probes", () => {
+  it("builds a valid solid PNG and a one-second WAV", async () => {
+    const { solidPng, toneWav } = await import("./models/probe");
+    const { inflateSync } = await import("node:zlib");
+    const png = solidPng(4, [220, 30, 30]);
+    expect(png.subarray(1, 4).toString()).toBe("PNG");
+    const idatLength = png.readUInt32BE(33);
+    const pixels = inflateSync(png.subarray(41, 41 + idatLength));
+    expect([...pixels.subarray(0, 4)]).toEqual([0, 220, 30, 30]);
+    const { parseWav } = await import("./audio/wav");
+    expect(parseWav(await toneWav().arrayBuffer())?.seconds).toBeCloseTo(1, 5);
   });
 });

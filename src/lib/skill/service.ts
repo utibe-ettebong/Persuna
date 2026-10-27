@@ -11,6 +11,7 @@ import { audit, type Actor } from "@/lib/audit";
 import type { ModelClient } from "@/lib/models/gateway";
 import { normalizeText } from "@/lib/text";
 import {
+  describeScreens,
   extractSheet,
   findNames,
   mapLimit,
@@ -427,7 +428,7 @@ async function recordProposal(client: ModelClient, source: CorrectionSource) {
 export async function proposeFromMethodNotes(
   client: ModelClient,
   skillId: string,
-  source: "interview" | "walkthrough",
+  source: "interview" | "walkthrough" | "screen",
   notes: string,
 ) {
   const skill = await db().query.skills.findFirst({ where: eq(skills.id, skillId) });
@@ -441,7 +442,11 @@ export async function proposeFromMethodNotes(
     skillId,
     source,
     fromVersionId: fromVersion.id,
-    reason: source === "interview" ? "Your interview answers" : "Your voice walkthrough",
+    reason: {
+      interview: "Your interview answers",
+      walkthrough: "Your voice walkthrough",
+      screen: "Your screen walkthrough",
+    }[source],
     explanation: proposal.explanation,
     ruleOps: proposal.ops,
     proposedSheet: sheet,
@@ -685,6 +690,48 @@ export async function getRun(runId: string) {
     .where(eq(testResults.evalRunId, runId))
     .orderBy(asc(examples.slug));
   return { ...header, results };
+}
+
+/**
+ * Screen walkthrough: frames of one window and the narration become method
+ * steps, then anything identifying is redacted before it is kept. Frames and
+ * audio are never stored. Before rules exist the steps join the interview;
+ * afterwards they become proposed rule changes.
+ */
+export async function learnFromScreenWalkthrough(
+  client: ModelClient,
+  skillId: string,
+  input: { frames: string[]; narration: string; actor: Actor },
+) {
+  const skill = await db().query.skills.findFirst({ where: eq(skills.id, skillId) });
+  if (!skill) throw new NotFoundError("No such skill");
+  const steps = await describeScreens(client, skill, input.narration, input.frames);
+  const raw = [
+    `Steps seen on screen:\n${steps}`,
+    input.narration && `What they said:\n${input.narration}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const entities = await findNames(client, [raw]);
+  const [notes] = redactTogether([raw], [scanText(raw, entities)], entities);
+
+  await audit({
+    actor: input.actor,
+    action: "screen_walkthrough.recorded",
+    entityType: "skill",
+    entityId: skillId,
+    skillId,
+    details: { frames: input.frames.length, narrated: Boolean(input.narration) },
+  });
+
+  if (!skill.currentVersionId) {
+    const answers = { ...(skill.interview ?? {}) };
+    answers.steps = [answers.steps, notes].filter(Boolean).join("\n\n");
+    await saveInterview(skillId, answers);
+    return { proposal: null, notes };
+  }
+  const proposal = await proposeFromMethodNotes(client, skillId, "screen", notes);
+  return { proposal, notes };
 }
 
 export async function trainingPairs(skillId: string) {

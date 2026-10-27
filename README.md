@@ -18,7 +18,7 @@ The design follows a framed, rule-drawn system: an off-white page inside vertica
 **Train a skill** (Skills → a skill)
 
 1. **Name the task:** _New skill_ form.
-2. **Interview and voice:** on the _Interview_ tab, answer seven questions about how you do the task, or record a voice walkthrough (transcribed by `TRANSCRIBE_*`, Muse Voice Transcribe). Before any rules exist, your answers and transcript feed rule extraction. Afterwards they become proposed rule changes.
+2. **Interview, voice and screen:** on the _Interview_ tab, answer seven questions about how you do the task, record a voice walkthrough, or record a **screen walkthrough**: share one window, do the task once while narrating, review the captured frames (delete any you don't want sent), then send. The model describes your method from the frames and narration, names and numbers are redacted, and frames and audio are discarded. Before any rules exist, all of this feeds rule extraction; afterwards it becomes proposed rule changes.
 3. **Add examples:** paste or upload (.md, .txt, .docx) before-and-after pairs on the _Examples_ tab, and mark each one for training or testing. Every pair is scanned for emails, phone and account numbers, links and street addresses (patterns), and for people, organisations and places (the model). Names get numbered placeholders shared across the pair's input and output: "Ada" is `[PERSON 1]` in both. You choose between saving with placeholders and confirming the data is invented.
 4. **Extract rules:** one model call turns the training pairs into a plain-language skill sheet (v1).
 5. **Edit rules:** on the _Edit rules_ tab, change, add or remove rules and the output template. Saving creates a new version.
@@ -166,30 +166,9 @@ CI runs the same checks on every push and pull request (`.github/workflows/ci.ym
 
 Email verification and password reset (they need an email provider). Sign-in with Google. Automatic payouts by Paystack transfer, plus Flutterwave and Stripe. Sending the employer link by email (you copy it from the Listing tab). WhatsApp and email delivery. Isolated job sandboxes. See the concept document for the full design.
 
-**To verify before relying on it:** the webhook check uses Paystack's documented scheme (HMAC-SHA512 of the raw body with your secret key, in `x-paystack-signature`), but it couldn't be checked against Paystack's docs page during the build. Test it with a test-mode key. The transcription endpoint assumes Muse Voice Transcribe accepts OpenAI-style `/audio/transcriptions` requests.
+**Voice:** the browser converts every recording and upload to 16 kHz mono WAV. With a base URL on `api.meta.ai`, transcription uses Muse Voice Transcribe's native API (`/v1/asr/transcribe`); anything else uses OpenAI-style `/audio/transcriptions`. Override with `TRANSCRIBE_API=meta|openai`. Recordings are capped at 5 minutes.
 
-### Walkthrough capture (later phase)
-
-An opt-in way for the agent to learn from how the owner works on screen, as a third source of rules next to examples and voice. It is **never** always-on watching: skills are captured deliberately, and the owner approves everything the agent learns.
-
-**Why not continuous screen watching**
-
-- Anything on screen gets captured, including client documents, messages and account details. That breaks "rent the method, never the material".
-- It is personal-data processing under the Nigeria Data Protection Act 2023, including other people's data that appears on screen. Employers and clients may forbid it.
-- It contradicts the promise that the owner sees and controls everything the skill learned.
-- For document skills such as minutes, the before-and-after pair already shows the result. Keystrokes and tab switching add noise, not signal.
-
-**Where it helps:** process skills, where _how_ the work is done matters as much as the result. Examples: reconciling a spreadsheet against bank statements, or a workflow that moves across several apps.
-
-**How it would work**
-
-1. The owner starts a recording for one named task, choosing a single window rather than the whole screen, and narrates as they work.
-2. The narration is transcribed (Muse Voice Transcribe) and key frames are described by a vision-capable model.
-3. A redaction pass strips or blurs names, numbers and other identifiers in the frames and transcript.
-4. The output is a list of **proposed** rules and steps, which the owner accepts or rejects like any other rule change. Accepted changes create a new skill version, which is re-tested before use.
-5. The raw recording is deleted once processed. Only the approved rules are kept.
-
-**Open questions:** whether the chosen models accept image or video input; how to bound recording length and cost; and where processing runs, so that raw frames never leave isolated, short-lived storage.
+**To verify before relying on it:** the webhook check uses Paystack's documented scheme (HMAC-SHA512 of the raw body with your secret key, in `x-paystack-signature`), but it couldn't be checked against Paystack's docs page during the build. Test it with a test-mode key.
 
 ## License
 

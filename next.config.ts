@@ -2,8 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
-  // Pair and job uploads are capped at 2 MB per file in read-file.ts; leave room for two plus overhead.
-  experimental: { serverActions: { bodySizeLimit: "5mb" } },
+  // Screen walkthroughs send up to 24 frames (2.5 MB each, usually ~150 KB) plus ~6 minutes of WAV narration.
+  experimental: { serverActions: { bodySizeLimit: "25mb" } },
   async headers() {
     return [
       {
@@ -12,7 +12,11 @@ const nextConfig: NextConfig = {
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "X-Frame-Options", value: "DENY" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+          {
+            key: "Permissions-Policy",
+            // Voice recording and screen walkthroughs need the mic and screen capture, on this site only.
+            value: "camera=(), geolocation=(), microphone=(self), display-capture=(self)",
+          },
         ],
       },
     ];

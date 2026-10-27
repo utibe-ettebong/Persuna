@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
-import { saveInterviewAction, voiceWalkthroughAction } from "@/app/actions/skills";
+import {
+  saveInterviewAction,
+  screenWalkthroughAction,
+  voiceWalkthroughAction,
+} from "@/app/actions/skills";
 import { ActionForm } from "@/components/action-form";
 import { Card, Field, inputClass, PageHeader, SkillTabs } from "@/components/ui";
+import { ScreenWalkthrough } from "@/components/screen-walkthrough";
 import { VoiceRecorder } from "@/components/voice-recorder";
 import { orNotFound } from "@/lib/load";
 import { INTERVIEW_QUESTIONS } from "@/lib/skill/interview";
@@ -11,7 +16,7 @@ export const dynamic = "force-dynamic";
 
 type Params = {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ saved?: string; transcribed?: string }>;
+  searchParams: Promise<{ saved?: string; transcribed?: string; screen?: string }>;
 };
 
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
@@ -21,7 +26,7 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
 
 export default async function InterviewPage({ params, searchParams }: Params) {
   const skill = await orNotFound(async () => getSkillBySlug((await params).slug));
-  const { saved, transcribed } = await searchParams;
+  const { saved, transcribed, screen } = await searchParams;
   const hasRules = Boolean(skill.currentVersionId);
 
   return (
@@ -32,6 +37,13 @@ export default async function InterviewPage({ params, searchParams }: Params) {
         description="Tell the agent how you do this, in your own words. Your answers sit alongside your examples."
       />
       <SkillTabs slug={skill.slug} active="Interview" />
+
+      {screen && (
+        <p role="status" className="rounded-md bg-good/10 p-3 text-sm text-good">
+          Your screen walkthrough was turned into steps (names and numbers removed) and added to
+          your first answer. Rule extraction will use it.
+        </p>
+      )}
 
       {(saved || transcribed) && (
         <p role="status" className="rounded-md bg-good/10 p-3 text-sm text-good">
@@ -102,6 +114,34 @@ export default async function InterviewPage({ params, searchParams }: Params) {
           >
             <input type="hidden" name="slug" value={skill.slug} />
             <VoiceRecorder />
+          </ActionForm>
+        </Card>
+      </section>
+
+      <section aria-labelledby="screen-heading">
+        <h2
+          id="screen-heading"
+          className="mb-1 font-display text-lg font-medium tracking-[-0.02em]"
+        >
+          Screen walkthrough
+        </h2>
+        <p className="mb-4 text-sm text-muted">
+          Do the task once while sharing one window, and talk through what you&apos;re doing. The AI
+          watches the captured frames, describes your method step by step, and{" "}
+          {hasRules
+            ? "proposes rule changes for you to review"
+            : "adds it to your interview answers"}
+          .
+        </p>
+        <Card className="p-5">
+          <ActionForm
+            action={screenWalkthroughAction}
+            label="Learn from this walkthrough"
+            pendingLabel="Watching your walkthrough…"
+            className="space-y-4"
+          >
+            <input type="hidden" name="slug" value={skill.slug} />
+            <ScreenWalkthrough />
           </ActionForm>
         </Card>
       </section>
