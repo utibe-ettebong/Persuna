@@ -253,3 +253,56 @@ describe("Paystack", () => {
     expect(toKobo(5000)).toBe(500000);
   });
 });
+
+describe("key slots", () => {
+  it("treats empty and paste-here values as unset", async () => {
+    const { isPlaceholder } = await import("@/env");
+    expect(isPlaceholder(undefined)).toBe(true);
+    expect(isPlaceholder("  ")).toBe(true);
+    expect(isPlaceholder("PASTE_META_API_KEY_HERE")).toBe(true);
+    expect(isPlaceholder("paste-baseten-key")).toBe(true);
+    expect(isPlaceholder("sk-live-abc123")).toBe(false);
+    expect(isPlaceholder("https://inference.baseten.co/v1")).toBe(false);
+  });
+
+  it("stays on mock models while the Learn key is a placeholder, and falls back per role", async () => {
+    const { modelProvider, modelConfig } = await import("@/env");
+    const saved = { ...process.env };
+    try {
+      delete process.env.MODEL_PROVIDER;
+      process.env.EXTRACT_API_KEY = "PASTE_META_API_KEY_HERE";
+      expect(modelProvider()).toBe("mock");
+
+      process.env.EXTRACT_API_KEY = "real-meta-key";
+      process.env.EXTRACT_BASE_URL = "https://meta.example/v1";
+      process.env.EXTRACT_MODEL = "muse-spark";
+      process.env.DRAFT_API_KEY = "PASTE_BASETEN_API_KEY_HERE";
+      process.env.DRAFT_BASE_URL = "https://inference.baseten.co/v1";
+      process.env.DRAFT_MODEL = "PASTE_BASETEN_MODEL_ID_HERE";
+      expect(modelProvider()).toBe("live");
+      // Until the Baseten key is pasted, drafting borrows the Meta settings as a whole set.
+      expect(modelConfig("draft")).toEqual({
+        baseUrl: "https://meta.example/v1",
+        apiKey: "real-meta-key",
+        model: "muse-spark",
+      });
+      // Same provider, different model: transcription can name its own model on the Meta key.
+      process.env.TRANSCRIBE_MODEL = "muse-voice-transcribe";
+      const { transcriptionConfig } = await import("@/env");
+      expect(transcriptionConfig()).toEqual({
+        baseUrl: "https://meta.example/v1",
+        apiKey: "real-meta-key",
+        model: "muse-voice-transcribe",
+      });
+      process.env.DRAFT_API_KEY = "real-baseten-key";
+      process.env.DRAFT_MODEL = "muse-spark-open";
+      expect(modelConfig("draft")).toEqual({
+        baseUrl: "https://inference.baseten.co/v1",
+        apiKey: "real-baseten-key",
+        model: "muse-spark-open",
+      });
+    } finally {
+      process.env = saved;
+    }
+  });
+});

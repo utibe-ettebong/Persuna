@@ -9,6 +9,7 @@ const NAV = [
   { href: "/market", label: "Marketplace" },
   { href: "/earnings", label: "Earnings" },
   { href: "/audit", label: "Audit log" },
+  { href: "/settings", label: "Models & keys" },
 ];
 
 /** Studio section links, with the current section marked. */

@@ -21,12 +21,13 @@ export default function StudioLayout({ children }: Readonly<{ children: React.Re
           </nav>
           <div className="ml-auto flex items-center gap-3 py-2.5">
             {mock && (
-              <span
+              <Link
+                href="/settings"
                 className="label-mono rounded-sm border border-warn/40 bg-warn/8 px-2 py-1 text-warn"
                 title="No model API key is set. Drafts are rough and scores are text overlap. Set EXTRACT_API_KEY or MODEL_PROVIDER=live for real models."
               >
                 Mock models
-              </span>
+              </Link>
             )}
             <Link
               href="/"

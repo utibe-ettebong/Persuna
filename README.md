@@ -44,6 +44,12 @@ The design follows a framed, rule-drawn system: an off-white page inside vertica
 - **Payments:** `PAYMENTS_PROVIDER=mock` (the default) records payments without moving money. `PAYMENTS_PROVIDER=paystack` with `PAYSTACK_SECRET_KEY` and `APP_URL` sends renters to Paystack checkout. Payments are verified with Paystack's API (from the return redirect and from the signed webhook at `/api/webhooks/paystack`) before any work starts, and refunds go back through Paystack. Payouts to owners and employers are recorded on the Earnings page and settled from the Paystack dashboard; automatic transfers are not built.
 - **Audit log** (_Audit log_ in the nav, and each skill's _Activity_ tab): every skill change, proposal, publish, trust change, job decision, listing change, employer decision and payment event, with who and when. It never stores job text.
 
+### Demo setup
+
+`npm run demo:seed` loads the sample meeting-minutes skill (4 training and 2 test pairs, all invented), extracts rules, runs the tests, publishes v1 and puts a listing live in the marketplace. It is safe to run more than once. On Railway, run it inside the service with `railway ssh --service Persuna -- npm run demo:seed`.
+
+**Key slots:** values that start with `PASTE_`, `REPLACE_`, `ADD_`, `YOUR_`, `TODO_` or `CHANGEME_` count as unset. Leave such placeholders in Railway as visible slots; the app stays on mock models until a real `EXTRACT_API_KEY` is pasted. A role (`DRAFT_*`, `EVAL_*`, `TRANSCRIBE_*`) uses its own settings only once it has its own real key; until then it borrows `EXTRACT_*` as a whole set, so a Baseten URL is never sent a Meta key. The studio's **Models & keys** page (`/settings`) shows what each role is using, never the keys themselves.
+
 ### Mock models
 
 With no `EXTRACT_API_KEY` set, the app runs **offline mock models**, and a banner says so. They read the same prompts and run through the same engine, so every screen works without keys. Their drafts are rough. They follow header-label and "Always include" rules, so corrections visibly move the score. Their scores are word and section overlap, not judgement. Set the keys (or `MODEL_PROVIDER=live`) to switch to real models; `MODEL_PROVIDER=mock` forces the mock.
