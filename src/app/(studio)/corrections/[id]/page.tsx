@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { decideCorrectionAction } from "@/app/actions/skills";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Card, PageHeader } from "@/components/ui";
+import { assertCorrectionOwner } from "@/lib/auth/access";
+import { requireUser } from "@/lib/auth/session";
 import { orNotFound } from "@/lib/load";
 import { getCorrection } from "@/lib/skill/service";
 import type { Rule } from "@/lib/skill/types";
@@ -20,7 +22,11 @@ const SOURCE_LABEL = {
 
 export default async function CorrectionPage({ params }: Params) {
   const { id } = await params;
-  const { correction, skill, from } = await orNotFound(() => getCorrection(id), id);
+  const user = await requireUser();
+  const { correction, skill, from } = await orNotFound(async () => {
+    await assertCorrectionOwner(user, id);
+    return getCorrection(id);
+  }, id);
   const before = new Map(from.sheet.rules.map((r) => [r.id, r]));
   const after = new Map(correction.proposedSheet.rules.map((r) => [r.id, r]));
   const changed = correction.proposedSheet.rules.filter(

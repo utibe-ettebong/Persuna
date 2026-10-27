@@ -26,6 +26,7 @@
     "demo:seed": "tsx --env-file-if-exists=.env scripts/demo-seed.ts"
   },
   "dependencies": {
+    "better-auth": "^1.7.12",
     "diff": "9.0.0",
     "docx": "^9.14.0",
     "drizzle-orm": "0.45.4",

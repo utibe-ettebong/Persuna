@@ -8,7 +8,7 @@
  * owners are recorded here and settled from the Paystack dashboard.
  */
 import { randomBytes } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import { env, paystackConfig } from "@/env";
 import { audit } from "@/lib/audit";
@@ -226,6 +226,7 @@ export async function getActiveListing(listingId: string) {
 /* ---------- Renting and payment ---------- */
 
 export interface RentInput {
+  renterUserId: string;
   renterName: string;
   renterEmail: string;
   input: string;
@@ -256,11 +257,13 @@ export async function rentSkill(
     skillId: skill.id,
     origin: "renter" as const,
     requesterName: rent.renterName,
+    requesterUserId: rent.renterUserId,
     input: rent.input,
     ownerReviewRequired: premium,
   };
   const ledger = {
     listingId,
+    renterUserId: rent.renterUserId,
     renterName: rent.renterName.trim(),
     renterEmail: rent.renterEmail.trim().toLowerCase(),
     premiumReview: premium,
@@ -418,11 +421,19 @@ export async function acceptOrder(jobId: string, rating: number, comment: string
   return txnId;
 }
 
-export async function earnings() {
+/** Payments for listings on the given skills, or all when null (admins). */
+export async function earnings(skillIds: string[] | null) {
   const rows = await db()
     .select({ transaction: transactions, listing: listings })
     .from(transactions)
     .innerJoin(listings, eq(transactions.listingId, listings.id))
+    .where(
+      skillIds === null
+        ? undefined
+        : skillIds.length
+          ? inArray(listings.skillId, skillIds)
+          : sql`false`,
+    )
     .orderBy(desc(transactions.createdAt));
   const sum = (status: string, key: "ownerShareNgn" | "platformFeeNgn" | "employerShareNgn") =>
     rows.filter((r) => r.transaction.status === status).reduce((n, r) => n + r.transaction[key], 0);

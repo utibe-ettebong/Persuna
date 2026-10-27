@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { Logo } from "@/components/brand";
 import { StudioNav } from "@/components/studio-nav";
+import { SignOutButton } from "@/components/sign-out-button";
 import { modelProvider } from "@/env";
+import { requireUser } from "@/lib/auth/session";
 
 /** The signed-in studio: framed page, mono navigation, mock-model notice. */
-export default function StudioLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default async function StudioLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  const user = await requireUser();
   const mock = modelProvider() === "mock";
   return (
     <>
@@ -17,24 +20,25 @@ export default function StudioLayout({ children }: Readonly<{ children: React.Re
             aria-label="Studio"
             className="order-last -mx-4 w-[calc(100%+2rem)] overflow-x-auto border-t border-line px-1 sm:-mx-6 sm:w-[calc(100%+3rem)] lg:order-none lg:mx-0 lg:w-auto lg:flex-1 lg:border-t-0 lg:px-0"
           >
-            <StudioNav />
+            <StudioNav isAdmin={user.isAdmin} />
           </nav>
           <div className="ml-auto flex items-center gap-3 py-2.5">
             {mock && (
               <Link
-                href="/settings"
+                href={user.isAdmin ? "/settings" : "/skills"}
                 className="label-mono rounded-sm border border-warn/40 bg-warn/8 px-2 py-1 text-warn"
                 title="No model API key is set. Drafts are rough and scores are text overlap. Set EXTRACT_API_KEY or MODEL_PROVIDER=live for real models."
               >
                 Mock models
               </Link>
             )}
-            <Link
-              href="/"
-              className="label-mono whitespace-nowrap text-muted hover:text-foreground"
+            <span
+              className="hidden max-w-40 truncate text-sm text-muted md:inline"
+              title={user.email}
             >
-              Site ↗
-            </Link>
+              {user.email}
+            </span>
+            <SignOutButton />
           </div>
         </div>
       </header>

@@ -5,6 +5,8 @@ import { ActionForm } from "@/components/action-form";
 import { VoiceRecorder } from "@/components/voice-recorder";
 import { Badge, Card, Field, inputClass, PageHeader } from "@/components/ui";
 import { approvalStats, listJobs } from "@/lib/jobs/service";
+import { visibleSkillIds } from "@/lib/auth/access";
+import { requireUser } from "@/lib/auth/session";
 import { listSkills } from "@/lib/skill/service";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +20,11 @@ const STATUS_BADGE = {
 } as const;
 
 export default async function JobsPage() {
-  const [jobs, skills] = await Promise.all([listJobs(), listSkills()]);
+  const user = await requireUser();
+  const [jobs, skills] = await Promise.all([
+    visibleSkillIds(user).then(listJobs),
+    listSkills(user.isAdmin ? null : user.id),
+  ]);
   const publishable = skills.filter((s) => s.publishedVersionId);
   const queue = jobs.filter((j) => j.job.status === "review");
   const done = jobs.filter((j) => j.job.status !== "review");

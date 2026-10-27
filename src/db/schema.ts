@@ -45,9 +45,76 @@ export const employerDecision = pgEnum("employer_decision", ["pending", "approve
 export const escrowStatus = pgEnum("escrow_status", ["pending", "held", "released", "refunded"]);
 export const paymentProvider = pgEnum("payment_provider", ["mock", "paystack"]);
 
+/* ---------- Accounts (Better Auth). Columns follow Better Auth's core schema. ---------- */
+
+const authTimestamps = () => ({
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const authUsers = pgTable("auth_user", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  email: text("email").notNull().unique(),
+  emailVerified: boolean("email_verified").notNull().default(false),
+  image: text("image"),
+  ...authTimestamps(),
+});
+
+export const authSessions = pgTable(
+  "auth_session",
+  {
+    id: text("id").primaryKey(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    token: text("token").notNull().unique(),
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    ...authTimestamps(),
+  },
+  (t) => [index().on(t.userId)],
+);
+
+export const authAccounts = pgTable(
+  "auth_account",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id").notNull(),
+    providerId: text("provider_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    idToken: text("id_token"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true }),
+    scope: text("scope"),
+    password: text("password"),
+    ...authTimestamps(),
+  },
+  (t) => [index().on(t.userId)],
+);
+
+export const authVerifications = pgTable(
+  "auth_verification",
+  {
+    id: text("id").primaryKey(),
+    identifier: text("identifier").notNull(),
+    value: text("value").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    ...authTimestamps(),
+  },
+  (t) => [index().on(t.identifier)],
+);
+
 /** The listable unit: one specific task done one owner's way. */
 export const skills = pgTable("skills", {
   id: id(),
+  /** The account that trained the skill. Null only for rows created before accounts existed. */
+  ownerId: text("owner_id").references(() => authUsers.id, { onDelete: "set null" }),
   slug: text("slug").notNull().unique(),
   name: text("name").notNull(),
   taskDescription: text("task_description").notNull(),
@@ -192,6 +259,10 @@ export const jobs = pgTable(
       .notNull()
       .references(() => skillVersions.id),
     origin: jobOrigin("origin").notNull(),
+    /** The renter's account, for renter jobs. */
+    requesterUserId: text("requester_user_id").references(() => authUsers.id, {
+      onDelete: "set null",
+    }),
     requesterName: text("requester_name").notNull(),
     input: text("input").notNull(),
     draft: text("draft").notNull(),
@@ -269,6 +340,7 @@ export const transactions = pgTable("transactions", {
   listingId: uuid("listing_id")
     .notNull()
     .references(() => listings.id),
+  renterUserId: text("renter_user_id").references(() => authUsers.id, { onDelete: "set null" }),
   renterName: text("renter_name").notNull(),
   renterEmail: text("renter_email"),
   amountNgn: integer("amount_ngn").notNull(),
@@ -313,3 +385,4 @@ export type Job = typeof jobs.$inferSelect;
 export type Listing = typeof listings.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
 export type AuditEvent = typeof auditEvents.$inferSelect;
+export type AuthUser = typeof authUsers.$inferSelect;

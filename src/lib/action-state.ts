@@ -1,4 +1,4 @@
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
 import { z } from "zod";
 
 export type ActionState = { error: string | null };
@@ -15,6 +15,7 @@ export async function attempt(work: () => Promise<string>): Promise<ActionState>
   try {
     destination = await work();
   } catch (error) {
+    unstable_rethrow(error); // sign-in redirects and not-found pass straight through
     console.error(error);
     if (error instanceof z.ZodError) return { error: error.issues[0]?.message ?? "Invalid input." };
     return { error: error instanceof Error ? error.message : "Something went wrong." };

@@ -1,10 +1,10 @@
-import { and, desc, eq, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 
 const { auditEvents } = schema;
 
-/** Who acted. Single-owner build: "owner", a renter by name, the employer, or the system. */
-export type Actor = "owner" | "system" | "employer" | `renter:${string}`;
+/** Who acted: a signed-in user ("user:email"), a renter by name, the employer, or the system. */
+export type Actor = "owner" | "system" | "employer" | `renter:${string}` | `user:${string}`;
 
 export interface AuditInput {
   actor: Actor;
@@ -30,9 +30,22 @@ export async function audit(event: AuditInput, tx: Executor = db()) {
   });
 }
 
-export async function listAuditEvents(filter: { skillId?: string; limit?: number } = {}) {
+/**
+ * Events for one skill, or for a set of skills plus the actor's own events
+ * (what a non-admin may see). No filter returns everything (admins).
+ */
+export async function listAuditEvents(
+  filter: { skillId?: string; skillIds?: string[]; actor?: string; limit?: number } = {},
+) {
   const where: SQL[] = [];
   if (filter.skillId) where.push(eq(auditEvents.skillId, filter.skillId));
+  if (filter.skillIds) {
+    const mine = [
+      ...(filter.skillIds.length ? [inArray(auditEvents.skillId, filter.skillIds)] : []),
+      ...(filter.actor ? [eq(auditEvents.actor, filter.actor)] : []),
+    ];
+    where.push(mine.length ? or(...mine)! : sql`false`);
+  }
   return db()
     .select()
     .from(auditEvents)

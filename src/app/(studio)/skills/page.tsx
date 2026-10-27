@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { SectionLabel } from "@/components/brand";
 import { Badge, buttonClass, Card, PageHeader } from "@/components/ui";
+import { requireUser } from "@/lib/auth/session";
 import { listSkills } from "@/lib/skill/service";
 
 export const dynamic = "force-dynamic";
 
 export default async function SkillsPage() {
-  const skills = await listSkills();
+  const user = await requireUser();
+  const skills = await listSkills(user.isAdmin ? null : user.id);
 
   return (
     <div className="space-y-10">

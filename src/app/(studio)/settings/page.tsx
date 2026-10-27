@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Badge, Card, PageHeader } from "@/components/ui";
 import { env, modelProvider, modelSettingsStatus } from "@/env";
+import { requireAdmin } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Models & keys" };
@@ -29,7 +30,8 @@ const ROLE_INFO = {
 } as const;
 
 /** Which models are connected. Shows settings, never key values. */
-export default function SettingsPage() {
+export default async function SettingsPage() {
+  await requireAdmin();
   const roles = modelSettingsStatus();
   const mock = modelProvider() === "mock";
   const payments = env().PAYMENTS_PROVIDER;

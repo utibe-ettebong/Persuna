@@ -6,6 +6,8 @@ import { ActionForm } from "@/components/action-form";
 import { ScoreBadge } from "@/components/score-trend";
 import { WordDiff } from "@/components/word-diff";
 import { plural } from "@/lib/plural";
+import { assertRunOwner } from "@/lib/auth/access";
+import { requireUser } from "@/lib/auth/session";
 import { getRun, NotFoundError } from "@/lib/skill/service";
 import { CRITERIA } from "@/lib/skill/types";
 
@@ -18,6 +20,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 async function load(id: string) {
   if (!UUID.test(id)) notFound();
   try {
+    await assertRunOwner(await requireUser(), id);
     return await getRun(id);
   } catch (error) {
     if (error instanceof NotFoundError) notFound();

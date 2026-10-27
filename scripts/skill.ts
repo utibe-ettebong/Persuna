@@ -1,7 +1,7 @@
 /**
  * Terminal driver for the training loop. Same functions the web app calls.
  *
- *   npm run skill -- import  [--dir data/skills/meeting-minutes]
+ *   npm run skill -- import  [--dir data/skills/meeting-minutes] [--owner you@example.com]
  *   npm run skill -- extract [--skill meeting-minutes]
  *   npm run skill -- test    [--skill meeting-minutes] [--version 2]
  *   npm run skill -- correct --result <test-result-id> --file edited.md --reason "..." [--yes]
@@ -11,6 +11,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { userIdByEmail } from "@/lib/auth/users";
 import { createModelClient } from "@/lib/models";
 import { loadSkillFolder } from "@/lib/skill/pairs-fs";
 import { renderSheet } from "@/lib/skill/sheet";
@@ -35,6 +36,7 @@ const { positionals, values } = parseArgs({
     result: { type: "string" },
     file: { type: "string" },
     reason: { type: "string", default: "" },
+    owner: { type: "string" },
     yes: { type: "boolean", default: false },
   },
 });
@@ -67,7 +69,8 @@ const commands: Record<string, () => Promise<void>> = {
   async import() {
     const dir = path.resolve(values.dir ?? path.join("data/skills", values.skill!));
     const { definition, pairs } = await loadSkillFolder(dir);
-    const skill = await upsertSkill(definition);
+    const ownerId = values.owner ? await userIdByEmail(values.owner) : undefined;
+    const skill = await upsertSkill(definition, ownerId);
     const { upserted, removed } = await importPairs(skill.id, pairs);
     const train = pairs.filter((p) => p.split === "train").length;
     console.log(

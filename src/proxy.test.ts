@@ -1,21 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { isAuthorized } from "./proxy";
+import { isPublicPath } from "./proxy";
+import { matchesList, parseList, signUpAllowed } from "./lib/auth/policy";
 
-const basic = (user: string, pass: string) =>
-  `Basic ${Buffer.from(`${user}:${pass}`).toString("base64")}`;
-
-describe("isAuthorized", () => {
-  it("accepts the right password with any username", () => {
-    expect(isAuthorized(basic("anyone", "correct-horse"), "correct-horse")).toBe(true);
+describe("isPublicPath", () => {
+  it("opens the landing page, auth pages, auth API and employer links", () => {
+    for (const p of ["/", "/sign-in", "/sign-up", "/api/auth/sign-in/email", "/approvals/abc"]) {
+      expect(isPublicPath(p)).toBe(true);
+    }
   });
 
-  it("keeps colons that are part of the password", () => {
-    expect(isAuthorized(basic("u", "a:b:c"), "a:b:c")).toBe(true);
+  it("keeps the studio behind sign-in", () => {
+    for (const p of ["/skills", "/jobs/1", "/market", "/settings", "/sign-in-x", "/approvals"]) {
+      expect(isPublicPath(p)).toBe(false);
+    }
+  });
+});
+
+describe("sign-up and admin lists", () => {
+  const list = parseList(" ada@example.org, @gamaid.org ,, ");
+
+  it("parses emails and domains, case-insensitively", () => {
+    expect(list).toEqual(["ada@example.org", "@gamaid.org"]);
+    expect(matchesList("ADA@example.org", list)).toBe(true);
+    expect(matchesList("anyone@gamaid.org", list)).toBe(true);
+    expect(matchesList("anyone@notgamaid.org", list)).toBe(false);
   });
 
-  it("rejects wrong, missing and non-basic credentials", () => {
-    expect(isAuthorized(basic("u", "wrong"), "correct-horse")).toBe(false);
-    expect(isAuthorized(null, "correct-horse")).toBe(false);
-    expect(isAuthorized("Bearer correct-horse", "correct-horse")).toBe(false);
+  it("allows everyone when the allowlist is empty", () => {
+    expect(signUpAllowed("x@y.z", [])).toBe(true);
+    expect(signUpAllowed("x@y.z", list)).toBe(false);
   });
 });

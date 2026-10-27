@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { attempt, slugField, uuidField, type ActionState } from "@/lib/action-state";
+import { assertOrderAccess, ownedSkillBySlug } from "@/lib/auth/access";
+import { requireUser } from "@/lib/auth/session";
 import { readUploadedText } from "@/lib/docs/read-file";
 import { complainAboutJob } from "@/lib/jobs/service";
 import {
@@ -13,7 +15,6 @@ import {
   setListingActive,
 } from "@/lib/market/service";
 import { createModelClient } from "@/lib/models";
-import { getSkillBySlug } from "@/lib/skill/service";
 
 const listingForm = z.object({
   skillSlug: slugField,
@@ -35,7 +36,7 @@ const listingForm = z.object({
 export async function saveListingAction(_: ActionState, form: FormData): Promise<ActionState> {
   return attempt(async () => {
     const { skillSlug, declareOwnership, ...fields } = listingForm.parse(Object.fromEntries(form));
-    const skill = await getSkillBySlug(skillSlug);
+    const skill = await ownedSkillBySlug(await requireUser(), skillSlug);
     await saveListing(skill.id, { ...fields, declareOwnership: declareOwnership === "on" });
     revalidatePath(`/skills/${skillSlug}/listing`);
     return `/skills/${skillSlug}/listing`;
@@ -45,7 +46,7 @@ export async function saveListingAction(_: ActionState, form: FormData): Promise
 export async function toggleListingAction(_: ActionState, form: FormData): Promise<ActionState> {
   return attempt(async () => {
     const skillSlug = slugField.parse(form.get("skillSlug"));
-    const skill = await getSkillBySlug(skillSlug);
+    const skill = await ownedSkillBySlug(await requireUser(), skillSlug);
     await setListingActive(skill.id, form.get("intent") === "activate");
     revalidatePath(`/skills/${skillSlug}/listing`);
     revalidatePath("/market");
@@ -66,9 +67,11 @@ export async function rentAction(_: ActionState, form: FormData): Promise<Action
     const { listingId, renterName, renterEmail, inputText, premiumReview } = rentForm.parse(
       Object.fromEntries(form),
     );
+    const user = await requireUser();
     const input = (await readUploadedText(form.get("inputFile"))) ?? inputText ?? "";
     if (!input.trim()) throw new Error("Paste your notes or upload a file.");
     const { jobId, redirectUrl } = await rentSkill(createModelClient(), listingId, {
+      renterUserId: user.id,
       renterName,
       renterEmail,
       input,
@@ -88,6 +91,9 @@ export async function complainAction(_: ActionState, form: FormData): Promise<Ac
       .string()
       .max(1000)
       .parse(form.get("complaint") ?? "");
+    if (!(await assertOrderAccess(await requireUser(), jobId)).requester) {
+      throw new Error("Only the renter who placed this order can report a problem");
+    }
     await complainAboutJob(jobId, complaint);
     revalidatePath("/earnings");
     return `/market/orders/${jobId}`;
@@ -117,6 +123,9 @@ const acceptForm = z.object({
 export async function acceptOrderAction(_: ActionState, form: FormData): Promise<ActionState> {
   return attempt(async () => {
     const { jobId, rating, comment } = acceptForm.parse(Object.fromEntries(form));
+    if (!(await assertOrderAccess(await requireUser(), jobId)).requester) {
+      throw new Error("Only the renter who placed this order can accept it");
+    }
     await acceptOrder(jobId, rating, comment);
     revalidatePath("/earnings");
     return `/market/orders/${jobId}`;

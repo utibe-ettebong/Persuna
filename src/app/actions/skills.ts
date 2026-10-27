@@ -1,8 +1,16 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { unstable_rethrow } from "next/navigation";
 import { z } from "zod";
 import { attempt, slugField, slugify, uuidField, type ActionState } from "@/lib/action-state";
+import {
+  assertCorrectionOwner,
+  assertTestResultOwner,
+  assertVersionOwner,
+  ownedSkillBySlug,
+} from "@/lib/auth/access";
+import { actorOf, requireUser } from "@/lib/auth/session";
 import { readUploadedText } from "@/lib/docs/read-file";
 import { normalizeText } from "@/lib/text";
 import { createModelClient, createTranscriber } from "@/lib/models";
@@ -19,7 +27,6 @@ import {
   deletePair,
   extractVersion,
   getCorrection,
-  getSkillBySlug,
   proposeCorrectionFromTest,
   publishVersion,
   rejectCorrection,
@@ -42,15 +49,17 @@ export async function createSkillAction(_: ActionState, form: FormData): Promise
     const input = newSkillForm.parse(Object.fromEntries(form));
     const slug = slugify(input.name);
     if (!slug) throw new Error("Use some letters or numbers in the name");
-    await createSkill({ ...input, slug });
+    const user = await requireUser();
+    const skill = await createSkill({ ...input, slug }, user.id, actorOf(user));
     revalidatePath("/skills");
-    return `/skills/${slug}/examples`;
+    return `/skills/${skill.slug}/examples`;
   });
 }
 
 export async function extractAction(_: ActionState, form: FormData): Promise<ActionState> {
   return attempt(async () => {
     const slug = slugField.parse(form.get("slug"));
+    await ownedSkillBySlug(await requireUser(), slug);
     await extractVersion(createModelClient(), slug);
     revalidatePath(`/skills/${slug}`);
     return `/skills/${slug}`;
@@ -60,6 +69,7 @@ export async function extractAction(_: ActionState, form: FormData): Promise<Act
 export async function runTestsAction(_: ActionState, form: FormData): Promise<ActionState> {
   return attempt(async () => {
     const versionId = uuidField.parse(form.get("versionId"));
+    await assertVersionOwner(await requireUser(), versionId);
     const run = await runEval(createModelClient(), versionId);
     return `/runs/${run.id}`;
   });
@@ -69,7 +79,7 @@ export async function makeCurrentAction(_: ActionState, form: FormData): Promise
   return attempt(async () => {
     const slug = slugField.parse(form.get("slug"));
     const versionId = uuidField.parse(form.get("versionId"));
-    const skill = await getSkillBySlug(slug);
+    const skill = await ownedSkillBySlug(await requireUser(), slug);
     await setCurrentVersion(skill.id, versionId);
     revalidatePath(`/skills/${slug}`);
     return `/skills/${slug}`;
@@ -80,7 +90,7 @@ export async function publishAction(_: ActionState, form: FormData): Promise<Act
   return attempt(async () => {
     const slug = slugField.parse(form.get("slug"));
     const versionId = uuidField.parse(form.get("versionId"));
-    const skill = await getSkillBySlug(slug);
+    const skill = await ownedSkillBySlug(await requireUser(), slug);
     await publishVersion(skill.id, versionId, form.get("confirmLower") === "on");
     revalidatePath(`/skills/${slug}`);
     return `/skills/${slug}`;
@@ -92,7 +102,7 @@ export async function saveRulesAction(_: ActionState, form: FormData): Promise<A
     const slug = slugField.parse(form.get("slug"));
     const raw = JSON.parse(String(form.get("sheet") ?? "{}"));
     const sheet = skillSheet.parse(raw);
-    const skill = await getSkillBySlug(slug);
+    const skill = await ownedSkillBySlug(await requireUser(), slug);
     await saveEditedSheet(skill.id, sheet);
     revalidatePath(`/skills/${slug}`);
     return `/skills/${slug}`;
@@ -108,6 +118,7 @@ const correctionForm = z.object({
 export async function proposeFromTestAction(_: ActionState, form: FormData): Promise<ActionState> {
   return attempt(async () => {
     const { resultId, edited, reason } = correctionForm.parse(Object.fromEntries(form));
+    await assertTestResultOwner(await requireUser(), resultId);
     const correction = await proposeCorrectionFromTest(
       createModelClient(),
       resultId,
@@ -121,6 +132,7 @@ export async function proposeFromTestAction(_: ActionState, form: FormData): Pro
 export async function decideCorrectionAction(_: ActionState, form: FormData): Promise<ActionState> {
   return attempt(async () => {
     const id = uuidField.parse(form.get("correctionId"));
+    await assertCorrectionOwner(await requireUser(), id);
     const { skill } = await getCorrection(id);
     if (form.get("intent") === "reject") {
       await rejectCorrection(id);
@@ -164,7 +176,7 @@ const pairForm = z.object({
 export async function addPairAction(_: PairFormState, form: FormData): Promise<PairFormState> {
   try {
     const { skillSlug, name, split } = pairForm.parse(Object.fromEntries(form));
-    const skill = await getSkillBySlug(skillSlug);
+    const skill = await ownedSkillBySlug(await requireUser(), skillSlug);
     const choice = form.get("choice");
 
     let input: string;
@@ -205,6 +217,7 @@ export async function addPairAction(_: PairFormState, form: FormData): Promise<P
     revalidatePath(`/skills/${skillSlug}`);
     return { error: null, saved: slug };
   } catch (error) {
+    unstable_rethrow(error);
     console.error(error);
     if (error instanceof z.ZodError) return { error: error.issues[0]?.message ?? "Invalid input." };
     return { error: error instanceof Error ? error.message : "Something went wrong." };
@@ -215,7 +228,7 @@ export async function updatePairAction(_: ActionState, form: FormData): Promise<
   return attempt(async () => {
     const slug = slugField.parse(form.get("skillSlug"));
     const exampleId = uuidField.parse(form.get("exampleId"));
-    const skill = await getSkillBySlug(slug);
+    const skill = await ownedSkillBySlug(await requireUser(), slug);
     const intent = form.get("intent");
     if (intent === "delete") await deletePair(skill.id, exampleId);
     else await setPairSplit(skill.id, exampleId, intent === "test" ? "test" : "train");
@@ -229,7 +242,7 @@ export async function updatePairAction(_: ActionState, form: FormData): Promise<
 export async function saveInterviewAction(_: ActionState, form: FormData): Promise<ActionState> {
   return attempt(async () => {
     const slug = slugField.parse(form.get("slug"));
-    const skill = await getSkillBySlug(slug);
+    const skill = await ownedSkillBySlug(await requireUser(), slug);
     const answers = Object.fromEntries(
       INTERVIEW_QUESTIONS.map((q) => [
         q.key,
@@ -264,7 +277,7 @@ export async function saveInterviewAction(_: ActionState, form: FormData): Promi
 export async function voiceWalkthroughAction(_: ActionState, form: FormData): Promise<ActionState> {
   return attempt(async () => {
     const slug = slugField.parse(form.get("slug"));
-    const skill = await getSkillBySlug(slug);
+    const skill = await ownedSkillBySlug(await requireUser(), slug);
     const audio = readAudio(form.get("audio"));
     if (!audio) throw new Error("Record or upload your walkthrough first");
     const { text } = await createTranscriber().transcribe(audio, audio.name);

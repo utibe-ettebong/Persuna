@@ -4,9 +4,13 @@
  * Safe to run more than once. Uses whatever models are configured (the mock
  * when no key is set); re-extract from the studio after adding real keys.
  *
- *   npm run demo:seed
+ *   npm run demo:seed -- --owner you@example.com
+ *
+ * The owner must have signed up already; the skill and listing are theirs.
  */
 import path from "node:path";
+import { parseArgs } from "node:util";
+import { userIdByEmail } from "@/lib/auth/users";
 import { createModelClient } from "@/lib/models";
 import { readiness, saveListing, setListingActive } from "@/lib/market/service";
 import { loadSkillFolder } from "@/lib/skill/pairs-fs";
@@ -20,9 +24,13 @@ import {
 } from "@/lib/skill/service";
 
 async function main() {
+  const { values } = parseArgs({ options: { owner: { type: "string" } } });
+  const ownerEmail = values.owner ?? process.env.DEMO_OWNER_EMAIL;
+  if (!ownerEmail) throw new Error("Pass --owner you@example.com (an account that has signed up)");
+  const ownerId = await userIdByEmail(ownerEmail);
   const client = createModelClient();
   const { definition, pairs } = await loadSkillFolder(path.resolve("data/skills/meeting-minutes"));
-  const skill = await upsertSkill(definition);
+  const skill = await upsertSkill(definition, ownerId);
   const { upserted } = await importPairs(skill.id, pairs);
   console.log(`Skill "${skill.name}": ${upserted} sample pairs`);
 

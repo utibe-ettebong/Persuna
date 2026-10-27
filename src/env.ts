@@ -18,7 +18,8 @@ export type ModelRole = "extract" | "draft" | "evaluate";
 
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
-  APP_PASSWORD: z.string().min(8).optional(),
+  /** Signs session cookies. Required in production; at least 32 characters. */
+  BETTER_AUTH_SECRET: z.string().min(32).optional(),
   MODEL_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(5),
   MODEL_TIMEOUT_MS: z.coerce.number().int().min(1000).default(180_000),
   MODEL_PROVIDER: z.enum(["live", "mock"]).optional(),

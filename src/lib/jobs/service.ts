@@ -4,7 +4,7 @@
  * material, not method: it stays in the jobs table and is deleted after the
  * retention period.
  */
-import { and, desc, eq, gte, lt } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import { env, trustThresholds } from "@/env";
 import { audit, type Actor } from "@/lib/audit";
@@ -30,6 +30,8 @@ export interface NewJob {
   skillId: string;
   origin: "owner" | "renter";
   requesterName: string;
+  /** The account that asked for the job (the owner, or a renter). */
+  requesterUserId?: string;
   input: string;
   /** Renter paid for guaranteed owner review. */
   ownerReviewRequired?: boolean;
@@ -60,6 +62,7 @@ export async function openJob(job: NewJob, status: "awaiting_payment" | "review"
       skillId: skill.id,
       skillVersionId: version.id,
       origin: job.origin,
+      requesterUserId: job.requesterUserId ?? null,
       requesterName: job.requesterName.trim() || "Owner",
       input,
       draft: "",
@@ -260,13 +263,26 @@ export async function getJobWithSkill(jobId: string) {
   return row;
 }
 
-export async function listJobs() {
+/** Jobs on the given skills, or on every skill when null (admins). */
+export async function listJobs(skillIds: string[] | null) {
   await purgeExpiredJobs();
+  if (skillIds && skillIds.length === 0) return [];
   return db()
     .select({ job: jobs, skill: skills, version: skillVersions })
     .from(jobs)
     .innerJoin(skills, eq(jobs.skillId, skills.id))
     .innerJoin(skillVersions, eq(jobs.skillVersionId, skillVersions.id))
+    .where(skillIds ? inArray(jobs.skillId, skillIds) : undefined)
+    .orderBy(desc(jobs.createdAt));
+}
+
+/** Orders this renter placed, newest first. */
+export async function listOrdersFor(userId: string) {
+  return db()
+    .select({ job: jobs, skill: skills })
+    .from(jobs)
+    .innerJoin(skills, eq(jobs.skillId, skills.id))
+    .where(and(eq(jobs.requesterUserId, userId), eq(jobs.origin, "renter")))
     .orderBy(desc(jobs.createdAt));
 }
 

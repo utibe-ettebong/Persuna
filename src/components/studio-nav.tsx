@@ -13,11 +13,11 @@ const NAV = [
 ];
 
 /** Studio section links, with the current section marked. */
-export function StudioNav() {
+export function StudioNav({ isAdmin }: { isAdmin: boolean }) {
   const path = usePathname();
   return (
     <ul className="flex items-center gap-x-1">
-      {NAV.map((item) => {
+      {NAV.filter((item) => isAdmin || item.href !== "/settings").map((item) => {
         const current =
           path === item.href ||
           path.startsWith(`${item.href}/`) ||

@@ -39,10 +39,11 @@ export interface PairWithSplit {
 
 const toPair = (e: Example): Pair => ({ id: e.id, slug: e.slug, input: e.input, output: e.output });
 
-export async function upsertSkill(definition: SkillDefinition) {
+/** Used by the CLI and demo seed. `ownerId` assigns the skill to an account. */
+export async function upsertSkill(definition: SkillDefinition, ownerId?: string) {
   const [row] = await db()
     .insert(skills)
-    .values(definition)
+    .values({ ...definition, ownerId: ownerId ?? null })
     .onConflictDoUpdate({
       target: skills.slug,
       set: {
@@ -50,6 +51,7 @@ export async function upsertSkill(definition: SkillDefinition) {
         taskDescription: definition.taskDescription,
         inputType: definition.inputType,
         outputType: definition.outputType,
+        ...(ownerId ? { ownerId } : {}),
       },
     })
     .returning();
@@ -149,16 +151,20 @@ async function getVersion(versionId: string) {
   return version;
 }
 
-/** Step 1: name the task. Fails if the slug is taken. */
-export async function createSkill(definition: SkillDefinition) {
-  const [row] = await db()
-    .insert(skills)
-    .values(definition)
-    .onConflictDoNothing({ target: skills.slug })
-    .returning();
-  if (!row) throw new Error(`A skill with the address "${definition.slug}" already exists`);
+/** Step 1: name the task. Addresses are global, so a taken one gets a number. */
+export async function createSkill(definition: SkillDefinition, ownerId: string, actor: Actor) {
+  let row: typeof skills.$inferSelect | undefined;
+  for (let n = 1; !row && n <= 50; n++) {
+    const slug = n === 1 ? definition.slug : `${definition.slug}-${n}`;
+    [row] = await db()
+      .insert(skills)
+      .values({ ...definition, slug, ownerId })
+      .onConflictDoNothing({ target: skills.slug })
+      .returning();
+  }
+  if (!row) throw new Error("Couldn't find a free address for this skill; try another name");
   await audit({
-    actor: "owner",
+    actor,
     action: "skill.created",
     entityType: "skill",
     entityId: row.id,
@@ -595,8 +601,13 @@ export async function setCurrentVersion(skillId: string, versionId: string) {
   });
 }
 
-export async function listSkills() {
-  return db().select().from(skills).orderBy(asc(skills.name));
+/** Skills owned by `ownerId`, or every skill when null (admins). */
+export async function listSkills(ownerId: string | null) {
+  return db()
+    .select()
+    .from(skills)
+    .where(ownerId ? eq(skills.ownerId, ownerId) : undefined)
+    .orderBy(asc(skills.name));
 }
 
 export async function publishedScore(skill: { publishedVersionId: string | null }) {

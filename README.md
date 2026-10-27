@@ -7,7 +7,8 @@ This repository is the hackathon build. The first skill is turning raw meeting n
 ## Pages
 
 - `/`: the public landing page (open without the app password).
-- `/skills`, `/jobs`, `/market`, `/earnings`, `/audit`: the studio, behind `APP_PASSWORD` in production.
+- `/sign-in`, `/sign-up`: accounts (email and password, via [Better Auth](https://www.better-auth.com)).
+- `/skills`, `/jobs`, `/market`, `/earnings`, `/audit`: the studio, for signed-in users. Each person sees only their own skills, jobs, earnings and activity; renters see their own orders. Admins (`ADMIN_EMAILS`) see everything and the Models & keys page.
 - `/approvals/<token>`: an employer's approval link (open; the token is the credential).
 
 The design follows a framed, rule-drawn system: an off-white page inside vertical rules, mono uppercase labels and buttons (DM Mono), display type in Instrument Sans, one purple brand colour, plum bands, and diagonal hatching in empty space. Tokens live in `src/app/globals.css`; shared pieces are in `src/components/ui.tsx` and `src/components/brand.tsx`.
@@ -46,7 +47,7 @@ The design follows a framed, rule-drawn system: an off-white page inside vertica
 
 ### Demo setup
 
-`npm run demo:seed` loads the sample meeting-minutes skill (4 training and 2 test pairs, all invented), extracts rules, runs the tests, publishes v1 and puts a listing live in the marketplace. It is safe to run more than once. On Railway, run it inside the service with `railway ssh --service Persuna -- npm run demo:seed`.
+`npm run demo:seed -- --owner you@example.com` (an account that has signed up) loads the sample meeting-minutes skill (4 training and 2 test pairs, all invented), extracts rules, runs the tests, publishes v1 and puts a listing live in the marketplace. It is safe to run more than once. On Railway, run it inside the service with `railway ssh --service Persuna -- npm run demo:seed -- --owner you@example.com`.
 
 **Key slots:** values that start with `PASTE_`, `REPLACE_`, `ADD_`, `YOUR_`, `TODO_` or `CHANGEME_` count as unset. Leave such placeholders in Railway as visible slots; the app stays on mock models until a real `EXTRACT_API_KEY` is pasted. A role (`DRAFT_*`, `EVAL_*`, `TRANSCRIBE_*`) uses its own settings only once it has its own real key; until then it borrows `EXTRACT_*` as a whole set, so a Baseten URL is never sent a Meta key. The studio's **Models & keys** page (`/settings`) shows what each role is using, never the keys themselves.
 
@@ -92,7 +93,8 @@ src/lib/models/mock.ts           offline mock models
 src/app/actions/                 server actions (skills, jobs, market)
 src/app/(site)/                  public pages: landing, employer approvals
 src/app/(studio)/                studio pages: skills, examples, rules, runs, corrections, jobs, market, earnings, audit
-src/proxy.ts                     basic-auth gate (APP_PASSWORD)
+src/lib/auth/                    accounts (Better Auth), sessions, ownership checks
+src/proxy.ts                     sends signed-out visitors to /sign-in
 ```
 
 The overall score is computed in code from the evaluator's five criterion scores (structure, content, cuts, tone, naming), using the weights in `src/lib/skill/score.ts`. That keeps scores comparable across versions. Example retrieval uses deterministic TF-IDF similarity, so a score changes only when the rules change.
@@ -143,12 +145,13 @@ Then set secrets on the `web` service. They are never committed: `preserve()` in
 ```bash
 railway variable set --service web EXTRACT_BASE_URL=... EXTRACT_MODEL=...
 railway variable set --service web --stdin EXTRACT_API_KEY   # paste the key, keeps it out of shell history
-railway variable set --service web --stdin APP_PASSWORD
+railway variable set --service web --stdin BETTER_AUTH_SECRET   # openssl rand -base64 32
+railway variable set --service web ADMIN_EMAILS=you@example.com
 ```
 
 Add `DRAFT_*` and `EVAL_*` the same way when those endpoints are ready. Until then, the drafting and evaluation steps use the `EXTRACT_*` settings. Generate a public domain in the service's **Networking** settings. Load your pairs into the Railway database from your machine with `railway run npm run skill -- import`.
 
-In production the app refuses all requests until `APP_PASSWORD` is set: every button spends model credits.
+In production the app won't start without `BETTER_AUTH_SECRET`. Sign-ups are open unless `AUTH_ALLOWED_EMAILS` lists allowed emails or `@domains`; since every action can spend model credits, set it before sharing the link widely.
 
 ## Checks
 
@@ -161,7 +164,7 @@ CI runs the same checks on every push and pull request (`.github/workflows/ci.ym
 
 ## Not in this build yet
 
-Separate owner, renter and employer accounts (today one `APP_PASSWORD` covers the app; only employer approval links and the Paystack webhook are open). Automatic payouts by Paystack transfer, plus Flutterwave and Stripe. Sending the employer link by email (you copy it from the Listing tab). WhatsApp and email delivery. Isolated job sandboxes. See the concept document for the full design.
+Email verification and password reset (they need an email provider). Sign-in with Google. Automatic payouts by Paystack transfer, plus Flutterwave and Stripe. Sending the employer link by email (you copy it from the Listing tab). WhatsApp and email delivery. Isolated job sandboxes. See the concept document for the full design.
 
 **To verify before relying on it:** the webhook check uses Paystack's documented scheme (HMAC-SHA512 of the raw body with your secret key, in `x-paystack-signature`), but it couldn't be checked against Paystack's docs page during the build. Test it with a test-mode key. The transcription endpoint assumes Muse Voice Transcribe accepts OpenAI-style `/audio/transcriptions` requests.
 

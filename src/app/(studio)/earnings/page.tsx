@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Badge, Card, PageHeader } from "@/components/ui";
 import { formatNaira } from "@/lib/market/rules";
+import { visibleSkillIds } from "@/lib/auth/access";
+import { requireUser } from "@/lib/auth/session";
 import { earnings } from "@/lib/market/service";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +17,8 @@ const STATUS = {
 } as const;
 
 export default async function EarningsPage() {
-  const { rows, totals } = await earnings();
+  const user = await requireUser();
+  const { rows, totals } = await earnings(await visibleSkillIds(user));
 
   return (
     <div className="space-y-6">

@@ -4,6 +4,8 @@ import { ActionForm } from "@/components/action-form";
 import { Badge, buttonClass, Card, Field, inputClass, PageHeader, Prose } from "@/components/ui";
 import { WordDiff } from "@/components/word-diff";
 import { getJobWithSkill } from "@/lib/jobs/service";
+import { assertJobOwner } from "@/lib/auth/access";
+import { requireUser } from "@/lib/auth/session";
 import { orNotFound } from "@/lib/load";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +15,11 @@ type Params = { params: Promise<{ id: string }> };
 
 export default async function JobPage({ params }: Params) {
   const { id } = await params;
-  const { job, skill, version } = await orNotFound(() => getJobWithSkill(id), id);
+  const user = await requireUser();
+  const { job, skill, version } = await orNotFound(async () => {
+    await assertJobOwner(user, id);
+    return getJobWithSkill(id);
+  }, id);
   const edited = job.status === "approved" && job.editSize !== "none";
 
   return (

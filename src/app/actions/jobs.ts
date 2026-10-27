@@ -3,15 +3,19 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { attempt, uuidField, type ActionState } from "@/lib/action-state";
+import { assertJobOwner, ownedSkillById, ownedSkillBySlug } from "@/lib/auth/access";
+import { requireUser } from "@/lib/auth/session";
 import { readUploadedText } from "@/lib/docs/read-file";
 import { createJob, reviewJob, setTrustLevel } from "@/lib/jobs/service";
 import { createModelClient, createTranscriber } from "@/lib/models";
 import { readAudio } from "@/lib/models/transcribe";
-import { getSkillBySlug, proposeCorrectionFromJob } from "@/lib/skill/service";
+import { proposeCorrectionFromJob } from "@/lib/skill/service";
 
 export async function createJobAction(_: ActionState, form: FormData): Promise<ActionState> {
   return attempt(async () => {
     const skillId = uuidField.parse(form.get("skillId"));
+    const user = await requireUser();
+    await ownedSkillById(user, skillId);
     // A voice note is transcribed and becomes the job's input.
     const audio = readAudio(form.get("audio"));
     const input = audio
@@ -21,7 +25,8 @@ export async function createJobAction(_: ActionState, form: FormData): Promise<A
     const job = await createJob(createModelClient(), {
       skillId,
       origin: "owner",
-      requesterName: "Owner",
+      requesterName: user.name,
+      requesterUserId: user.id,
       input,
     });
     revalidatePath("/jobs");
@@ -38,6 +43,7 @@ const reviewForm = z.object({
 export async function reviewJobAction(_: ActionState, form: FormData): Promise<ActionState> {
   return attempt(async () => {
     const { jobId, intent, finalOutput } = reviewForm.parse(Object.fromEntries(form));
+    await assertJobOwner(await requireUser(), jobId);
     await reviewJob(jobId, intent, finalOutput);
     revalidatePath("/jobs");
     revalidatePath("/earnings");
@@ -48,6 +54,7 @@ export async function reviewJobAction(_: ActionState, form: FormData): Promise<A
 export async function teachFromJobAction(_: ActionState, form: FormData): Promise<ActionState> {
   return attempt(async () => {
     const jobId = uuidField.parse(form.get("jobId"));
+    await assertJobOwner(await requireUser(), jobId);
     const reason = z
       .string()
       .max(500)
@@ -64,7 +71,7 @@ export async function setTrustLevelAction(_: ActionState, form: FormData): Promi
       .regex(/^[a-z0-9-]+$/)
       .parse(form.get("slug"));
     const level = z.coerce.number().int().min(0).max(2).parse(form.get("intent")) as 0 | 1 | 2;
-    const skill = await getSkillBySlug(slug);
+    const skill = await ownedSkillBySlug(await requireUser(), slug);
     await setTrustLevel(skill.id, level);
     revalidatePath(`/skills/${slug}/trust`);
     return `/skills/${slug}/trust`;

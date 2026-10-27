@@ -1,4 +1,6 @@
 import { slugify } from "@/lib/action-state";
+import { assertOrderAccess } from "@/lib/auth/access";
+import { getUser } from "@/lib/auth/session";
 import { markdownToDocx } from "@/lib/docs/docx";
 import { getJobWithSkill } from "@/lib/jobs/service";
 import { NotFoundError } from "@/lib/skill/service";
@@ -14,6 +16,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
   let row;
   try {
+    const user = await getUser();
+    if (!user) return new Response("Sign in first", { status: 401 });
+    await assertOrderAccess(user, id); // the skill owner, or the renter who ordered it
     row = await getJobWithSkill(id);
   } catch (error) {
     if (error instanceof NotFoundError) return new Response("Not found", { status: 404 });

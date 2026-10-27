@@ -20,7 +20,10 @@ export default defineRailway(() => {
     env: {
       NODE_ENV: "production",
       DATABASE_URL: db.env.DATABASE_URL,
-      APP_PASSWORD: preserve(),
+      BETTER_AUTH_SECRET: preserve(),
+      BETTER_AUTH_URL: preserve(),
+      ADMIN_EMAILS: preserve(),
+      AUTH_ALLOWED_EMAILS: preserve(),
       MODEL_PROVIDER: preserve(),
       JOB_RETENTION_DAYS: preserve(),
       PLATFORM_FEE_PERCENT: preserve(),

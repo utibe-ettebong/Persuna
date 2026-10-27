@@ -3,6 +3,8 @@ import { acceptOrderAction, complainAction } from "@/app/actions/market";
 import { ActionForm } from "@/components/action-form";
 import { Markdown } from "@/components/markdown";
 import { Badge, buttonClass, Card, Field, inputClass, PageHeader } from "@/components/ui";
+import { assertOrderAccess } from "@/lib/auth/access";
+import { requireUser } from "@/lib/auth/session";
 import { orNotFound } from "@/lib/load";
 import { formatNaira } from "@/lib/market/rules";
 import { getOrder } from "@/lib/market/service";
@@ -26,7 +28,11 @@ const ESCROW = {
 export default async function OrderPage({ params, searchParams }: Params) {
   const { id } = await params;
   const { payment } = await searchParams;
-  const order = await orNotFound(() => getOrder(id), id);
+  const user = await requireUser();
+  const order = await orNotFound(async () => {
+    await assertOrderAccess(user, id);
+    return getOrder(id);
+  }, id);
   const escrow = ESCROW[order.escrow];
 
   return (
