@@ -17,6 +17,7 @@ export function PersonaOrb({
   level = 0,
   size = 72,
   animate = true,
+  gaze = null,
   className = "",
 }: {
   look: string;
@@ -25,6 +26,8 @@ export function PersonaOrb({
   level?: number;
   size?: number;
   animate?: boolean;
+  /** A point on screen to look at instead of the cursor. */
+  gaze?: { x: number; y: number } | null;
   className?: string;
 }) {
   const id = useId().replace(/:/g, "");
@@ -41,10 +44,10 @@ export function PersonaOrb({
   const swirlB = useRef<SVGCircleElement>(null);
   const spark = useRef<SVGGElement>(null);
   const root = useRef<SVGSVGElement>(null);
-  const live = useRef({ state, level });
+  const live = useRef({ state, level, gaze });
   useEffect(() => {
-    live.current = { state, level };
-  }, [state, level]);
+    live.current = { state, level, gaze };
+  }, [state, level, gaze]);
 
   useEffect(() => {
     if (!animate) return;
@@ -56,20 +59,24 @@ export function PersonaOrb({
     let smoothLevel = 0;
     const phases = Array.from({ length: 9 }, (_, i) => i * 1.7 + Math.random());
 
-    const onMove = (e: PointerEvent) => {
+    const lookAt = (px: number, py: number) => {
       const box = root.current?.getBoundingClientRect();
       if (!box) return;
-      const dx = e.clientX - (box.left + box.width / 2);
-      const dy = e.clientY - (box.top + box.height / 2);
+      const dx = px - (box.left + box.width / 2);
+      const dy = py - (box.top + box.height / 2);
       const d = Math.hypot(dx, dy) || 1;
       const reach = Math.min(1, d / 400);
       target = { x: (dx / d) * reach, y: (dy / d) * reach };
+    };
+    const onMove = (e: PointerEvent) => {
+      if (!live.current.gaze) lookAt(e.clientX, e.clientY);
     };
     window.addEventListener("pointermove", onMove);
 
     const tick = (now: number) => {
       const t = now / 1000;
-      const { state: s, level: l } = live.current;
+      const { state: s, level: l, gaze: g } = live.current;
+      if (g) lookAt(g.x, g.y);
       smoothLevel += (l - smoothLevel) * 0.25;
       const calm = reduced ? 0.3 : 1;
 

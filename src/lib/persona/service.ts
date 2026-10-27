@@ -179,6 +179,8 @@ export interface ChatResult {
   task: { skill: string | null } | null;
   /** True when a reminder was set, so the browser can ask to show notifications. */
   reminderSet: boolean;
+  /** A page Persona should take the user to. */
+  navigate: string | null;
 }
 
 /** One message from the user: think, apply the actions, save both sides. */
@@ -207,6 +209,7 @@ export async function chat(
   const extra: string[] = [];
   let task: ChatResult["task"] = null;
   let reminderSet = false;
+  let navigate: string | null = null;
 
   for (const action of reply.actions) {
     if (action.type === "remember") {
@@ -262,6 +265,21 @@ export async function chat(
         extra.push(advice.message);
         link = { href: advice.href, label: advice.action };
       }
+    } else if (action.type === "open_page") {
+      const skill = owned.find((s) => s.slug === action.skill);
+      navigate =
+        action.page === "skill" && skill
+          ? `/skills/${skill.slug}`
+          : {
+              persona: "/persona",
+              todos: "/persona#todos",
+              skills: "/skills",
+              skill: "/skills",
+              jobs: "/jobs",
+              market: "/market",
+              earnings: "/earnings",
+              audit: "/audit",
+            }[action.page];
     } else if (action.type === "set_tone") {
       tone = applyToneChange(tone, {
         length: action.length ?? undefined,
@@ -315,6 +333,7 @@ export async function chat(
     focus: { text: focus, skill: focusRow ? { slug: focusRow.slug, name: focusRow.name } : null },
     task,
     reminderSet,
+    navigate,
   };
 }
 

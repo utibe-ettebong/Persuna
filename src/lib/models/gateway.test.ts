@@ -51,4 +51,32 @@ describe("createGateway", () => {
     await expect(client.complete("extract", [])).rejects.toBeInstanceOf(ModelError);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it("redoes a call on EXTRACT when a role's key is rejected, and keeps doing so for a while", async () => {
+    const meta = { baseUrl: "https://meta.example/v1", apiKey: "good", model: "muse" };
+    const baseten = { baseUrl: "https://baseten.example/v1", apiKey: "revoked", model: "open" };
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.startsWith("https://baseten")
+        ? new Response('{"error":"please check the api-key you provided"}', { status: 403 })
+        : ok(reply),
+    );
+    const client = createGateway(
+      (role) => (role === "extract" ? meta : baseten),
+      fetchImpl as unknown as typeof fetch,
+    );
+    await expect(client.complete("draft", [])).resolves.toMatchObject({ text: "hello" });
+    await client.complete("draft", []);
+    const urls = fetchImpl.mock.calls.map((c) => String(c[0]));
+    expect(urls).toEqual([
+      "https://baseten.example/v1/chat/completions",
+      "https://meta.example/v1/chat/completions",
+      "https://meta.example/v1/chat/completions",
+    ]);
+  });
+
+  it("still fails when EXTRACT itself is the rejected provider", async () => {
+    const fetchImpl = vi.fn(async () => new Response("bad", { status: 403 }));
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+    await expect(client.complete("draft", [])).rejects.toMatchObject({ keyRejected: true });
+  });
 });
