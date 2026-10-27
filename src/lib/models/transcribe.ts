@@ -57,6 +57,29 @@ export function createTranscriber(
   };
 }
 
+/**
+ * Whether live transcription can work as configured. Meta's Muse Voice
+ * Transcribe uses its own API (/v1/asr/transcribe, 16 kHz mono WAV), not the
+ * OpenAI-compatible route this client calls, so it is reported as unsupported.
+ */
+export function transcriptionCheck(): { ok: boolean; detail: string } {
+  if (modelProvider() === "mock")
+    return { ok: true, detail: "Mock transcriber (no live key set)." };
+  try {
+    const config = transcriptionConfig();
+    if (/api\.meta\.ai/i.test(config.baseUrl)) {
+      return {
+        ok: false,
+        detail:
+          "Meta's transcription API isn't OpenAI-compatible yet in PERSUNA. Use a Baseten Qwen3-ASR deployment (TRANSCRIBE_BASE_URL, TRANSCRIBE_API_KEY, TRANSCRIBE_MODEL) or add a Meta adapter.",
+      };
+    }
+    return { ok: true, detail: `${config.model} at ${config.baseUrl} (not called: needs audio).` };
+  } catch (error) {
+    return { ok: false, detail: (error as Error).message.slice(0, 300) };
+  }
+}
+
 /** Offline stand-in: a fixed walkthrough, so the voice flow works end to end without keys. */
 export const mockTranscriber: Transcriber = {
   async transcribe(audio) {

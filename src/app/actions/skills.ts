@@ -10,16 +10,17 @@ import {
   assertVersionOwner,
   ownedSkillBySlug,
 } from "@/lib/auth/access";
-import { actorOf, requireUser } from "@/lib/auth/session";
+import { actorOf, requireAdmin, requireUser } from "@/lib/auth/session";
 import { readUploadedText } from "@/lib/docs/read-file";
 import { normalizeText } from "@/lib/text";
 import { createModelClient, createTranscriber } from "@/lib/models";
-import { readAudio } from "@/lib/models/transcribe";
+import { readAudio, transcriptionCheck } from "@/lib/models/transcribe";
 import { INTERVIEW_QUESTIONS, interviewText, type InterviewAnswers } from "@/lib/skill/interview";
 import type { Finding } from "@/lib/skill/redact";
 import {
   acceptCorrection,
   addPair,
+  createSampleSkill,
   proposeFromMethodNotes,
   saveInterview,
   scanPair,
@@ -60,7 +61,7 @@ export async function extractAction(_: ActionState, form: FormData): Promise<Act
   return attempt(async () => {
     const slug = slugField.parse(form.get("slug"));
     await ownedSkillBySlug(await requireUser(), slug);
-    await extractVersion(createModelClient(), slug);
+    await extractVersion(createModelClient(await requireUser()), slug);
     revalidatePath(`/skills/${slug}`);
     return `/skills/${slug}`;
   });
@@ -70,7 +71,7 @@ export async function runTestsAction(_: ActionState, form: FormData): Promise<Ac
   return attempt(async () => {
     const versionId = uuidField.parse(form.get("versionId"));
     await assertVersionOwner(await requireUser(), versionId);
-    const run = await runEval(createModelClient(), versionId);
+    const run = await runEval(createModelClient(await requireUser()), versionId);
     return `/runs/${run.id}`;
   });
 }
@@ -120,7 +121,7 @@ export async function proposeFromTestAction(_: ActionState, form: FormData): Pro
     const { resultId, edited, reason } = correctionForm.parse(Object.fromEntries(form));
     await assertTestResultOwner(await requireUser(), resultId);
     const correction = await proposeCorrectionFromTest(
-      createModelClient(),
+      createModelClient(await requireUser()),
       resultId,
       edited,
       reason,
@@ -140,7 +141,7 @@ export async function decideCorrectionAction(_: ActionState, form: FormData): Pr
       return `/skills/${skill.slug}`;
     }
     const version = await acceptCorrection(id);
-    const run = await runEval(createModelClient(), version.id);
+    const run = await runEval(createModelClient(await requireUser()), version.id);
     return `/runs/${run.id}`;
   });
 }
@@ -195,7 +196,7 @@ export async function addPairAction(_: PairFormState, form: FormData): Promise<P
     if (!input || !output) return { error: "Add both the raw input and your finished output." };
 
     if (!choice) {
-      const scan = await scanPair(createModelClient(), input, output);
+      const scan = await scanPair(createModelClient(await requireUser()), input, output);
       if (scan.inputFindings.length || scan.outputFindings.length) {
         return {
           error: null,
@@ -257,7 +258,7 @@ export async function saveInterviewAction(_: ActionState, form: FormData): Promi
       const notes = interviewText(answers);
       if (!notes) throw new Error("Answer at least one question first");
       const proposal = await proposeFromMethodNotes(
-        createModelClient(),
+        createModelClient(await requireUser()),
         skill.id,
         "interview",
         notes,
@@ -280,7 +281,7 @@ export async function voiceWalkthroughAction(_: ActionState, form: FormData): Pr
     const skill = await ownedSkillBySlug(await requireUser(), slug);
     const audio = readAudio(form.get("audio"));
     if (!audio) throw new Error("Record or upload your walkthrough first");
-    const { text } = await createTranscriber().transcribe(audio, audio.name);
+    const { text } = await createTranscriber(await requireUser()).transcribe(audio, audio.name);
     if (!text) throw new Error("No speech was found in the recording");
 
     if (!skill.currentVersionId) {
@@ -291,11 +292,65 @@ export async function voiceWalkthroughAction(_: ActionState, form: FormData): Pr
       return `/skills/${slug}/interview?transcribed=1`;
     }
     const proposal = await proposeFromMethodNotes(
-      createModelClient(),
+      createModelClient(await requireUser()),
       skill.id,
       "walkthrough",
       text,
     );
     return `/corrections/${proposal.id}`;
   });
+}
+
+/** One click for new users: their own copy of the sample skill, ready to extract. */
+export async function trySampleSkillAction(): Promise<ActionState> {
+  return attempt(async () => {
+    const user = await requireUser();
+    const skill = await createSampleSkill(user.id, actorOf(user));
+    revalidatePath("/skills");
+    return `/skills/${skill.slug}?sample=1`;
+  });
+}
+
+export type ModelCheckState = {
+  error: string | null;
+  results?: { role: string; ok: boolean; ms: number; detail: string }[];
+};
+
+/** Admins: send each live model role a tiny request and report what came back. */
+export async function testModelsAction(): Promise<ModelCheckState> {
+  try {
+    await requireAdmin();
+    const client = createModelClient();
+    const roles = ["extract", "draft", "evaluate"] as const;
+    const results = await Promise.all(
+      roles.map(async (role) => {
+        const started = Date.now();
+        try {
+          const reply = await client.complete(
+            role,
+            [{ role: "user", content: "Reply with the single word OK." }],
+            { maxTokens: 20 },
+          );
+          return {
+            role,
+            ok: reply.text.trim().length > 0,
+            ms: Date.now() - started,
+            detail: `${reply.model}: “${reply.text.trim().slice(0, 40)}”`,
+          };
+        } catch (error) {
+          return {
+            role,
+            ok: false,
+            ms: Date.now() - started,
+            detail: (error as Error).message.slice(0, 300),
+          };
+        }
+      }),
+    );
+    const voice = transcriptionCheck();
+    return { error: null, results: [...results, { role: "transcribe", ms: 0, ...voice }] };
+  } catch (error) {
+    unstable_rethrow(error);
+    return { error: error instanceof Error ? error.message : "Check failed" };
+  }
 }

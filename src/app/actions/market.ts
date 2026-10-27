@@ -70,13 +70,17 @@ export async function rentAction(_: ActionState, form: FormData): Promise<Action
     const user = await requireUser();
     const input = (await readUploadedText(form.get("inputFile"))) ?? inputText ?? "";
     if (!input.trim()) throw new Error("Paste your notes or upload a file.");
-    const { jobId, redirectUrl } = await rentSkill(createModelClient(), listingId, {
-      renterUserId: user.id,
-      renterName,
-      renterEmail,
-      input,
-      premiumReview: premiumReview === "on",
-    });
+    const { jobId, redirectUrl } = await rentSkill(
+      createModelClient(await requireUser()),
+      listingId,
+      {
+        renterUserId: user.id,
+        renterName,
+        renterEmail,
+        input,
+        premiumReview: premiumReview === "on",
+      },
+    );
     revalidatePath("/jobs");
     revalidatePath("/earnings");
     // With Paystack the renter pays on Paystack's checkout, which returns them to the order.

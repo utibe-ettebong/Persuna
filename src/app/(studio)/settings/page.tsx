@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ModelCheck } from "@/components/model-check";
 import { Badge, Card, PageHeader } from "@/components/ui";
 import { env, modelProvider, modelSettingsStatus } from "@/env";
 import { requireAdmin } from "@/lib/auth/session";
@@ -54,6 +55,16 @@ export default async function SettingsPage() {
           </span>
         </p>
       </Card>
+
+      {!mock && (
+        <Card className="space-y-3 p-5">
+          <p className="label-mono text-muted">Check the live connections</p>
+          <p className="text-sm text-muted">
+            Sends each role a one-line request (a few tokens each) and shows what came back.
+          </p>
+          <ModelCheck />
+        </Card>
+      )}
 
       <div className="grid gap-px overflow-hidden rounded-md border border-line bg-line md:grid-cols-2">
         {roles.map((r) => {

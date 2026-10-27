@@ -108,8 +108,8 @@ export default function LandingPage() {
               your sign-off. Then rent your method to others and get paid per task.
             </p>
             <div className="reveal mt-9 flex flex-wrap justify-center gap-3 [animation-delay:180ms]">
-              <Link href="/skills" className={buttonClass("primary", "md")}>
-                Train your first skill
+              <Link href="/sign-up" className={buttonClass("primary", "md")}>
+                Try it free
               </Link>
               <Link href="/market" className={buttonClass("secondary", "md")}>
                 Browse the marketplace
@@ -329,10 +329,10 @@ export default function LandingPage() {
           </p>
           <div className="mt-9 flex flex-wrap justify-center gap-3">
             <Link
-              href="/skills"
+              href="/sign-up"
               className="label-mono rounded-md bg-white px-5 py-3 text-[#1d161d] transition-colors hover:bg-white/90"
             >
-              Train your first skill
+              Try it free
             </Link>
             <Link
               href="/market"

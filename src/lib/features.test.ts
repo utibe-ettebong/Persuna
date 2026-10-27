@@ -295,12 +295,43 @@ describe("key slots", () => {
         model: "muse-voice-transcribe",
       });
       process.env.DRAFT_API_KEY = "real-baseten-key";
+      // Scoring on the same Baseten URL reuses the drafting key; no second paste needed.
+      process.env.EVAL_BASE_URL = "https://inference.baseten.co/v1/";
+      process.env.EVAL_MODEL = "deepseek-ai/DeepSeek-V4.1-Flash";
+      expect(modelConfig("evaluate")).toEqual({
+        baseUrl: "https://inference.baseten.co/v1/",
+        apiKey: "real-baseten-key",
+        model: "deepseek-ai/DeepSeek-V4.1-Flash",
+      });
       process.env.DRAFT_MODEL = "muse-spark-open";
       expect(modelConfig("draft")).toEqual({
         baseUrl: "https://inference.baseten.co/v1",
         apiKey: "real-baseten-key",
         model: "muse-spark-open",
       });
+    } finally {
+      process.env = saved;
+    }
+  });
+});
+
+describe("transcription check", () => {
+  it("flags Meta's non-OpenAI transcription API and accepts an OpenAI-style one", async () => {
+    const { transcriptionCheck } = await import("./models/transcribe");
+    const saved = { ...process.env };
+    try {
+      delete process.env.MODEL_PROVIDER;
+      process.env.EXTRACT_API_KEY = "real-meta-key";
+      process.env.EXTRACT_BASE_URL = "https://api.meta.ai/v1";
+      process.env.EXTRACT_MODEL = "muse-spark-1.3";
+      process.env.TRANSCRIBE_MODEL = "muse-voice-transcribe-1.0";
+      expect(transcriptionCheck().ok).toBe(false);
+
+      process.env.TRANSCRIBE_BASE_URL =
+        "https://model-abc.api.baseten.co/environments/production/sync/v1";
+      process.env.TRANSCRIBE_API_KEY = "real-baseten-key";
+      process.env.TRANSCRIBE_MODEL = "Qwen/Qwen3-ASR-1.7B";
+      expect(transcriptionCheck()).toMatchObject({ ok: true });
     } finally {
       process.env = saved;
     }
