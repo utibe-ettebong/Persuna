@@ -1,4 +1,4 @@
-// Persona Desktop. Persona lives in a see-through layer over your whole
+// Persuna Desktop. Your Persuna lives in a see-through layer over your whole
 // screen, above every app (even full-screen ones), and clicks pass straight
 // through it except where Persona and its conversation are. It loads
 // /companion from your PERSUNA server, so chat, voice, notes and tasks work
@@ -74,7 +74,7 @@ function createOverlay() {
     y,
     width,
     height,
-    title: "Persona",
+    title: "Persuna",
     transparent: true,
     frame: false,
     hasShadow: false,
@@ -170,9 +170,9 @@ async function screenAllowed() {
   if (status === "granted" || status === "not-determined") return true;
   const { response } = await dialog.showMessageBox({
     type: "info",
-    message: "Persona needs Screen Recording permission to watch",
+    message: "Persuna needs Screen Recording permission to watch",
     detail:
-      "Open System Settings → Privacy & Security → Screen Recording, turn on Persona, then quit and reopen Persona. It only watches while you have watching turned on.",
+      "Open System Settings → Privacy & Security → Screen Recording, turn on Persuna, then quit and reopen Persuna. It only watches while you have watching turned on.",
     buttons: ["Open System Settings", "Not now"],
     defaultId: 0,
     cancelId: 1,
@@ -189,7 +189,7 @@ async function chooseSource() {
   });
   const screens = sources.filter((s) => s.id.startsWith("screen:"));
   const windows = sources.filter(
-    (s) => s.id.startsWith("window:") && s.name && s.name !== "Persona",
+    (s) => s.id.startsWith("window:") && s.name && s.name !== "Persuna",
   );
   const saved = readSettings().watch;
   if (saved?.kind === "screen" && screens[0]) return screens[0];
@@ -204,9 +204,9 @@ async function chooseSource() {
   ];
   const { response, checkboxChecked } = await dialog.showMessageBox({
     type: "question",
-    message: "What should Persona watch?",
+    message: "What should Persuna watch?",
     detail:
-      "Persona looks every 30 seconds while it changes, writes down your steps, and keeps no screenshots. Stop any time from Persona.",
+      "Persuna looks every 30 seconds while it changes, writes down your steps, and keeps no screenshots. Stop any time from Persuna.",
     buttons: [...choices.map((c) => c.label), "Cancel"],
     cancelId: choices.length,
     noLink: true,
@@ -231,7 +231,7 @@ function rebuildTray() {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
-        label: visible ? "Hide Persona" : "Show Persona",
+        label: visible ? "Hide Persuna" : "Show Persuna",
         click: () => {
           if (!overlay) createOverlay();
           else if (overlay.isVisible()) overlay.hide();
@@ -262,9 +262,9 @@ function rebuildTray() {
         click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }),
       },
       { label: "Open PERSUNA in the browser", click: () => void shell.openExternal(ORIGIN) },
-      { label: "Reload Persona", click: () => overlay?.reload() },
+      { label: "Reload Persuna", click: () => overlay?.reload() },
       { type: "separator" },
-      { label: "Quit Persona", role: "quit" },
+      { label: "Quit Persuna", role: "quit" },
     ]),
   );
 }
@@ -275,7 +275,7 @@ function createTray() {
   );
   if (MAC) icon.setTemplateImage(true);
   tray = new Tray(icon);
-  tray.setToolTip("Persona");
+  tray.setToolTip("Persuna");
   rebuildTray();
 }
 

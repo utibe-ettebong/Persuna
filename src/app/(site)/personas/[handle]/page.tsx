@@ -16,7 +16,7 @@ const TRUST = ["Owner-reviewed", "Auto-approved + review", "Spot-checked"];
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const { handle } = await params;
   const profile = await publicProfile(handle).catch(() => null);
-  return { title: profile ? `${profile.name}, ${profile.ownerFirstName}'s persona` : "Persona" };
+  return { title: profile ? `${profile.name}, ${profile.ownerFirstName}'s Persuna` : "Persuna" };
 }
 
 /**
@@ -30,7 +30,7 @@ export default async function PublicPersonaPage({ params }: Params) {
   return (
     <div className="mx-auto max-w-5xl space-y-10 px-4 py-12 sm:px-8">
       <PageHeader
-        eyebrow="Persona"
+        eyebrow="Persuna"
         title={
           <>
             <span className="inline-flex items-center gap-3">

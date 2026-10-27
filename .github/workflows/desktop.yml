@@ -1,6 +1,6 @@
-name: Persona Desktop
+name: Persuna Desktop
 
-# Builds Persona Desktop for macOS (Intel and Apple silicon) and Windows
+# Builds Persuna Desktop for macOS (Intel and Apple silicon) and Windows
 # (x64 and Arm). On pull requests that touch desktop/, it only checks the
 # builds. Pushing a tag like desktop-v0.2.0 publishes them as a GitHub
 # Release, which the app's "Get the desktop app" link points to.
@@ -83,14 +83,14 @@ jobs:
       - name: Check the Mac apps are validly signed
         if: runner.os == 'macOS'
         run: |
-          for app in dist/mac*/Persona.app; do
+          for app in dist/mac*/Persuna.app; do
             echo "$app"
             codesign --verify --deep --strict --verbose=2 "$app"
             codesign -dv "$app" 2>&1 | grep -E "Authority|Signature|flags"
           done
       - uses: actions/upload-artifact@v4
         with:
-          name: persona-${{ runner.os }}
+          name: persuna-${{ runner.os }}
           if-no-files-found: error
           path: |
             desktop/dist/*.dmg
@@ -113,11 +113,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<'NOTES'
-          Persona, your PERSUNA assistant, over your whole screen.
+          Persuna, your AI assistant, over your whole screen.
 
-          **Mac:** pick `mac-arm64` for Apple silicon (M1 and later) or `mac-x64` for Intel. Open the `.dmg` and drag Persona to Applications.
+          **Mac:** pick `mac-arm64` for Apple silicon (M1 and later) or `mac-x64` for Intel. Open the `.dmg` and drag Persuna to Applications.
           **Windows:** run the `.exe` (`x64` for most PCs, `arm64` for Arm laptops).
 
-          The first time Persona watches, macOS asks for Screen Recording permission. Persona only watches while you have watching turned on.
+          The first time Persuna watches, macOS asks for Screen Recording permission. Persuna only watches while you have watching turned on.
           NOTES
-          gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --title "Persona Desktop ${GITHUB_REF_NAME#desktop-v}" --notes-file notes.md
+          gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --title "Persuna Desktop ${GITHUB_REF_NAME#desktop-v}" --notes-file notes.md

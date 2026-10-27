@@ -3,13 +3,15 @@ import { Logo, Mark } from "@/components/brand";
 import { buttonClass } from "@/components/ui";
 
 const LINKS = [
+  { href: "/#assistant", label: "Your assistant" },
   { href: "/#how", label: "How it works" },
   { href: "/#trust", label: "Trust" },
   { href: "/#rent", label: "Rent a skill" },
   { href: "/#faq", label: "FAQ" },
+  { href: "/download", label: "Download" },
 ];
 
-/** Public pages: the landing page and employer approval links. */
+/** Public pages: the landing page, downloads, public profiles and employer approval links. */
 export default function SiteLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <>
@@ -31,6 +33,12 @@ export default function SiteLayout({ children }: Readonly<{ children: React.Reac
             </ul>
           </nav>
           <div className="ml-auto flex items-center gap-2">
+            <Link
+              href="/download"
+              className="label-mono px-2 text-muted hover:text-foreground md:hidden"
+            >
+              Download
+            </Link>
             <Link
               href="/sign-in"
               className="label-mono hidden px-2 text-muted hover:text-foreground sm:inline"
@@ -61,6 +69,14 @@ function SiteFooter() {
       ],
     },
     {
+      title: "Your assistant",
+      links: [
+        ["Meet your Persuna", "/#assistant"],
+        ["Download for Mac & Windows", "/download"],
+        ["My Persuna", "/persona"],
+      ],
+    },
+    {
       title: "Marketplace",
       links: [
         ["Browse skills", "/market"],
@@ -79,7 +95,7 @@ function SiteFooter() {
   return (
     <footer className="plum-band relative overflow-hidden">
       <div className="mx-auto max-w-6xl px-4 pb-10 pt-16 sm:px-6">
-        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-5">
           <div>
             <p className="flex items-center gap-2 font-display text-lg font-semibold">
               <Mark /> Persuna

@@ -1,20 +1,20 @@
-# Persona Desktop
+# Persuna Desktop
 
-Persona, your PERSUNA assistant, over your whole screen. It lives in a see-through layer above every app, even full-screen ones. Clicks pass straight through to your apps except on Persona and its conversation. It sits in the menu bar (Mac) or system tray (Windows), not the Dock or taskbar.
+Persuna, your PERSUNA assistant, over your whole screen. It lives in a see-through layer above every app, even full-screen ones. Clicks pass straight through to your apps except on Persuna and its conversation. It sits in the menu bar (Mac) or system tray (Windows), not the Dock or taskbar.
 
 **Download:** [the latest release](https://github.com/utibe-ettebong/Persuna/releases/latest).
 
 | Computer                              | File                              |
 | ------------------------------------- | --------------------------------- |
-| Mac with Apple silicon (M1 and later) | `Persona-<version>-mac-arm64.dmg` |
-| Mac with Intel                        | `Persona-<version>-mac-x64.dmg`   |
-| Windows PC                            | `Persona-<version>-win-x64.exe`   |
-| Windows on Arm                        | `Persona-<version>-win-arm64.exe` |
+| Mac with Apple silicon (M1 and later) | `Persuna-<version>-mac-arm64.dmg` |
+| Mac with Intel                        | `Persuna-<version>-mac-x64.dmg`   |
+| Windows PC                            | `Persuna-<version>-win-x64.exe`   |
+| Windows on Arm                        | `Persuna-<version>-win-arm64.exe` |
 
 ## Permissions
 
-- **Watching your screen.** The first time you turn watching on, Persona asks what to watch (your whole screen or one app) and can remember it. After that, turning watching on just starts, with no picker. On a Mac, macOS also asks once for **Screen Recording** permission (System Settings → Privacy & Security → Screen Recording). Persona only watches while watching is on, never keeps screenshots, and never sees itself. Change the remembered choice from the menu bar icon.
-- **Microphone.** Asked the first time you talk to Persona.
+- **Watching your screen.** The first time you turn watching on, Persuna asks what to watch (your whole screen or one app) and can remember it. After that, turning watching on just starts, with no picker. On a Mac, macOS also asks once for **Screen Recording** permission (System Settings → Privacy & Security → Screen Recording). Persuna only watches while watching is on, never keeps screenshots, and never sees itself. Change the remembered choice from the menu bar icon.
+- **Microphone.** Asked the first time you talk to Persuna.
 
 ## How it works
 
@@ -43,7 +43,7 @@ Locally: `npm run dist:mac` (both Mac chips) or `npm run dist:win`.
 
 Without certificates the builds are unsigned (Mac builds are signed ad hoc so they run on Apple silicon). People then see a warning the first time:
 
-- **Mac:** "Persona can't be opened". Right-click Persona in Applications, choose Open, then Open again.
+- **Mac:** "Persuna can't be opened". Right-click Persuna in Applications, choose Open, then Open again.
 - **Windows:** SmartScreen warns. Choose More info, then Run anyway.
 
 To remove those warnings, add these repository secrets (Settings → Secrets and variables → Actions); the workflow signs and notarizes by itself:

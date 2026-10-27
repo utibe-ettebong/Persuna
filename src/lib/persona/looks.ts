@@ -20,5 +20,5 @@ export function lookOf(value: string | null | undefined): LookId {
   return value && value in LOOKS ? (value as LookId) : DEFAULT_LOOK;
 }
 
-/** Where Persona Desktop builds are published (see .github/workflows/desktop.yml). */
-export const DESKTOP_DOWNLOAD_URL = "https://github.com/utibe-ettebong/Persuna/releases/latest";
+/** The download page for Persuna Desktop (it reads the latest GitHub release). */
+export const DESKTOP_DOWNLOAD_URL = "/download";

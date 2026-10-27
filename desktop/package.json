@@ -1,8 +1,8 @@
 {
-  "name": "persona-desktop",
-  "version": "0.2.0",
+  "name": "persuna-desktop",
+  "version": "0.2.1",
   "private": true,
-  "description": "Persona, your PERSUNA assistant, over your whole screen.",
+  "description": "Persuna, your AI assistant, over your whole screen.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -21,7 +21,7 @@
   "homepage": "https://persuna-production.up.railway.app",
   "build": {
     "appId": "app.persuna.persona",
-    "productName": "Persona",
+    "productName": "Persuna",
     "copyright": "\u00a9 Persuna. MIT licensed.",
     "directories": {
       "output": "dist",
@@ -33,7 +33,7 @@
       "package.json",
       "build/tray*.png"
     ],
-    "artifactName": "Persona-${version}-${os}-${arch}.${ext}",
+    "artifactName": "Persuna-${version}-${os}-${arch}.${ext}",
     "mac": {
       "category": "public.app-category.productivity",
       "target": [
@@ -59,12 +59,12 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "minimumSystemVersion": "12.0",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Persona listens when you talk to it.",
+        "NSMicrophoneUsageDescription": "Persuna listens when you talk to it.",
         "LSUIElement": true
       }
     },
     "dmg": {
-      "title": "Persona ${version}"
+      "title": "Persuna ${version}"
     },
     "win": {
       "target": [
@@ -83,7 +83,7 @@
       "perMachine": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Persona"
+      "shortcutName": "Persuna"
     }
   }
 }

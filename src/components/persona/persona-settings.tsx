@@ -65,7 +65,7 @@ export function PersonaProfileForm({
       <div className="text-sm">
         <p className="font-medium">Today&apos;s focus</p>
         <p className="mt-1 text-muted">
-          {focus ?? "Not set. Tell Persona what you're working on."}
+          {focus ?? "Not set. Tell your Persuna what you're working on."}
           {focus && (
             <button
               type="button"
@@ -115,7 +115,7 @@ export function ClearChatButton() {
       disabled={pending || done}
       onClick={() =>
         start(async () => {
-          if (!confirm("Clear your whole conversation with Persona? Notes and memory stay."))
+          if (!confirm("Clear your whole conversation with your Persuna? Notes and memory stay."))
             return;
           const res = await personaClearChatAction();
           if (res.ok) {

@@ -13,7 +13,7 @@ const mono = DM_Mono({ variable: "--font-mono", subsets: ["latin"], weight: ["40
 export const metadata: Metadata = {
   title: { default: "PERSUNA: your method, multiplied", template: "%s · PERSUNA" },
   description:
-    "Train an agent on how you actually work, approve what it drafts, and rent your method to others per task.",
+    "Persuna is an AI assistant on your screen that keeps you on track, learns how you work, does it your way for your approval, and lets you rent your method to others per task.",
   robots: { index: false, follow: false },
 };
 

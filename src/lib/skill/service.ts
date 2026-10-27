@@ -446,7 +446,7 @@ export async function proposeFromMethodNotes(
       interview: "Your interview answers",
       walkthrough: "Your voice walkthrough",
       screen: "Your screen walkthrough",
-      companion: "What you taught Persona",
+      companion: "What you taught your Persuna",
     }[source],
     explanation: proposal.explanation,
     ruleOps: proposal.ops,
