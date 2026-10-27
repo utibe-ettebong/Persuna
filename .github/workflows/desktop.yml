@@ -52,6 +52,8 @@ jobs:
         # Without a Developer ID, sign ad hoc: Apple silicon refuses to run unsigned code.
         run: npx electron-builder ${{ matrix.target }} --publish never ${{ runner.os == 'macOS' && secrets.MAC_CERT_P12_BASE64 == '' && '-c.mac.identity=-' || '' }}
         env:
+          # Sign pull-request builds too, so their test copies behave like releases.
+          CSC_FOR_PULL_REQUEST: true
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.MAC_CERT_P12_BASE64 != '' || secrets.WIN_CERT_PFX_BASE64 != '' }}
           CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CERT_P12_BASE64 || secrets.WIN_CERT_PFX_BASE64 }}
           CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CERT_PASSWORD || secrets.WIN_CERT_PASSWORD }}
