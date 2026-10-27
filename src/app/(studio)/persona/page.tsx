@@ -18,6 +18,7 @@ import {
 import { Badge, Card, PageHeader, PanelTitle, Prose } from "@/components/ui";
 import { PersonaOrb } from "@/components/persona/orb";
 import { requireUser } from "@/lib/auth/session";
+import { DESKTOP_DOWNLOAD_URL } from "@/lib/persona/looks";
 import {
   coachingForAll,
   companion,
@@ -85,6 +86,23 @@ export default async function PersonaPage() {
               joke&rdquo;). Anything left on &ldquo;Notice for me&rdquo; follows how you write.
             </p>
             <ToneForm tone={tone.explicit} instruction={tone.instruction} />
+          </Card>
+
+          <Card className="p-5">
+            <PanelTitle>{profile.name} on your desktop</PanelTitle>
+            <p className="text-sm text-muted">
+              Persona Desktop puts {profile.name} over your whole screen, above every app. It can
+              watch any app you work in once you allow it, without sharing a window each time. For
+              Mac (Apple silicon and Intel) and Windows.
+            </p>
+            <a
+              href={DESKTOP_DOWNLOAD_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="label-mono mt-3 inline-block text-accent underline"
+            >
+              Get the desktop app →
+            </a>
           </Card>
 
           <Card className="p-5">

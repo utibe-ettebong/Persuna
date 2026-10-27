@@ -1,0 +1,99 @@
+name: Persona Desktop
+
+# Builds Persona Desktop for macOS (Intel and Apple silicon) and Windows
+# (x64 and Arm). On pull requests that touch desktop/, it only checks the
+# builds. Pushing a tag like desktop-v0.2.0 publishes them as a GitHub
+# Release, which the app's "Get the desktop app" link points to.
+#
+# Signing turns on by itself when these repository secrets exist:
+#   macOS:   MAC_CERT_P12_BASE64, MAC_CERT_PASSWORD (Developer ID Application),
+#            APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID (notarization)
+#   Windows: WIN_CERT_PFX_BASE64, WIN_CERT_PASSWORD (code signing certificate)
+# Without them the builds are unsigned.
+
+on:
+  pull_request:
+    paths: ["desktop/**", ".github/workflows/desktop.yml"]
+  push:
+    tags: ["desktop-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: --mac --x64 --arm64
+          - os: windows-latest
+            target: --win --x64 --arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - name: The tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        shell: bash
+        run: test "desktop-v$(node -p 'require("./package.json").version')" = "${GITHUB_REF_NAME}"
+      - name: Build
+        # Without a Developer ID, sign ad hoc: Apple silicon refuses to run unsigned code.
+        run: npx electron-builder ${{ matrix.target }} --publish never ${{ runner.os == 'macOS' && secrets.MAC_CERT_P12_BASE64 == '' && '-c.mac.identity=-' || '' }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.MAC_CERT_P12_BASE64 != '' || secrets.WIN_CERT_PFX_BASE64 != '' }}
+          CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CERT_P12_BASE64 || secrets.WIN_CERT_PFX_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CERT_PASSWORD || secrets.WIN_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Report signing
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            for app in dist/mac*/Persona.app; do codesign -dv --verbose=2 "$app" 2>&1 | grep -E "Authority|Signature|flags" || true; done
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: persona-${{ runner.os }}
+          if-no-files-found: error
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
+            desktop/dist/*.exe
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'NOTES'
+          Persona, your PERSUNA assistant, over your whole screen.
+
+          **Mac:** pick `mac-arm64` for Apple silicon (M1 and later) or `mac-x64` for Intel. Open the `.dmg` and drag Persona to Applications.
+          **Windows:** run the `.exe` (`x64` for most PCs, `arm64` for Arm laptops).
+
+          The first time Persona watches, macOS asks for Screen Recording permission. Persona only watches while you have watching turned on.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --title "Persona Desktop ${GITHUB_REF_NAME#desktop-v}" --notes-file notes.md

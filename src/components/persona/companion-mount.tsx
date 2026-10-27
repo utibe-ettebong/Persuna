@@ -5,9 +5,11 @@ import { Companion } from "./companion";
 export async function CompanionMount({
   userId,
   standalone = false,
+  overlay = false,
 }: {
   userId: string;
   standalone?: boolean;
+  overlay?: boolean;
 }) {
   const persona = await companion(userId);
   return (
@@ -20,6 +22,7 @@ export async function CompanionMount({
       wrapupDay={persona.profile.wrapupDay}
       skills={persona.skills}
       standalone={standalone}
+      overlay={overlay}
       messages={persona.messages.map((m) => ({
         id: m.id,
         role: m.role,

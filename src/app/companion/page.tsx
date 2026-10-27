@@ -5,17 +5,21 @@ import { requireUser } from "@/lib/auth/session";
 export const metadata: Metadata = { title: "Companion" };
 export const dynamic = "force-dynamic";
 
+type Props = { searchParams: Promise<{ overlay?: string }> };
+
 /**
- * Persona on its own, filling the window. The desktop app loads this page in
- * a small always-on-top window; it also works in a narrow browser window.
+ * Persona on its own page. With ?overlay=1 (Persona Desktop) it roams a
+ * see-through layer over the whole screen; otherwise it fills a narrow
+ * window as a column.
  */
-export default async function CompanionPage() {
-  const user = await requireUser("/companion");
+export default async function CompanionPage({ searchParams }: Props) {
+  const { overlay } = await searchParams;
+  const user = await requireUser(overlay ? "/companion?overlay=1" : "/companion");
   return (
     <main className="h-screen">
-      {/* Lets the desktop app's see-through window show the desktop behind Persona. */}
+      {/* See-through, so the desktop shows behind Persona. */}
       <style>{"html,body{background:transparent!important}"}</style>
-      <CompanionMount userId={user.id} standalone />
+      <CompanionMount userId={user.id} standalone={!overlay} overlay={Boolean(overlay)} />
     </main>
   );
 }
