@@ -1,0 +1,72 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { z } from "zod";
+import { attempt, uuidField, type ActionState } from "@/lib/action-state";
+import { readUploadedText } from "@/lib/docs/read-file";
+import { createJob, reviewJob, setTrustLevel } from "@/lib/jobs/service";
+import { createModelClient, createTranscriber } from "@/lib/models";
+import { readAudio } from "@/lib/models/transcribe";
+import { getSkillBySlug, proposeCorrectionFromJob } from "@/lib/skill/service";
+
+export async function createJobAction(_: ActionState, form: FormData): Promise<ActionState> {
+  return attempt(async () => {
+    const skillId = uuidField.parse(form.get("skillId"));
+    // A voice note is transcribed and becomes the job's input.
+    const audio = readAudio(form.get("audio"));
+    const input = audio
+      ? (await createTranscriber().transcribe(audio, audio.name)).text
+      : ((await readUploadedText(form.get("inputFile"))) ?? String(form.get("inputText") ?? ""));
+    if (!input.trim()) throw new Error("Paste the notes, upload a file or record a voice note.");
+    const job = await createJob(createModelClient(), {
+      skillId,
+      origin: "owner",
+      requesterName: "Owner",
+      input,
+    });
+    revalidatePath("/jobs");
+    return `/jobs/${job.id}`;
+  });
+}
+
+const reviewForm = z.object({
+  jobId: uuidField,
+  intent: z.enum(["approve", "reject"]),
+  finalOutput: z.string().max(200_000).optional(),
+});
+
+export async function reviewJobAction(_: ActionState, form: FormData): Promise<ActionState> {
+  return attempt(async () => {
+    const { jobId, intent, finalOutput } = reviewForm.parse(Object.fromEntries(form));
+    await reviewJob(jobId, intent, finalOutput);
+    revalidatePath("/jobs");
+    revalidatePath("/earnings");
+    return `/jobs/${jobId}`;
+  });
+}
+
+export async function teachFromJobAction(_: ActionState, form: FormData): Promise<ActionState> {
+  return attempt(async () => {
+    const jobId = uuidField.parse(form.get("jobId"));
+    const reason = z
+      .string()
+      .max(500)
+      .parse(form.get("reason") ?? "");
+    const correction = await proposeCorrectionFromJob(createModelClient(), jobId, reason);
+    return `/corrections/${correction.id}`;
+  });
+}
+
+export async function setTrustLevelAction(_: ActionState, form: FormData): Promise<ActionState> {
+  return attempt(async () => {
+    const slug = z
+      .string()
+      .regex(/^[a-z0-9-]+$/)
+      .parse(form.get("slug"));
+    const level = z.coerce.number().int().min(0).max(2).parse(form.get("intent")) as 0 | 1 | 2;
+    const skill = await getSkillBySlug(slug);
+    await setTrustLevel(skill.id, level);
+    revalidatePath(`/skills/${slug}/trust`);
+    return `/skills/${slug}/trust`;
+  });
+}

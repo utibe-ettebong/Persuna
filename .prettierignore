@@ -1,0 +1,7 @@
+.next
+node_modules
+drizzle/meta
+package-lock.json
+data
+AGENTS.md
+.gstack

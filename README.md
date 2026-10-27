@@ -1,2 +1,187 @@
-# Persuna
+# PERSUNA
 
+Train a personal AI agent on how you actually do your work, from your own before-and-after examples. The agent drafts, you approve, and every correction makes the next draft closer to yours.
+
+This repository is the hackathon build. The first skill is turning raw meeting notes into finished minutes.
+
+## Pages
+
+- `/`: the public landing page (open without the app password).
+- `/skills`, `/jobs`, `/market`, `/earnings`, `/audit`: the studio, behind `APP_PASSWORD` in production.
+- `/approvals/<token>`: an employer's approval link (open; the token is the credential).
+
+The design follows a framed, rule-drawn system: an off-white page inside vertical rules, mono uppercase labels and buttons (DM Mono), display type in Instrument Sans, one purple brand colour, plum bands, and diagonal hatching in empty space. Tokens live in `src/app/globals.css`; shared pieces are in `src/components/ui.tsx` and `src/components/brand.tsx`.
+
+## What works
+
+**Train a skill** (Skills → a skill)
+
+1. **Name the task:** _New skill_ form.
+2. **Interview and voice:** on the _Interview_ tab, answer seven questions about how you do the task, or record a voice walkthrough (transcribed by `TRANSCRIBE_*`, Muse Voice Transcribe). Before any rules exist, your answers and transcript feed rule extraction. Afterwards they become proposed rule changes.
+3. **Add examples:** paste or upload (.md, .txt, .docx) before-and-after pairs on the _Examples_ tab, and mark each one for training or testing. Every pair is scanned for emails, phone and account numbers, links and street addresses (patterns), and for people, organisations and places (the model). Names get numbered placeholders shared across the pair's input and output: "Ada" is `[PERSON 1]` in both. You choose between saving with placeholders and confirming the data is invented.
+4. **Extract rules:** one model call turns the training pairs into a plain-language skill sheet (v1).
+5. **Edit rules:** on the _Edit rules_ tab, change, add or remove rules and the output template. Saving creates a new version.
+6. **Test:** each held-back input is drafted using the sheet and the 3 closest training examples. The draft is then scored against your real version, which gives the replication score. Drafts and your versions are shown side by side with the differences marked.
+7. **Correct:** edit a draft. Your edit becomes **proposed** rule changes, which you accept (creating a new version and re-running the tests) or reject.
+8. **Publish:** pick the version real jobs use. A version must have a test run. If it scores lower than the published one, publishing is blocked until you tick that you've reviewed it. Publishing resets the trust level to 0.
+
+**Do real work** (Jobs)
+
+- Submit an input (paste, upload, or record a voice note that is transcribed). It is drafted with the _published_ version.
+- **Self-check:** before you see it, the agent checks its draft against the input and the rules. It flags missing information, invented details, rule conflicts and unusual input, and separately flags numbers in the draft that never appear in the input. Flagged jobs always come to you.
+- **Trust levels** (_Trust_ tab): level 0 reviews everything. Level 1 auto-approves unflagged jobs and needs `TRUST_L1_MIN_JOBS` (20) owner-reviewed jobs on the published version, with `TRUST_L1_MIN_CLEAN_PERCENT` (90%) approved unchanged or with minor edits and no complaints. Level 2 spot-checks 1 in `TRUST_SPOT_CHECK_EVERY` (5) and needs `TRUST_L2_MIN_JOBS` (50) jobs at level 1 with none rejected. You climb when you choose and can step down at any time. A new published version or a renter complaint resets to 0.
+- Approve as is, edit and approve, or reject. Each approval records the edit size (none, minor up to 15% of words, or major), and the page shows the share approved unchanged or with minor edits.
+- Download the approved result as .docx or .md.
+- _Teach the skill from your edit_: proposes rule changes from a job edit. Only the rule changes and your reason are stored, never the client's text.
+- Jobs are deleted after `JOB_RETENTION_DAYS` (30 by default).
+
+**Rent it out** (skill → Listing, Marketplace, Earnings)
+
+- A listing has a price, turnaround, sample output, owner type and an ownership declaration. It can only go live with a published version that scores at least `LISTING_MIN_SCORE` (80 by default) and with ownership declared.
+- **Employer approval:** an employee listing names their employer and gets a private approval link (`/approvals/<token>`, open without the app password). The employer approves and sets their share of earnings, or declines. The listing can't go live until approved, and changing the employer starts the approval again.
+- Owners can offer **guaranteed owner review** for an extra fee. Those jobs always come to the owner, whatever the trust level.
+- Renters submit a task with their email. The listing shows the trust level ("owner-reviewed" or "auto-approved"). The owner reviews the draft like any other job, unless trust allows auto-approval. The renter sees only the approved result (rendered, plus .docx), then accepts and rates it, which releases the payment minus `PLATFORM_FEE_PERCENT` (20% by default) and any employer share. If the owner rejects the job, or the renter reports a problem, the renter is refunded and a complaint resets trust to 0.
+- **Payments:** `PAYMENTS_PROVIDER=mock` (the default) records payments without moving money. `PAYMENTS_PROVIDER=paystack` with `PAYSTACK_SECRET_KEY` and `APP_URL` sends renters to Paystack checkout. Payments are verified with Paystack's API (from the return redirect and from the signed webhook at `/api/webhooks/paystack`) before any work starts, and refunds go back through Paystack. Payouts to owners and employers are recorded on the Earnings page and settled from the Paystack dashboard; automatic transfers are not built.
+- **Audit log** (_Audit log_ in the nav, and each skill's _Activity_ tab): every skill change, proposal, publish, trust change, job decision, listing change, employer decision and payment event, with who and when. It never stores job text.
+
+### Mock models
+
+With no `EXTRACT_API_KEY` set, the app runs **offline mock models**, and a banner says so. They read the same prompts and run through the same engine, so every screen works without keys. Their drafts are rough. They follow header-label and "Always include" rules, so corrections visibly move the score. Their scores are word and section overlap, not judgement. Set the keys (or `MODEL_PROVIDER=live`) to switch to real models; `MODEL_PROVIDER=mock` forces the mock.
+
+## Stack
+
+| Layer               | Choice                                                                         |
+| ------------------- | ------------------------------------------------------------------------------ |
+| App (UI and server) | Next.js 16 (App Router, server actions), TypeScript, Tailwind CSS 4            |
+| Database            | Postgres via Drizzle ORM; migrations in `drizzle/`                             |
+| Models              | A thin gateway over OpenAI-compatible chat-completions endpoints, one per role |
+| Validation          | Zod for env, model output and form input                                       |
+| Tests               | Vitest                                                                         |
+| Hosting             | Railway (web service plus Postgres), configured in `.railway/railway.ts`       |
+
+| Role       | Used for                                               | Intended model              |
+| ---------- | ------------------------------------------------------ | --------------------------- |
+| `extract`  | Rule extraction; turning corrections into rule changes | Muse Spark (Meta Model API) |
+| `draft`    | Drafting outputs                                       | Muse Spark Open on Baseten  |
+| `evaluate` | Scoring drafts against held-back examples              | Muse Spark Open on Modal    |
+
+> Before you rely on these roles, check the provider docs: confirm the exact model IDs and that each endpoint accepts OpenAI-style `POST {base}/chat/completions` requests. If one doesn't, add an adapter in `src/lib/models/gateway.ts`. Nothing else needs to change.
+
+## Layout
+
+```
+data/skills/meeting-minutes/     skill.json + pairs/train and pairs/test (*.input.md / *.output.md)
+drizzle/                         generated SQL migrations (commit these)
+scripts/skill.ts                 CLI for the training loop
+scripts/migrate.mjs              applies migrations (Railway pre-deploy)
+src/lib/skill/engine.ts          the loop itself, with no storage: extract, draft, score, correct
+src/lib/skill/service.ts         skills, pairs, versions, test runs, corrections, publishing (Postgres)
+src/lib/skill/prompts.ts         every prompt in one place
+src/lib/skill/redact.ts          identifier scan for example pairs
+src/lib/jobs/                    real jobs: draft, review, edit size, retention
+src/lib/market/                  listings, rent, mock escrow, payouts
+src/lib/docs/                    .docx export and .md/.txt/.docx upload reading
+src/lib/models/gateway.ts        live model client: retries, timeouts, usage tracking
+src/lib/models/mock.ts           offline mock models
+src/app/actions/                 server actions (skills, jobs, market)
+src/app/(site)/                  public pages: landing, employer approvals
+src/app/(studio)/                studio pages: skills, examples, rules, runs, corrections, jobs, market, earnings, audit
+src/proxy.ts                     basic-auth gate (APP_PASSWORD)
+```
+
+The overall score is computed in code from the evaluator's five criterion scores (structure, content, cuts, tone, naming), using the weights in `src/lib/skill/score.ts`. That keeps scores comparable across versions. Example retrieval uses deterministic TF-IDF similarity, so a score changes only when the rules change.
+
+## Run locally
+
+Requires Node 22.12+ and a Postgres database.
+
+```bash
+npm install
+cp .env.example .env            # set DATABASE_URL; leave EXTRACT_* empty to use mock models
+createdb persuna
+npm run db:migrate
+npm run skill -- import         # loads data/skills/meeting-minutes
+npm run dev                     # http://localhost:3000 (landing), /skills (studio)
+```
+
+### Training loop from the terminal
+
+```bash
+npm run skill -- extract        # v1 from the training pairs
+npm run skill -- test           # draft + score the held-back pairs; prints result ids
+npm run skill -- correct --result <id> --file my-edit.md --reason "We never abbreviate names"
+                                # proposes rule changes; add --yes to accept and re-test
+npm run skill -- publish        # publish the working version (--version N, --yes to accept a lower score)
+npm run skill -- report         # score per version (* working, P published)
+```
+
+The UI does the same steps through the same functions.
+
+## Adding your pairs
+
+See [data/skills/meeting-minutes/README.md](data/skills/meeting-minutes/README.md). **The repository is public**, so use only invented or fully anonymised meetings. Delete the `sample-*` pairs once yours are in.
+
+## Deploy to Railway
+
+The project is defined as code in `.railway/railway.ts`: a `web` service built with Railpack and a `postgres` database. Migrations run as the pre-deploy command, and `/api/health` is the healthcheck. Railway's older `railway.json` config isn't supported for new services, so don't add one.
+
+```bash
+railway login
+railway link                    # or create a project in the dashboard first
+railway config plan             # preview
+railway config apply
+```
+
+Then set secrets on the `web` service. They are never committed: `preserve()` in the config keeps whatever you set in Railway.
+
+```bash
+railway variable set --service web EXTRACT_BASE_URL=... EXTRACT_MODEL=...
+railway variable set --service web --stdin EXTRACT_API_KEY   # paste the key, keeps it out of shell history
+railway variable set --service web --stdin APP_PASSWORD
+```
+
+Add `DRAFT_*` and `EVAL_*` the same way when those endpoints are ready. Until then, the drafting and evaluation steps use the `EXTRACT_*` settings. Generate a public domain in the service's **Networking** settings. Load your pairs into the Railway database from your machine with `railway run npm run skill -- import`.
+
+In production the app refuses all requests until `APP_PASSWORD` is set: every button spends model credits.
+
+## Checks
+
+```bash
+npm run check                   # lint, typecheck, format check, tests
+npm run build
+```
+
+CI runs the same checks on every push and pull request (`.github/workflows/ci.yml`).
+
+## Not in this build yet
+
+Separate owner, renter and employer accounts (today one `APP_PASSWORD` covers the app; only employer approval links and the Paystack webhook are open). Automatic payouts by Paystack transfer, plus Flutterwave and Stripe. Sending the employer link by email (you copy it from the Listing tab). WhatsApp and email delivery. Isolated job sandboxes. See the concept document for the full design.
+
+**To verify before relying on it:** the webhook check uses Paystack's documented scheme (HMAC-SHA512 of the raw body with your secret key, in `x-paystack-signature`), but it couldn't be checked against Paystack's docs page during the build. Test it with a test-mode key. The transcription endpoint assumes Muse Voice Transcribe accepts OpenAI-style `/audio/transcriptions` requests.
+
+### Walkthrough capture (later phase)
+
+An opt-in way for the agent to learn from how the owner works on screen, as a third source of rules next to examples and voice. It is **never** always-on watching: skills are captured deliberately, and the owner approves everything the agent learns.
+
+**Why not continuous screen watching**
+
+- Anything on screen gets captured, including client documents, messages and account details. That breaks "rent the method, never the material".
+- It is personal-data processing under the Nigeria Data Protection Act 2023, including other people's data that appears on screen. Employers and clients may forbid it.
+- It contradicts the promise that the owner sees and controls everything the skill learned.
+- For document skills such as minutes, the before-and-after pair already shows the result. Keystrokes and tab switching add noise, not signal.
+
+**Where it helps:** process skills, where _how_ the work is done matters as much as the result. Examples: reconciling a spreadsheet against bank statements, or a workflow that moves across several apps.
+
+**How it would work**
+
+1. The owner starts a recording for one named task, choosing a single window rather than the whole screen, and narrates as they work.
+2. The narration is transcribed (Muse Voice Transcribe) and key frames are described by a vision-capable model.
+3. A redaction pass strips or blurs names, numbers and other identifiers in the frames and transcript.
+4. The output is a list of **proposed** rules and steps, which the owner accepts or rejects like any other rule change. Accepted changes create a new skill version, which is re-tested before use.
+5. The raw recording is deleted once processed. Only the approved rules are kept.
+
+**Open questions:** whether the chosen models accept image or video input; how to bound recording length and cost; and where processing runs, so that raw frames never leave isolated, short-lived storage.
+
+## License
+
+MIT
