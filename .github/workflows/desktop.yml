@@ -65,8 +65,10 @@ jobs:
             echo "SIGN_ARGS=" >> "$GITHUB_ENV"
           else
             if [ "$RUNNER_OS" = macOS ]; then
-              # Without a Developer ID, sign ad hoc: Apple silicon refuses to run unsigned code.
-              echo "SIGN_ARGS=-c.mac.identity=-" >> "$GITHUB_ENV"
+              # Without a Developer ID, sign ad hoc (Apple silicon refuses unsigned code), and
+              # without the hardened runtime: its library validation needs a Team ID, which an
+              # ad hoc signature doesn't have, so the app would crash at launch.
+              echo "SIGN_ARGS=-c.mac.identity=- -c.mac.hardenedRuntime=false" >> "$GITHUB_ENV"
             else
               echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
             fi
@@ -80,7 +82,7 @@ jobs:
           # Sign pull-request builds too, so their test copies behave like releases.
           # Secrets never reach pull requests from forks, so this exposes nothing.
           CSC_FOR_PULL_REQUEST: true
-      - name: Check the Mac apps are validly signed
+      - name: Check the Mac apps are signed and actually start
         if: runner.os == 'macOS'
         run: |
           for app in dist/mac*/Persuna.app; do
@@ -88,6 +90,14 @@ jobs:
             codesign --verify --deep --strict --verbose=2 "$app"
             codesign -dv "$app" 2>&1 | grep -E "Authority|Signature|flags"
           done
+          # A valid signature isn't enough: start the Apple silicon app (this runner's chip)
+          # far enough to load Electron, which fails if macOS refuses its libraries.
+          ELECTRON_RUN_AS_NODE=1 "dist/mac-arm64/Persuna.app/Contents/MacOS/Persuna" \
+            -e 'console.log("Persuna starts: Electron", process.versions.electron)'
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            ELECTRON_RUN_AS_NODE=1 arch -x86_64 "dist/mac/Persuna.app/Contents/MacOS/Persuna" \
+              -e 'console.log("Intel build starts: Electron", process.versions.electron)'
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: persuna-${{ runner.os }}
@@ -115,7 +125,7 @@ jobs:
           cat > notes.md <<'NOTES'
           Persuna, your AI assistant, over your whole screen.
 
-          **Mac:** pick `mac-arm64` for Apple silicon (M1 and later) or `mac-x64` for Intel. Open the `.dmg` and drag Persuna to Applications.
+          **Mac:** pick `mac-arm64` for Apple silicon (M1 and later) or `mac-x64` for Intel. Open the `.dmg` and drag Persuna to Applications. The first time, macOS can't check it (it isn't signed with an Apple certificate yet): open System Settings → Privacy & Security and click **Open Anyway**.
           **Windows:** run the `.exe` (`x64` for most PCs, `arm64` for Arm laptops).
 
           The first time Persuna watches, macOS asks for Screen Recording permission. Persuna only watches while you have watching turned on.

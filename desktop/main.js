@@ -102,7 +102,11 @@ function createOverlay() {
   // Persona never shows up in screenshots or in what it watches.
   overlay.setContentProtection(true);
   overlay.loadURL(`${ORIGIN}/companion?overlay=1`);
-  overlay.once("ready-to-show", () => overlay?.showInactive());
+  // Show the layer only once it holds Persuna. Signed out, it lands on the
+  // sign-in page, which must never cover the screen (clicks pass through it).
+  overlay.once("ready-to-show", () => {
+    if (/^\/companion/.test(pathOf(overlay?.webContents.getURL() ?? ""))) overlay?.showInactive();
+  });
 
   overlay.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) void shell.openExternal(url);
@@ -116,7 +120,11 @@ function createOverlay() {
   });
   // Signed out: the server redirects to /sign-in. That needs a normal window.
   overlay.webContents.on("did-navigate", (_e, url) => {
-    if (/^\/sign-(in|up)/.test(pathOf(url))) openSignIn(url);
+    if (/^\/sign-(in|up)/.test(pathOf(url))) {
+      overlay?.hide();
+      overlay?.loadURL("about:blank");
+      openSignIn(url);
+    }
   });
   overlay.on("closed", () => (overlay = null));
 }
@@ -135,8 +143,10 @@ function openSignIn(url) {
   signIn.webContents.on("did-navigate", (_e, next) => {
     if (/^\/companion/.test(pathOf(next))) {
       signIn?.close();
-      overlay?.loadURL(`${ORIGIN}/companion?overlay=1`);
-      overlay?.showInactive();
+      void overlay?.loadURL(`${ORIGIN}/companion?overlay=1`).then(() => {
+        overlay?.showInactive();
+        rebuildTray();
+      });
     }
   });
   signIn.webContents.setWindowOpenHandler(({ url: link }) => {

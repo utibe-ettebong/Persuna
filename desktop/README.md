@@ -41,9 +41,9 @@ Locally: `npm run dist:mac` (both Mac chips) or `npm run dist:win`.
 
 ## Signing (the platform standard)
 
-Without certificates the builds are unsigned (Mac builds are signed ad hoc so they run on Apple silicon). People then see a warning the first time:
+Without certificates the builds are unsigned (Mac builds are signed ad hoc so they run on Apple silicon, and without the hardened runtime, which only works with a Developer ID). People then see a warning the first time:
 
-- **Mac:** "Persuna can't be opened". Right-click Persuna in Applications, choose Open, then Open again.
+- **Mac:** macOS says it can't check Persuna. Click Done, open System Settings → Privacy & Security, scroll down and click **Open Anyway** next to Persuna, then confirm. (On macOS 15 and later, right-click → Open no longer does this.)
 - **Windows:** SmartScreen warns. Choose More info, then Run anyway.
 
 To remove those warnings, add these repository secrets (Settings → Secrets and variables → Actions); the workflow signs and notarizes by itself:
