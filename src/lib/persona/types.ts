@@ -33,6 +33,12 @@ export const personaAction = z.discriminatedUnion("type", [
   z.object({ type: z.literal("coach"), skill: z.string().trim().max(80).nullish() }),
   /** The user asked for a summary of their day. */
   z.object({ type: z.literal("wrap_up") }),
+  /** The user wants to see a page: Persona takes them there. */
+  z.object({
+    type: z.literal("open_page"),
+    page: z.enum(["persona", "todos", "skills", "skill", "jobs", "market", "earnings", "audit"]),
+    skill: z.string().trim().max(80).nullish(),
+  }),
   /** The user said how they want to be spoken to. */
   z.object({
     type: z.literal("set_tone"),
