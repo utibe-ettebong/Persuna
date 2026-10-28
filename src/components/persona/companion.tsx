@@ -1,9 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { createPortal } from "react-dom";
 import {
   personaChatAction,
   personaCheckInAction,
@@ -32,6 +30,7 @@ import { PersonaOrb, type OrbState } from "./orb";
 import { MAX_LOOKS, startWatching, type Watcher } from "./screen-watch";
 import { TaskComposer } from "./task-composer";
 import {
+  chime,
   speak,
   startConversation,
   stopSpeaking,
@@ -62,7 +61,7 @@ export interface CompanionProps {
   setupDone: boolean;
   wrapupDay: string | null;
   skills: { slug: string; name: string; published: boolean }[];
-  /** Fills its window: the /companion page in a browser. */
+  /** On its own page (/companion in a browser tab). */
   standalone?: boolean;
   /** Inside Persona Desktop's see-through layer over the whole screen. */
   overlay?: boolean;
@@ -74,7 +73,14 @@ const ORB = 88;
 
 /** What Persona Desktop's preload exposes to the page. */
 type DesktopWindow = Window & {
-  personaDesktop?: { overlay: boolean; setInteractive(on: boolean): void; hide(): void };
+  personaDesktop?: {
+    overlay: boolean;
+    setInteractive(on: boolean): void;
+    hide(): void;
+    /** The desktop app's global shortcut (or tray item) was used to call Persuna. */
+    onCall?(handler: () => void): void;
+    shortcut?: string;
+  };
 };
 /** Gap between Persona and the thing it perches beside. */
 const PERCH_GAP = 14;
@@ -89,9 +95,15 @@ const WRAP_UP_HOUR = 17;
 const REMINDER_POLL_MS = 30_000;
 /** With no input on the page for this long, Persona dozes until you move. */
 const DOZE_MS = 5 * 60_000;
+/** A call ends by itself after this long with nobody talking. */
+const CALL_IDLE_MS = 45_000;
 
-/** Inside the fading conversation: no backdrop blur (it shows as a box under the fade). */
 const card = "bg-card/95 shadow-[0_10px_34px_-14px_rgba(29,22,29,0.35)] ring-1 ring-foreground/5";
+
+/** The shortcut that calls Persuna: ⌘⇧Space on a Mac, Ctrl+Shift+Space elsewhere. */
+function isCallKey(e: KeyboardEvent) {
+  return e.code === "Space" && e.shiftKey && (e.metaKey || e.ctrlKey) && !e.altKey;
+}
 
 export const glass =
   "bg-card/75 backdrop-blur-xl shadow-[0_10px_40px_-12px_rgba(29,22,29,0.35)] ring-1 ring-foreground/5";
@@ -113,32 +125,26 @@ function store(key: string, value: unknown) {
 }
 
 /**
- * Persona on screen. Not a chat box: a living drop that hovers over the page,
- * looks at what you do, talks back out loud, and listens hands-free when you
- * turn on conversation. Its words float beside it as captions; open it and
- * the conversation flows above it, fading out at the top. It watches one
- * window only after you choose one; otherwise it just hovers, and dozes
- * when you leave.
+ * Persona on screen. Not a chat: a living drop that hovers over the page (or,
+ * in Persona Desktop, over every app). Tap it, or press the call shortcut, and
+ * it listens hands-free and answers out loud, its words shown for a moment
+ * beside it. Right-click it for the few other things it does. Cards appear
+ * only when it needs a decision. The full conversation lives on My Persuna.
  */
 export function Companion(props: CompanionProps) {
-  // On the desktop there's no panel to open: Persuna is just itself, with captions.
-  const [open, setOpen] = useState(
-    !props.overlay && (Boolean(props.standalone) || !props.setupDone),
-  );
   const [typing, setTyping] = useState(false);
+  const [menu, setMenu] = useState(false);
   // Building a skill by conversation: the example card and the publish confirmation.
   const [example, setExample] = useState<{ slug: string; name: string } | null>(null);
   const [confirm, setConfirm] = useState<PublishConfirm | null>(null);
   const [confirmLower, setConfirmLower] = useState(false);
   const offFocusAsked = useRef(false);
-  const [heard, setHeard] = useState<string | null>(null);
   const [dismissedJob, setDismissedJob] = useState<string | null>(null);
   const [setupDone, setSetupDone] = useState(props.setupDone);
   const [name, setName] = useState(props.name);
   const [look, setLook] = useState(props.avatar);
   const [task, setTask] = useState<{ skill: string | null } | null>(null);
   const [messages, setMessages] = useState<CompanionMessage[]>(props.messages);
-  const [focus, setFocus] = useState(props.focus);
   const [focusSkill, setFocusSkill] = useState(props.focusSkill);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState<Busy>("idle");
@@ -155,26 +161,23 @@ export function Companion(props: CompanionProps) {
   const [tilt, setTilt] = useState(0);
   const [gaze, setGaze] = useState<{ x: number; y: number } | null>(null);
   const [setupStep, setSetupStep] = useState<SetupStep>("name");
-  const [setupMessages, setSetupMessages] = useState<CompanionMessage[]>([]);
   const [watching, setWatching] = useState(false);
   const [askWatch, setAskWatch] = useState(false);
   const [looks, setLooks] = useState(0);
   const [watchNote, setWatchNote] = useState<string | null>(null);
-  const [pip, setPip] = useState<Window | null>(null);
   const [wakeOn, setWakeOn] = useState(false);
   const [askWake, setAskWake] = useState(false);
   const router = useRouter();
   const watcher = useRef<Watcher | null>(null);
   const conversation = useRef<Conversation | null>(null);
   const wake = useRef<WakeListener | null>(null);
-  const stream = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean }>(null);
   const home = useRef<{ x: number; y: number } | null>(null);
   const backHome = useRef(0);
   const talkingNow = useRef(false);
-  // Lines queued or being spoken, and the message whose words are appearing as spoken.
+  // Lines queued or being spoken.
   const speaking = useRef(0);
-  const [revealing, setRevealing] = useState<{ id: string; shown: string } | null>(null);
+  const lastHeard = useRef(0);
   // The desktop app lets Persuna speak before any click (see desktop/main.js).
   const overlayRef = useRef(Boolean(props.overlay));
   // The first meeting's answers and transcript. Refs, because `send` (which
@@ -194,14 +197,12 @@ export function Companion(props: CompanionProps) {
     voiceOn,
     busy,
     talking,
-    open,
-    pip,
     name,
     focusName: focusSkill?.name ?? null,
   });
   useEffect(() => {
-    live.current = { voiceOn, busy, talking, open, pip, name, focusName: focusSkill?.name ?? null };
-  }, [voiceOn, busy, talking, open, pip, name, focusSkill]);
+    live.current = { voiceOn, busy, talking, name, focusName: focusSkill?.name ?? null };
+  }, [voiceOn, busy, talking, name, focusSkill]);
 
   /* ---------- Speaking ---------- */
 
@@ -259,32 +260,22 @@ export function Companion(props: CompanionProps) {
     if (!talkingNow.current) return;
     stopSpeaking();
     speaking.current = 0;
-    setRevealing(null);
     talkingNow.current = false;
     setTalking(false);
     setLevel(0);
   }, []);
 
   /**
-   * Persona says something. Out loud when its voice is on, with the words
-   * appearing as they're spoken (in the caption beside it, or in the
-   * conversation for message `id`); all at once when it's silent.
+   * Persona says something: out loud when its voice is on, its words shown
+   * beside it as they're spoken; all at once when it's silent.
    */
   const express = useCallback(
-    (line: string, lead = "", id?: string) => {
-      const asCaption = !live.current.open && !live.current.pip;
+    (line: string, lead = "") => {
       // If you're mid-sentence, Persona says so as it cuts in; your words so far are kept.
       const cutting = conversation.current?.userSpeaking() ? CUT_IN : "";
-      if (live.current.voiceOn) {
-        if (id) setRevealing({ id, shown: "" });
-        if (asCaption) setCaption(null);
-      }
-      void sayAloud(`${lead || cutting}${line}`, (soFar) => {
-        if (id) setRevealing((r) => (r?.id === id ? { id, shown: soFar } : r));
-        if (asCaption) showCaption(soFar);
-      }).then((spoke) => {
-        if (id) setRevealing((r) => (r?.id === id ? null : r));
-        if (!spoke && asCaption) showCaption(line);
+      if (live.current.voiceOn) setCaption(null);
+      void sayAloud(`${lead || cutting}${line}`, showCaption).then((spoke) => {
+        if (!spoke) showCaption(line);
       });
     },
     [sayAloud, showCaption],
@@ -335,7 +326,7 @@ export function Companion(props: CompanionProps) {
       if (res.ok && res.value && props.setupDone) {
         const greeting = res.value;
         setMessages((all) => [...all, { ...greeting, role: "assistant" }]);
-        express(greeting.content, "", greeting.id);
+        express(greeting.content);
       }
     });
     return () => {
@@ -371,9 +362,9 @@ export function Companion(props: CompanionProps) {
           ...all,
           { ...n.message, role: "assistant", link: { href: n.href, label: "Take a look" } },
         ]);
-        express(n.message.content, "", n.message.id);
+        express(n.message.content);
         // If the thing it's talking about is on screen, go and point at it.
-        if (!live.current.open) perchBy(document.querySelector(`main a[href="${n.href}"]`));
+        perchBy(document.querySelector(`main a[href="${n.href}"]`));
       }
     };
     const timer = setInterval(() => void check(), REMINDER_POLL_MS);
@@ -406,10 +397,6 @@ export function Companion(props: CompanionProps) {
     };
   }, [setupDone, props.wrapupDay, showCaption]);
 
-  useEffect(() => {
-    stream.current?.scrollTo({ top: stream.current.scrollHeight, behavior: "smooth" });
-  }, [messages, open, pip, task, askWatch, askWake]);
-
   /* ---------- Talking with Persona ---------- */
 
   const send = useCallback(
@@ -422,9 +409,6 @@ export function Companion(props: CompanionProps) {
       setError(null);
       setCaption(null);
       setText("");
-      // On the desktop, briefly show what you said beside Persuna.
-      setHeard(body);
-      window.setTimeout(() => setHeard((h) => (h === body ? null : h)), 5000);
       const pending: CompanionMessage = {
         id: `pending-${Date.now()}`,
         role: "user",
@@ -447,12 +431,10 @@ export function Companion(props: CompanionProps) {
         { ...mine, role: "user" },
         { ...reply, role: "assistant", link: res.value.link, switchTo: res.value.switchTo },
       ]);
-      setFocus(res.value.focus.text);
       setFocusSkill(res.value.focus.skill);
-      if (res.value.task) {
-        setTask(res.value.task);
-        setOpen(true);
-      }
+      if (res.value.task) setTask(res.value.task);
+      if (res.value.watch === "start" && !watcher.current) void startWatch();
+      if (res.value.watch === "stop") watcher.current?.stop();
       if (res.value.example) setExample(res.value.example.skill);
       if (res.value.confirm) {
         setConfirm(res.value.confirm);
@@ -460,9 +442,7 @@ export function Companion(props: CompanionProps) {
       }
       if (res.value.navigate) {
         const href = res.value.navigate;
-        // Get out of the way, fly to the top of the page, open it, look at its heading.
-        setOpen(false);
-        live.current.open = false; // so the reply shows as a caption right away
+        // Fly to the top of the page, open it, look at its heading.
         flyTo({ x: 24, y: 72 }, -1);
         window.setTimeout(() => router.push(href), 600);
         window.setTimeout(() => perchBy(document.querySelector("main h1")), 1600);
@@ -474,7 +454,7 @@ export function Companion(props: CompanionProps) {
       ) {
         void Notification.requestPermission();
       }
-      express(reply.content, lead, reply.id);
+      express(reply.content, lead);
     },
     // setupReply, flyTo and perchBy read live state through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -483,6 +463,7 @@ export function Companion(props: CompanionProps) {
 
   const hear = useCallback(
     async (audio: Blob, end: UtteranceEnd = "pause") => {
+      lastHeard.current = Date.now();
       setBusy("hearing");
       try {
         const wav = await toTranscribableWav(audio, "persona");
@@ -501,14 +482,17 @@ export function Companion(props: CompanionProps) {
     [send],
   );
 
+  function endConversation() {
+    if (!conversation.current) return;
+    conversation.current.stop();
+    conversation.current = null;
+    setConversing(false);
+    chime(false);
+  }
+
   async function toggleConversation() {
     setError(null);
-    if (conversation.current) {
-      conversation.current.stop();
-      conversation.current = null;
-      setConversing(false);
-      return;
-    }
+    if (conversation.current) return endConversation();
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       setError("This browser can't use the microphone. Type instead.");
       return;
@@ -521,12 +505,61 @@ export function Companion(props: CompanionProps) {
         busy: () => live.current.busy !== "idle",
         onBargeIn: interrupt,
       });
+      lastHeard.current = Date.now();
       setConversing(true);
-      if (!live.current.open) setOpen(true);
+      chime(true);
     } catch {
       setError("Microphone access was blocked.");
     }
   }
+
+  /** Tap, shortcut or tray: stop Persuna talking, or start (or end) a conversation. */
+  function call() {
+    setMenu(false);
+    lastInput.current = Date.now();
+    setDozing(false);
+    if (talkingNow.current) return interrupt();
+    setCaption(null);
+    void toggleConversation();
+  }
+
+  // A conversation ends by itself when nobody has said anything for a while.
+  useEffect(() => {
+    if (!conversing) return;
+    const timer = window.setInterval(() => {
+      const idle = live.current.busy === "idle" && !talkingNow.current;
+      if (idle && Date.now() - lastHeard.current > CALL_IDLE_MS) endConversation();
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [conversing]);
+
+  // A click anywhere else closes the menu.
+  useEffect(() => {
+    if (!menu) return;
+    const close = (e: PointerEvent) => {
+      if (!(e.target as HTMLElement).closest?.("[role=menu]")) setMenu(false);
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [menu]);
+
+  // The call shortcut on the page, and the desktop app's global one.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (isCallKey(e)) {
+        e.preventDefault();
+        call();
+      } else if (e.key === "Escape") {
+        setMenu(false);
+        if (talkingNow.current) interrupt();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    (window as DesktopWindow).personaDesktop?.onCall?.(call);
+    return () => window.removeEventListener("keydown", onKey);
+    // call reads live state through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ---------- Wake word ---------- */
 
@@ -538,7 +571,6 @@ export function Companion(props: CompanionProps) {
         onWake: (rest) => {
           lastInput.current = Date.now();
           setDozing(false);
-          setOpen(true);
           if (rest.split(/\s+/).filter(Boolean).length >= 2) void send(rest);
           else {
             void sayAloud("Yes?");
@@ -587,7 +619,6 @@ export function Companion(props: CompanionProps) {
   function addSetupMessage(m: Omit<CompanionMessage, "id" | "kind">) {
     const log = setupDraft.current.log;
     log.push({ ...m, id: `setup-${log.length}`, kind: "chat" });
-    setSetupMessages([...log]);
   }
 
   function personaSays(line: string) {
@@ -720,7 +751,7 @@ export function Companion(props: CompanionProps) {
     let leave = 0;
     const onFocus = (e: FocusEvent) => {
       const el = e.target as HTMLElement;
-      if (live.current.open || el.closest("[data-persona]")) return;
+      if (el.closest("[data-persona]")) return;
       if (!el.matches("input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea"))
         return;
       window.clearTimeout(leave);
@@ -749,14 +780,7 @@ export function Companion(props: CompanionProps) {
     };
     const wander = () => {
       const s = live.current;
-      if (
-        !s.open &&
-        !s.pip &&
-        s.busy === "idle" &&
-        !s.talking &&
-        !drag.current &&
-        !document.hidden
-      ) {
+      if (s.busy === "idle" && !s.talking && !drag.current && !document.hidden) {
         const w = window.innerWidth;
         const h = window.innerHeight;
         const edge = Math.floor(Math.random() * 3);
@@ -781,7 +805,7 @@ export function Companion(props: CompanionProps) {
   useEffect(() => {
     if (!home.current) return;
     const t = window.setTimeout(() => {
-      if (!live.current.open) perchBy(document.querySelector("main h1"), 3500);
+      perchBy(document.querySelector("main h1"), 3500);
     }, 700);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -902,29 +926,11 @@ export function Companion(props: CompanionProps) {
     express(line);
   }
 
-  /* ---------- Floating window and dragging ---------- */
-
-  async function popOut() {
-    const api = (
-      window as unknown as {
-        documentPictureInPicture?: { requestWindow(o: object): Promise<Window> };
-      }
-    ).documentPictureInPicture;
-    if (!api) return;
-    const win = await api.requestWindow({ width: 380, height: 600 });
-    // Bring the page's styles along so the floating window looks the same.
-    document.querySelectorAll('link[rel="stylesheet"], style').forEach((node) => {
-      win.document.head.appendChild(node.cloneNode(true));
-    });
-    win.document.documentElement.className = document.documentElement.className;
-    win.document.body.className = "persona-backdrop text-foreground";
-    win.addEventListener("pagehide", () => setPip(null));
-    setOpen(false);
-    setPip(win);
-  }
+  /* ---------- Dragging ---------- */
 
   function onPointerDown(e: React.PointerEvent) {
-    if (!spot) return;
+    // Right-click opens the menu; only the main button drags or taps.
+    if (!spot || e.button !== 0) return;
     drag.current = { x: e.clientX, y: e.clientY, ox: spot.x, oy: spot.y, moved: false };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
@@ -947,20 +953,15 @@ export function Companion(props: CompanionProps) {
       // Where you put it becomes home.
       home.current = spot;
       store("persona.home", { fx: spot.x / window.innerWidth, fy: spot.y / window.innerHeight });
-    } else toggleOpen();
+    } else onTap();
   }
-  function toggleOpen() {
-    // Tapping Persona while it talks just stops it talking.
-    if (talkingNow.current) return interrupt();
-    // On the desktop, tapping Persuna starts (or stops) talking with it.
-    if (props.overlay) {
+  function onTap() {
+    // Tapping the wrap-up offer asks for it.
+    if (caption === WRAP_UP_OFFER && !talkingNow.current) {
       setCaption(null);
-      return void toggleConversation();
+      return void send("Wrap up my day");
     }
-    const wrap = caption === WRAP_UP_OFFER;
-    setCaption(null);
-    setOpen((o) => !o);
-    if (wrap) void send("Wrap up my day");
+    call();
   }
 
   /* ---------- What it looks like ---------- */
@@ -973,30 +974,25 @@ export function Companion(props: CompanionProps) {
         ? "thinking"
         : conversing
           ? "listening"
-          : dozing && !open
+          : dozing
             ? "sleeping"
             : "idle";
+  const isMac = useSyncExternalStore(
+    noSubscribe,
+    () => /Mac|iPhone|iPad/.test(navigator.platform),
+    () => true,
+  );
+  const shortcut = isMac ? "⌘⇧Space" : "Ctrl+Shift+Space";
   const status = {
-    idle: wakeOn ? `Say "Hey ${name}"` : focus ? `On ${focus}` : "Here with you",
+    idle: wakeOn ? `Say "Hey ${name}"` : `Tap or ${shortcut}`,
     listening: "Listening…",
     thinking: busy === "hearing" ? "Hearing you…" : "Thinking…",
-    speaking: "Speaking",
+    speaking: "Tap to stop",
     watching: `Watching · ${looks} look${looks === 1 ? "" : "s"}`,
     sleeping: "Dozing",
   }[orbState];
-  const pipSupported = useSyncExternalStore(
-    noSubscribe,
-    () => !props.standalone && !props.overlay && "documentPictureInPicture" in window,
-    () => false,
-  );
   const canWake = useSyncExternalStore(noSubscribe, wakeWordSupported, () => false);
-  const inDesktopApp = useSyncExternalStore(
-    noSubscribe,
-    () => /Electron/.test(navigator.userAgent),
-    () => false,
-  );
   const published = props.skills.filter((s) => s.published);
-  const column = Boolean(props.standalone || pip);
 
   // Quick choices during the first meeting: looks and first tasks.
   const setupChips = (
@@ -1047,7 +1043,7 @@ export function Companion(props: CompanionProps) {
       ...all,
       { ...res.value.message, role: "assistant", link: res.value.link },
     ]);
-    express(res.value.message.content, "", res.value.message.id);
+    express(res.value.message.content);
   }
 
   const lastMessage = messages.at(-1);
@@ -1083,7 +1079,7 @@ export function Companion(props: CompanionProps) {
             onDone={(message) => {
               setExample(null);
               setMessages((all) => [...all, message]);
-              express(message.content, "", message.id);
+              express(message.content);
             }}
           />
         </div>
@@ -1222,564 +1218,218 @@ export function Companion(props: CompanionProps) {
     </>
   );
 
-  const conversationView = (
-    <div
-      ref={stream}
-      aria-live="polite"
-      aria-label={`Conversation with ${name}`}
-      className={`persona-stream flex flex-col gap-2.5 overflow-y-auto px-1 pb-2 pt-10 ${
-        column
-          ? "min-h-0 flex-1"
-          : "max-h-[min(62vh,560px,var(--room))] w-[min(380px,calc(100vw-2rem))]"
-      }`}
-    >
-      {!setupDone ? (
-        <>
-          {setupMessages.map((m) => (
-            <Bubble key={m.id} role={m.role}>
-              {m.content}
-            </Bubble>
-          ))}
-          {setupChips}
-        </>
-      ) : (
-        <>
-          {messages.length === 0 && (
-            <Bubble role="assistant">
-              Hi, I&apos;m {name}. Talk to me (tap the wave), tell me what we&apos;re working on, or
-              hand me a task.
-            </Bubble>
-          )}
-          {messages.slice(-60).map((m) => (
-            <Bubble key={m.id} role={m.role} kind={m.kind} wide={Boolean(m.jobId)}>
-              {revealing?.id === m.id ? revealing.shown || "…" : m.content}
-              {m.jobId && <JobCard jobId={m.jobId} initial={m.job} />}
-              {m.link && (
-                <Link
-                  href={m.link.href}
-                  target={pip ? "_blank" : undefined}
-                  className="label-mono mt-1.5 block text-accent hover:underline"
-                >
-                  {m.link.label} →
-                </Link>
-              )}
-            </Bubble>
-          ))}
-          {busy !== "idle" && (
-            <div className="persona-in flex gap-1 self-start px-3 py-2" aria-label={status}>
-              {[0, 1, 2].map((i) => (
-                <span
-                  key={i}
-                  className="persona-dot h-2 w-2 rounded-full bg-accent"
-                  style={{ animationDelay: `${i * 0.15}s` }}
-                />
-              ))}
-            </div>
-          )}
-          {assistCards}
-        </>
-      )}
-      {error && (
-        <p
-          role="alert"
-          className="persona-in self-start rounded-full bg-danger/10 px-3 py-1.5 text-sm text-danger"
-        >
-          {error}
-        </p>
-      )}
-    </div>
-  );
+  if (!spot) return null;
+  const right = spot.x + ORB / 2 > window.innerWidth / 2;
+  const low = spot.y > 360;
+  const side = right ? "right-[calc(100%+12px)] items-end" : "left-[calc(100%+12px)] items-start";
+  const latestJob = [...messages].reverse().find((m) => m.jobId && m.jobId !== dismissedJob);
+  const showSetupInput = !setupDone && busy === "idle";
+  const hasCards =
+    (!setupDone && (setupStep === "look" || setupStep === "task")) ||
+    (setupDone &&
+      (askWake ||
+        askWatch ||
+        Boolean(task) ||
+        Boolean(example) ||
+        Boolean(confirm) ||
+        Boolean(switchOffer && busy === "idle") ||
+        Boolean(watchNote && !watching))) ||
+    Boolean(latestJob);
 
-  const actions = setupDone && (
-    <div className="flex items-center gap-1.5">
-      <Chip
-        label={voiceOn ? "Mute my voice" : "Let me talk out loud"}
-        active={voiceOn}
-        onClick={() => {
-          const next = !voiceOn;
-          setVoiceOn(next);
-          store("persona.voice", next);
-          if (!next) stopSpeaking();
-        }}
-      >
-        <Icon name={voiceOn ? "sound" : "mute"} />
-      </Chip>
-      <Chip
-        label="Give me a task"
-        active={Boolean(task)}
-        onClick={() => setTask(task ? null : { skill: focusSkill?.slug ?? null })}
-      >
-        <Icon name="task" />
-      </Chip>
-      <Chip
-        label={watching ? "Stop watching" : "Watch a window"}
-        active={watching}
-        onClick={() => (watching ? watcher.current?.stop() : setAskWatch((v) => !v))}
-      >
-        <Icon name="eye" />
-      </Chip>
-      {canWake && (
-        <Chip
-          label={wakeOn ? `Stop listening for "Hey ${name}"` : `Listen for "Hey ${name}"`}
-          active={wakeOn}
-          onClick={() => (wakeOn ? setWake(false) : setAskWake((v) => !v))}
-        >
-          <Icon name="ear" />
-        </Chip>
-      )}
-      {props.overlay && (
-        <Chip
-          label={`Hide ${name} (bring it back from the menu bar)`}
-          onClick={() => (window as DesktopWindow).personaDesktop?.hide()}
-        >
-          <Icon name="hide" />
-        </Chip>
-      )}
-      {pipSupported && (
-        <Chip label="Float over other apps" onClick={() => void popOut()}>
-          <Icon name="float" />
-        </Chip>
-      )}
-      {focusSkill && (
-        <Link
-          href={`/skills/${focusSkill.slug}`}
-          target={pip ? "_blank" : undefined}
-          className="label-mono ml-1 max-w-36 truncate rounded-full px-2 py-1 text-muted hover:text-accent"
-          title={`Training ${focusSkill.name}`}
-        >
-          {focusSkill.name}
-        </Link>
-      )}
-    </div>
-  );
-
-  const dock = (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        void send(text);
-      }}
-      className={`flex items-center gap-1.5 rounded-full p-1.5 pl-2 ${glass} ${
-        column ? "w-full" : "w-[min(380px,calc(100vw-2rem))]"
-      }`}
-    >
-      <button
-        type="button"
-        onClick={() => void toggleConversation()}
-        aria-pressed={conversing}
-        title={conversing ? "Stop talking" : "Talk with me, hands-free"}
-        aria-label={conversing ? "Stop talking" : "Talk with me"}
-        className={`grid h-9 w-9 shrink-0 place-items-center rounded-full transition-colors ${
-          conversing
-            ? "bg-accent text-accent-ink"
-            : "text-muted hover:bg-accent-soft hover:text-accent"
-        }`}
-      >
-        <Wave level={conversing ? level : 0} />
-      </button>
-      <label className="sr-only" htmlFor="persona-input">
-        Message {name}
-      </label>
-      <input
-        id="persona-input"
-        value={text}
-        onChange={(e) => {
-          // Typing over Persona stops it talking.
-          interrupt();
-          setText(e.target.value);
-        }}
-        autoComplete="off"
-        placeholder={
-          conversing
-            ? "I'm listening… talk over me any time"
-            : setupDone
-              ? `Talk to ${name}…`
-              : "Type, or tap the wave and just talk"
-        }
-        className="min-w-0 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-faint"
-      />
-      <button
-        type="submit"
-        disabled={!text.trim() || busy === "thinking"}
-        aria-label="Send"
-        className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-ink text-ink-foreground transition-opacity disabled:opacity-30"
-      >
-        <Icon name="send" />
-      </button>
-    </form>
-  );
-
-  const orb = (big: boolean) => (
-    <div className="flex flex-col items-center">
-      <div className={orbState === "sleeping" ? "" : "persona-float"}>
-        <PersonaOrb
-          look={look}
-          state={orbState}
-          level={level}
-          size={big ? 120 : ORB}
-          gaze={big ? null : gaze}
-        />
-      </div>
-      <span className="label-mono -mt-1 max-w-44 truncate text-[10px] text-muted" role="status">
-        {status}
-      </span>
-    </div>
-  );
-
-  // The desktop app and the pop-out window: Persona on top, the conversation, the dock.
-  const columnView = (
-    <section
-      aria-label={`${name}, your assistant`}
-      className="persona-backdrop flex h-screen flex-col gap-3 px-4 pb-4 pt-3 text-foreground"
-    >
-      <div className="persona-drag relative flex items-start justify-center pt-1">
-        {orb(true)}
-        {inDesktopApp && (
-          <button
-            type="button"
-            onClick={() => window.close()}
-            aria-label={`Close ${name}`}
-            className="absolute right-0 top-0 grid h-7 w-7 place-items-center rounded-full text-muted hover:bg-accent-soft hover:text-accent"
-          >
-            ×
-          </button>
-        )}
-      </div>
-      {conversationView}
-      <div className="persona-no-drag space-y-2">
-        {actions}
-        {dock}
-      </div>
-    </section>
-  );
-
-  if (props.standalone) return columnView;
-
-  if (props.overlay && spot) {
-    const right = spot.x + ORB / 2 > window.innerWidth / 2;
-    const low = spot.y > 360;
-    const side = right ? "right-[calc(100%+12px)] items-end" : "left-[calc(100%+12px)] items-start";
-    const latestJob = [...messages].reverse().find((m) => m.jobId && m.jobId !== dismissedJob);
-    const showSetupInput = !setupDone && busy === "idle";
-    const hasCards =
-      (!setupDone && (setupStep === "look" || setupStep === "task")) ||
-      (setupDone &&
-        (askWake ||
-          askWatch ||
-          Boolean(task) ||
-          Boolean(example) ||
-          Boolean(confirm) ||
-          Boolean(switchOffer && busy === "idle") ||
-          Boolean(watchNote && !watching))) ||
-      Boolean(latestJob);
-    return (
-      <section
-        data-persona
-        aria-label={`${name}, your assistant`}
-        className="pointer-events-none fixed z-50"
-        style={{
-          left: spot.x,
-          top: spot.y,
-          width: ORB,
-          transition: glide
-            ? "left 1.1s cubic-bezier(.45,.05,.25,1), top 1.1s cubic-bezier(.45,.05,.25,1)"
-            : "none",
-        }}
-      >
-        {/* Words, beside Persuna: what it says, and briefly what it heard. */}
-        <div
-          className={`absolute flex w-max max-w-80 flex-col gap-2 ${side} ${low ? "bottom-6" : "top-2"}`}
-          aria-live="polite"
-        >
-          {hasCards && (
-            <div className="pointer-events-auto flex w-80 flex-col gap-2">
-              {!setupDone ? setupChips : assistCards}
-              {latestJob?.jobId && (
-                <div className={`persona-in rounded-[22px] p-3 text-sm ${glass}`}>
-                  <div className="flex items-center gap-2">
-                    <span className="flex-1">{latestJob.content}</span>
-                    <button
-                      type="button"
-                      onClick={() => setDismissedJob(latestJob.jobId!)}
-                      aria-label="Close"
-                      className="text-muted hover:text-foreground"
-                    >
-                      ×
-                    </button>
-                  </div>
-                  <JobCard jobId={latestJob.jobId} initial={latestJob.job} />
-                </div>
-              )}
-            </div>
-          )}
-          {heard && (
-            <p className="persona-in self-end rounded-[22px] bg-gradient-to-br from-accent to-plum-2 px-4 py-2 text-sm text-white shadow-lg">
-              {heard}
-            </p>
-          )}
-          {(caption || busy !== "idle") && (
-            <button
-              type="button"
-              onClick={() => setCaption(null)}
-              className={`persona-in pointer-events-auto max-w-80 px-4 py-2.5 text-left text-sm leading-snug ${glass} rounded-[22px] ${
-                right ? "rounded-tr-md" : "rounded-tl-md"
-              }`}
-            >
-              {busy !== "idle" && !caption ? (
-                <span className="flex gap-1 py-1" aria-label={status}>
-                  {[0, 1, 2].map((i) => (
-                    <span
-                      key={i}
-                      className="persona-dot h-2 w-2 rounded-full bg-accent"
-                      style={{ animationDelay: `${i * 0.15}s` }}
-                    />
-                  ))}
-                </span>
-              ) : caption && caption.length > 260 ? (
-                `${caption.slice(0, 260)}…`
-              ) : (
-                caption
-              )}
-            </button>
-          )}
-          {error && (
-            <p className="persona-in pointer-events-auto rounded-full bg-danger/10 px-3 py-1.5 text-sm text-danger backdrop-blur">
-              {error}
-            </p>
-          )}
-          {(typing || showSetupInput) && (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void send(text);
-                if (setupDone) setTyping(false);
-              }}
-              className={`persona-in pointer-events-auto flex w-80 items-center gap-1.5 rounded-full p-1.5 pl-4 ${glass}`}
-            >
-              <label className="sr-only" htmlFor="persona-input">
-                Message {name}
-              </label>
-              <input
-                id="persona-input"
-                autoFocus
-                value={text}
-                onChange={(e) => {
-                  interrupt();
-                  setText(e.target.value);
-                }}
-                onKeyDown={(e) => e.key === "Escape" && setupDone && setTyping(false)}
-                autoComplete="off"
-                placeholder={setupDone ? `Type to ${name}…` : "Type, or tap me and just talk"}
-                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint"
-              />
-              <button
-                type="submit"
-                disabled={!text.trim()}
-                aria-label="Send"
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ink text-ink-foreground disabled:opacity-30"
-              >
-                <Icon name="send" />
-              </button>
-            </form>
-          )}
-        </div>
-
-        {/* Persuna. Tap to talk; hover for a few actions. */}
-        <div className="group pointer-events-auto relative">
-          {setupDone && (
-            <div
-              className={`absolute bottom-7 flex items-center gap-1 rounded-full px-1.5 py-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 ${glass} ${
-                right ? "right-[calc(100%+6px)]" : "left-[calc(100%+6px)]"
-              }`}
-            >
-              <Chip label="Type instead" active={typing} onClick={() => setTyping((t) => !t)}>
-                <Icon name="keyboard" />
-              </Chip>
-              {actions}
-            </div>
-          )}
-          <button
-            type="button"
-            aria-label={`${name}: ${conversing ? "stop talking" : talking ? "interrupt" : "talk"} (${status})`}
-            aria-pressed={conversing}
-            title={talking ? "Tap to interrupt" : conversing ? "Tap to stop" : "Tap to talk"}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                toggleOpen();
-              }
-            }}
-            style={{
-              touchAction: "none",
-              transform: `rotate(${tilt}deg)`,
-              transition: "transform .6s ease",
-            }}
-            className="cursor-grab select-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent active:cursor-grabbing"
-          >
-            {orb(false)}
-          </button>
-        </div>
-      </section>
-    );
-  }
-
-  if (!spot) return pip ? createPortal(columnView, pip.document.body) : null;
-  const onRight = spot.x + ORB / 2 > window.innerWidth / 2;
-  // Open upwards when there's room, like speech rising from Persona; otherwise downwards.
-  const below = spot.y < 360;
-  const room = below ? window.innerHeight - spot.y - ORB - 40 : spot.y - 16;
+  const menuItems: { label: string; onSelect: () => void; hidden?: boolean }[] = [
+    { label: "Type instead", onSelect: () => setTyping(true) },
+    {
+      label: watching ? "Stop watching" : "Watch my screen",
+      onSelect: () => (watching ? watcher.current?.stop() : setAskWatch(true)),
+    },
+    {
+      label: voiceOn ? "Mute my voice" : "Talk out loud",
+      onSelect: () => {
+        const next = !voiceOn;
+        setVoiceOn(next);
+        store("persona.voice", next);
+        if (!next) stopSpeaking();
+      },
+    },
+    {
+      label: wakeOn ? `Stop listening for "Hey ${name}"` : `Listen for "Hey ${name}"`,
+      onSelect: () => (wakeOn ? setWake(false) : setAskWake(true)),
+      hidden: !canWake,
+    },
+    {
+      label: "Conversation and notes",
+      onSelect: () => window.open("/persona#conversation", props.overlay ? "_blank" : "_self"),
+    },
+    {
+      label: `Hide ${name}`,
+      onSelect: () => (window as DesktopWindow).personaDesktop?.hide(),
+      hidden: !props.overlay,
+    },
+  ];
 
   return (
-    <>
-      {pip && createPortal(columnView, pip.document.body)}
-      <section
-        data-persona
-        aria-label={`${name}, your assistant`}
-        className="pointer-events-none fixed z-50"
-        style={{
-          left: spot.x,
-          top: spot.y,
-          width: ORB,
-          transition: glide
-            ? "left 1.1s cubic-bezier(.45,.05,.25,1), top 1.1s cubic-bezier(.45,.05,.25,1)"
-            : "none",
-        }}
+    <section
+      data-persona
+      aria-label={`${name}, your assistant`}
+      className="pointer-events-none fixed z-50"
+      style={{
+        left: spot.x,
+        top: spot.y,
+        width: ORB,
+        transition: glide
+          ? "left 1.1s cubic-bezier(.45,.05,.25,1), top 1.1s cubic-bezier(.45,.05,.25,1)"
+          : "none",
+      }}
+    >
+      {/* Beside Persuna: what it's saying, and a card when it needs a decision. */}
+      <div
+        className={`absolute flex w-max max-w-80 flex-col gap-2 ${side} ${low ? "bottom-6" : "top-2"}`}
+        aria-live="polite"
       >
-        {open && !pip && (
-          <div
-            className={`pointer-events-auto absolute flex flex-col gap-2 ${
-              onRight ? "right-0 items-end" : "left-0 items-start"
-            }`}
-            style={below ? { top: "calc(100% + 10px)" } : { bottom: "calc(100% + 10px)" }}
-          >
-            <div style={{ "--room": `${Math.max(180, room - 110)}px` } as React.CSSProperties}>
-              {conversationView}
-            </div>
-            {actions && <div className={`rounded-full px-1.5 py-1 ${glass}`}>{actions}</div>}
-            {dock}
+        {hasCards && (
+          <div className="pointer-events-auto flex w-80 flex-col gap-2">
+            {!setupDone ? setupChips : assistCards}
+            {latestJob?.jobId && (
+              <div className={`persona-in rounded-[22px] p-3 text-sm ${glass}`}>
+                <div className="flex items-center gap-2">
+                  <span className="flex-1">{latestJob.content}</span>
+                  <button
+                    type="button"
+                    onClick={() => setDismissedJob(latestJob.jobId!)}
+                    aria-label="Close"
+                    className="text-muted hover:text-foreground"
+                  >
+                    ×
+                  </button>
+                </div>
+                <JobCard jobId={latestJob.jobId} initial={latestJob.job} />
+              </div>
+            )}
           </div>
         )}
-        {caption && !open && !pip && (
+        {caption && (
           <button
             type="button"
-            onClick={toggleOpen}
-            className={`persona-in pointer-events-auto absolute top-2 w-max max-w-72 px-4 py-2.5 text-left text-sm leading-snug ${glass} ${
-              onRight
-                ? "right-[calc(100%+10px)] rounded-[22px] rounded-tr-md"
-                : "left-[calc(100%+10px)] rounded-[22px] rounded-tl-md"
+            onClick={onTap}
+            className={`persona-in pointer-events-auto max-w-80 px-4 py-2.5 text-left text-sm leading-snug ${glass} rounded-[22px] ${
+              right ? "rounded-tr-md" : "rounded-tl-md"
             }`}
           >
-            {caption.length > 220 ? `${caption.slice(0, 220)}…` : caption}
+            {caption.length > 260 ? `${caption.slice(0, 260)}…` : caption}
           </button>
         )}
-        <button
-          type="button"
-          aria-label={`${open ? "Close" : "Open"} ${name} (${status})`}
-          aria-expanded={open}
-          title={talking ? "Tap to interrupt" : undefined}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
+        {error && (
+          <p className="persona-in pointer-events-auto rounded-full bg-danger/10 px-3 py-1.5 text-sm text-danger backdrop-blur">
+            {error}
+          </p>
+        )}
+        {(typing || showSetupInput) && (
+          <form
+            onSubmit={(e) => {
               e.preventDefault();
-              toggleOpen();
-            }
-          }}
-          style={{
-            touchAction: "none",
-            transform: `rotate(${tilt}deg)`,
-            transition: "transform .6s ease",
-          }}
-          className="pointer-events-auto cursor-grab select-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent active:cursor-grabbing"
-        >
-          {orb(false)}
-        </button>
-      </section>
-    </>
-  );
-}
-
-function Bubble({
-  role,
-  kind,
-  wide,
-  children,
-}: {
-  role: "user" | "assistant";
-  kind?: string;
-  wide?: boolean;
-  children: React.ReactNode;
-}) {
-  if (role === "user") {
-    return (
-      <div className="persona-in max-w-[85%] self-end whitespace-pre-wrap rounded-[22px] rounded-br-md bg-gradient-to-br from-accent to-plum-2 px-4 py-2.5 text-sm text-white shadow-[0_8px_24px_-12px_var(--accent)]">
-        {children}
+              void send(text);
+              if (setupDone) setTyping(false);
+            }}
+            className={`persona-in pointer-events-auto flex w-80 items-center gap-1.5 rounded-full p-1.5 pl-4 ${glass}`}
+          >
+            <label className="sr-only" htmlFor="persona-input">
+              Message {name}
+            </label>
+            <input
+              id="persona-input"
+              autoFocus
+              value={text}
+              onChange={(e) => {
+                interrupt();
+                setText(e.target.value);
+              }}
+              onKeyDown={(e) => e.key === "Escape" && setupDone && setTyping(false)}
+              onBlur={() => setupDone && !text.trim() && setTyping(false)}
+              autoComplete="off"
+              placeholder={setupDone ? `Type to ${name}…` : "Type, or tap me and just talk"}
+              className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint"
+            />
+            <button
+              type="submit"
+              disabled={!text.trim()}
+              aria-label="Send"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ink text-ink-foreground disabled:opacity-30"
+            >
+              <Icon name="send" />
+            </button>
+          </form>
+        )}
       </div>
-    );
-  }
-  const quiet = kind === "observation" || kind === "reminder";
-  return (
-    <div
-      className={`persona-in self-start whitespace-pre-wrap rounded-[22px] rounded-bl-md px-4 py-2.5 text-sm leading-relaxed ${
-        wide ? "w-full" : "max-w-[90%]"
-      } ${quiet ? "bg-accent-soft text-foreground" : card}`}
-    >
-      {children}
-    </div>
-  );
-}
 
-function Chip({
-  label,
-  active,
-  onClick,
-  children,
-}: {
-  label: string;
-  active?: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      aria-pressed={active}
-      className={`grid h-8 w-8 place-items-center rounded-full transition-colors ${
-        active ? "bg-accent-soft text-accent" : "text-muted hover:bg-accent-soft hover:text-accent"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
+      {menu && setupDone && (
+        <div
+          role="menu"
+          aria-label={`${name}'s menu`}
+          className={`persona-in pointer-events-auto absolute bottom-[calc(100%+6px)] flex w-56 flex-col rounded-2xl p-1.5 text-sm ${glass} ${
+            right ? "right-0" : "left-0"
+          }`}
+        >
+          {menuItems
+            .filter((item) => !item.hidden)
+            .map((item) => (
+              <button
+                key={item.label}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(false);
+                  item.onSelect();
+                }}
+                className="rounded-xl px-3 py-2 text-left hover:bg-accent-soft hover:text-accent"
+              >
+                {item.label}
+              </button>
+            ))}
+          <p className="label-mono px-3 pb-1 pt-2 text-[10px] text-muted">
+            {shortcut} calls me from anywhere
+          </p>
+        </div>
+      )}
 
-/** A small live waveform: flat when quiet, moving with your voice. */
-function Wave({ level }: { level: number }) {
-  const bars = [0.5, 0.9, 1, 0.75, 0.45];
-  return (
-    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden>
-      {bars.map((b, i) => {
-        const h = 3 + (level > 0.02 ? b * level * 14 : b * 7);
-        return (
-          <rect
-            key={i}
-            x={2 + i * 3.4}
-            y={10 - h / 2}
-            width="2"
-            height={h}
-            rx="1"
-            fill="currentColor"
-            style={{ transition: "all 80ms linear" }}
-          />
-        );
-      })}
-    </svg>
+      {/* Persuna. Tap to talk, right-click for more, drag to move. */}
+      <button
+        type="button"
+        aria-label={`${name}: ${conversing ? "stop talking" : talking ? "interrupt" : "talk"} (${status})`}
+        aria-pressed={conversing}
+        aria-haspopup="menu"
+        title={`Tap to talk · right-click for more · ${shortcut}`}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenu((m) => !m);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onTap();
+          } else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+            e.preventDefault();
+            setMenu((m) => !m);
+          }
+        }}
+        style={{
+          touchAction: "none",
+          transform: `rotate(${tilt}deg)`,
+          transition: "transform .6s ease",
+        }}
+        className="pointer-events-auto cursor-grab select-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent active:cursor-grabbing"
+      >
+        <span className="flex flex-col items-center">
+          <span className={orbState === "sleeping" ? "" : "persona-float"}>
+            <PersonaOrb look={look} state={orbState} level={level} size={ORB} gaze={gaze} />
+          </span>
+          <span className="label-mono -mt-1 max-w-44 truncate text-[10px] text-muted" role="status">
+            {status}
+          </span>
+        </span>
+      </button>
+    </section>
   );
 }

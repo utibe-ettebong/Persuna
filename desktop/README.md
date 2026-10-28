@@ -1,6 +1,6 @@
 # Persuna Desktop
 
-Persuna, your PERSUNA assistant, over your whole screen. It lives in a see-through layer above your apps, even full-screen ones: just Persuna and its words, no chat window. Tap it to talk (tap again to stop, or while it speaks to interrupt); hover over it for a few actions, including typing. Clicks pass straight through to your apps everywhere else.
+Persuna, your PERSUNA assistant, over your whole screen. It lives in a see-through layer above your apps, even full-screen ones: just Persuna and its words, no chat window. **Call it from anywhere with ⌘⇧Space** (Ctrl+Shift+Space on Windows; if another app has taken that, Alt+Shift+Space), from _Talk to Persuna_ in its menu bar menu, or by tapping it. It chimes, listens, answers out loud, and goes quiet after 45 seconds of silence. Press the shortcut or tap it while it talks to stop it. Right-click it for the rest: type instead, watch my screen, mute, conversation and notes, hide. Clicks pass straight through to your apps everywhere else.
 
 The first time, a small welcome window lets you create an account or sign in; then Persuna appears and gets to know you out loud. It sits in the menu bar (Mac) or system tray (Windows), not the Dock or taskbar.
 
@@ -15,7 +15,7 @@ The first time, a small welcome window lets you create an account or sign in; th
 
 ## Permissions
 
-- **Watching your screen.** On a Mac, the first time you turn watching on, macOS asks for **Screen Recording** permission. Persuna then shows three steps: open System Settings, turn on Persuna under Screen & System Audio Recording, and restart Persuna (it offers the restart as soon as it sees the switch is on). Persuna steps behind macOS's prompts and System Settings while you do this, so they're always clickable. After that, Persuna asks once what to watch (your whole screen or one app) and can remember it, so turning watching on just starts. Persuna only watches while watching is on, never keeps screenshots, and never sees itself. Change the remembered choice from the menu bar icon.
+- **Watching your screen.** On a Mac, the first time you turn watching on, macOS asks for **Screen Recording** permission. Persuna then shows three steps: open System Settings, turn on Persuna under Screen & System Audio Recording, and restart Persuna (macOS needs that before Persuna can see; it offers the restart in the dialog, in a notification and at the top of its menu bar menu). Until Persuna is signed with an Apple Developer ID, macOS treats each new version as a new app, so after an update Persuna clears the old entry once and macOS asks again. If Persuna is already switched on but still can't see, turn it off and on again, then restart Persuna. Persuna steps behind macOS's prompts and System Settings while you do this, so they're always clickable. After that, Persuna asks once what to watch (your whole screen or one app) and can remember it, so turning watching on just starts. Persuna only watches while watching is on, never keeps screenshots, and never sees itself. Change the remembered choice from the menu bar icon.
 - **Microphone.** Asked the first time you talk to Persuna.
 
 ## How it works

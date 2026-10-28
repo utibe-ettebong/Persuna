@@ -32,14 +32,15 @@ export const dynamic = "force-dynamic";
 
 export default async function PersonaPage() {
   const user = await requireUser();
-  const [{ profile, focusSkill }, notes, reminders, coaching, handle, tone] = await Promise.all([
-    companion(user.id),
-    listNotes(user.id),
-    listReminders(user.id),
-    coachingForAll(user.id),
-    ensureHandle(user.id),
-    toneSummary(user.id),
-  ]);
+  const [{ profile, focusSkill, messages }, notes, reminders, coaching, handle, tone] =
+    await Promise.all([
+      companion(user.id),
+      listNotes(user.id),
+      listReminders(user.id),
+      coachingForAll(user.id),
+      ensureHandle(user.id),
+      toneSummary(user.id),
+    ]);
 
   return (
     <div className="space-y-10">
@@ -55,10 +56,11 @@ export default async function PersonaPage() {
         }
         description={
           <>
-            Your assistant. It sits in the corner of every page: tell it what you&apos;re working
-            on, ask it to take notes or remember things, talk to it, or let it watch one window to
-            learn your steps. It only watches when you say so. What it learns goes to your skills as
-            changes you approve, and good skills can be rented in the marketplace.
+            Your assistant. It sits in the corner of every page. Tap it, or press ⌘⇧Space
+            (Ctrl+Shift+Space on Windows), and just talk: what you&apos;re working on, notes,
+            reminders, a task. Say &ldquo;watch my screen&rdquo; and it learns your steps. It only
+            watches when you say so. What it learns goes to your skills as changes you approve, and
+            good skills can be rented in the marketplace.
           </>
         }
       />
@@ -135,12 +137,28 @@ export default async function PersonaPage() {
             )}
           </Card>
 
+          <span id="conversation" className="block scroll-mt-24" />
           <Card className="p-5">
             <PanelTitle>Conversation</PanelTitle>
             <p className="mb-3 text-sm text-muted">
-              Your chat history stays private to you. Clearing it doesn&apos;t touch notes, memory
-              or skills.
+              Everything you and {profile.name} said, newest last. It stays private to you. Clearing
+              it doesn&apos;t touch notes, memory or skills.
             </p>
+            {messages.length > 0 && (
+              <ol className="mb-4 max-h-96 space-y-2 overflow-y-auto text-sm">
+                {messages.slice(-40).map((m) => (
+                  <li key={m.id} className={m.role === "user" ? "text-right" : ""}>
+                    <span
+                      className={`inline-block max-w-[90%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-left ${
+                        m.role === "user" ? "bg-accent-soft" : "bg-foreground/5"
+                      }`}
+                    >
+                      {m.content}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
             <ClearChatButton />
           </Card>
         </div>

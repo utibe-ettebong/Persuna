@@ -5,11 +5,23 @@ import { env, speechConfig, type SpeechConfig } from "@/env";
  * provider is configured, and the browser speaks instead.
  */
 export interface Speaker {
-  synthesize(text: string, style?: string): Promise<{ audio: ArrayBuffer; type: string }>;
+  /** The audio streams back as it's made, so playback starts within a moment. */
+  synthesize(
+    text: string,
+    style?: string,
+  ): Promise<{ audio: ReadableStream<Uint8Array>; type: string }>;
 }
 
-/** Long replies are cut here; the rest stays on screen. */
-export const MAX_SPOKEN_CHARS = 600;
+/** Longest reply spoken in one go; anything past it is cut at a sentence end. */
+export const MAX_SPOKEN_CHARS = 1500;
+
+/** The reply up to {@link MAX_SPOKEN_CHARS}, ending on a whole sentence where possible. */
+export function spokenPart(text: string): string {
+  if (text.length <= MAX_SPOKEN_CHARS) return text;
+  const cut = text.slice(0, MAX_SPOKEN_CHARS);
+  const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
+  return end > MAX_SPOKEN_CHARS / 2 ? cut.slice(0, end + 1) : cut;
+}
 
 export function createSpeaker(
   resolve: () => SpeechConfig | null = speechConfig,
@@ -19,11 +31,12 @@ export function createSpeaker(
   if (!config) return null;
   return {
     async synthesize(text, style) {
-      const input = text.slice(0, MAX_SPOKEN_CHARS);
+      const input = spokenPart(text);
       const res =
         config.api === "elevenlabs"
           ? await fetchImpl(
-              `${config.baseUrl}/text-to-speech/${encodeURIComponent(config.voice)}`,
+              // The streaming endpoint sends the first audio within a few hundred ms.
+              `${config.baseUrl}/text-to-speech/${encodeURIComponent(config.voice)}/stream`,
               {
                 method: "POST",
                 headers: {
@@ -51,11 +64,11 @@ export function createSpeaker(
               }),
               signal: AbortSignal.timeout(env().MODEL_TIMEOUT_MS),
             });
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
         throw new Error(`Speech failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
       }
       return {
-        audio: await res.arrayBuffer(),
+        audio: res.body,
         type: res.headers.get("content-type") ?? "audio/mpeg",
       };
     },

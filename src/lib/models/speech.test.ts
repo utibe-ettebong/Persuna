@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { speechConfig, type SpeechConfig } from "@/env";
-import { MAX_SPOKEN_CHARS, createSpeaker } from "./speech";
+import { MAX_SPOKEN_CHARS, createSpeaker, spokenPart } from "./speech";
 
 vi.mock("@/env", async (original) => ({
   ...(await original<typeof import("@/env")>()),
@@ -32,10 +32,10 @@ describe("createSpeaker", () => {
   it("calls OpenAI-style /audio/speech with the tone as instructions", async () => {
     const { calls, impl } = fakeFetch();
     const out = await createSpeaker(() => openai, impl)!.synthesize(
-      "x".repeat(900),
+      "x".repeat(2000),
       "Warm, brief.",
     );
-    expect(out.audio.byteLength).toBe(3);
+    expect((await new Response(out.audio).arrayBuffer()).byteLength).toBe(3);
     expect(calls[0].url).toBe("https://api.openai.com/v1/audio/speech");
     const sent = JSON.parse(String(calls[0].init.body));
     expect(sent).toMatchObject({
@@ -58,12 +58,22 @@ describe("createSpeaker", () => {
       }),
       impl,
     )!.synthesize("Hello");
-    expect(calls[0].url).toBe("https://api.elevenlabs.io/v1/text-to-speech/abc");
+    expect(calls[0].url).toBe("https://api.elevenlabs.io/v1/text-to-speech/abc/stream");
     expect((calls[0].init.headers as Record<string, string>)["xi-api-key"]).toBe("k");
     expect(JSON.parse(String(calls[0].init.body))).toEqual({
       text: "Hello",
       model_id: "eleven_flash_v2_5",
     });
+  });
+});
+
+describe("spokenPart", () => {
+  it("keeps short replies whole and cuts long ones at a sentence end", () => {
+    expect(spokenPart("Hello there.")).toBe("Hello there.");
+    const long = `${"A sentence that goes on. ".repeat(80)}`;
+    const part = spokenPart(long);
+    expect(part.length).toBeLessThanOrEqual(MAX_SPOKEN_CHARS);
+    expect(part.endsWith("on.")).toBe(true);
   });
 });
 
