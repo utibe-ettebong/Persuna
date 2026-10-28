@@ -1,6 +1,8 @@
 # Persuna Desktop
 
-Persuna, your PERSUNA assistant, over your whole screen. It lives in a see-through layer above every app, even full-screen ones. Clicks pass straight through to your apps except on Persuna and its conversation. It sits in the menu bar (Mac) or system tray (Windows), not the Dock or taskbar.
+Persuna, your PERSUNA assistant, over your whole screen. It lives in a see-through layer above your apps, even full-screen ones: just Persuna and its words, no chat window. Tap it to talk (tap again to stop, or while it speaks to interrupt); hover over it for a few actions, including typing. Clicks pass straight through to your apps everywhere else.
+
+The first time, a small welcome window lets you create an account or sign in; then Persuna appears and gets to know you out loud. It sits in the menu bar (Mac) or system tray (Windows), not the Dock or taskbar.
 
 **Download:** [the latest release](https://github.com/utibe-ettebong/Persuna/releases/latest).
 
@@ -13,7 +15,7 @@ Persuna, your PERSUNA assistant, over your whole screen. It lives in a see-throu
 
 ## Permissions
 
-- **Watching your screen.** The first time you turn watching on, Persuna asks what to watch (your whole screen or one app) and can remember it. After that, turning watching on just starts, with no picker. On a Mac, macOS also asks once for **Screen Recording** permission (System Settings → Privacy & Security → Screen Recording). Persuna only watches while watching is on, never keeps screenshots, and never sees itself. Change the remembered choice from the menu bar icon.
+- **Watching your screen.** On a Mac, the first time you turn watching on, macOS asks for **Screen Recording** permission. Persuna then shows three steps: open System Settings, turn on Persuna under Screen & System Audio Recording, and restart Persuna (it offers the restart as soon as it sees the switch is on). Persuna steps behind macOS's prompts and System Settings while you do this, so they're always clickable. After that, Persuna asks once what to watch (your whole screen or one app) and can remember it, so turning watching on just starts. Persuna only watches while watching is on, never keeps screenshots, and never sees itself. Change the remembered choice from the menu bar icon.
 - **Microphone.** Asked the first time you talk to Persuna.
 
 ## How it works

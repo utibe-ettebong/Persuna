@@ -8,6 +8,7 @@ const PATHS = {
   float: "M14 4h6v6M20 4l-8 8M10 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-4",
   send: "M12 19V5m0 0-6 6m6-6 6 6",
   hide: "M5 12h14",
+  keyboard: "M4 7h16v10H4zM7 10h1m3 0h1m3 0h1m3 0h0M8 14h8",
   ear: "M7 9a5 5 0 0 1 10 0c0 3-3 4-3 7a3 3 0 0 1-5.5 1.6M10 9.5a2 2 0 0 1 4 0",
 } as const;
 

@@ -31,7 +31,7 @@ const ALLOWED_PERMISSIONS = new Set(["media", "display-capture", "notifications"
 const MAC = process.platform === "darwin";
 
 let overlay = null;
-let signIn = null;
+let welcome = null;
 let tray = null;
 
 /* ---------- Settings (a small JSON file in the app's data folder) ---------- */
@@ -92,10 +92,13 @@ function createOverlay() {
       contextIsolation: true,
       sandbox: true,
       backgroundThrottling: false,
+      // Persuna may speak as soon as it appears, without waiting for a click.
+      autoplayPolicy: "no-user-gesture-required",
     },
   });
-  // Above everything, on every desktop and over full-screen apps.
-  overlay.setAlwaysOnTop(true, "screen-saver");
+  // Above your apps, on every desktop and over full-screen apps, but below
+  // macOS's own prompts and System Settings, so permissions stay clickable.
+  overlay.setAlwaysOnTop(true, "floating");
   overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   // Clicks go through to the apps underneath until the pointer is over Persona.
   overlay.setIgnoreMouseEvents(true, { forward: true });
@@ -115,45 +118,65 @@ function createOverlay() {
   overlay.webContents.on("will-navigate", (event, url) => {
     if (isOurs(url) && /^\/companion/.test(pathOf(url))) return;
     event.preventDefault();
-    if (isOurs(url) && /^\/sign-(in|up)/.test(pathOf(url))) return openSignIn(url);
+    if (isOurs(url) && /^\/(sign-(in|up)|welcome)/.test(pathOf(url))) return openWelcome();
     if (/^https?:/.test(url)) void shell.openExternal(url);
   });
-  // Signed out: the server redirects to /sign-in. That needs a normal window.
+  // Signed out: the server redirects to /sign-in. Welcome them in a small window instead.
   overlay.webContents.on("did-navigate", (_e, url) => {
-    if (/^\/sign-(in|up)/.test(pathOf(url))) {
+    if (/^\/(sign-(in|up)|welcome)/.test(pathOf(url))) {
       overlay?.hide();
       overlay?.loadURL("about:blank");
-      openSignIn(url);
+      openWelcome();
     }
   });
   overlay.on("closed", () => (overlay = null));
 }
 
-function openSignIn(url) {
+/** The first-run window: a hello, then sign in or create an account. */
+function openWelcome() {
   overlay?.hide();
-  if (signIn) return signIn.focus();
-  signIn = new BrowserWindow({
-    width: 460,
-    height: 680,
-    title: "Sign in to PERSUNA",
+  if (welcome) {
+    welcome.show();
+    welcome.focus();
+    return;
+  }
+  welcome = new BrowserWindow({
+    width: 420,
+    height: 660,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    title: "Welcome to Persuna",
+    titleBarStyle: MAC ? "hiddenInset" : "default",
     autoHideMenuBar: true,
+    backgroundColor: "#f8f6f8",
+    show: false,
     webPreferences: { contextIsolation: true, sandbox: true },
   });
-  signIn.loadURL(url);
-  signIn.webContents.on("did-navigate", (_e, next) => {
+  welcome.loadURL(`${ORIGIN}/welcome`);
+  welcome.once("ready-to-show", () => {
+    welcome?.show();
+    app.focus({ steal: true });
+  });
+  welcome.webContents.on("did-navigate", (_e, next) => {
     if (/^\/companion/.test(pathOf(next))) {
-      signIn?.close();
+      welcome?.close();
       void overlay?.loadURL(`${ORIGIN}/companion?overlay=1`).then(() => {
         overlay?.showInactive();
         rebuildTray();
       });
     }
   });
-  signIn.webContents.setWindowOpenHandler(({ url: link }) => {
+  welcome.webContents.on("will-navigate", (event, url) => {
+    if (isOurs(url) && /^\/(welcome|sign-(in|up)|companion|api\/)/.test(pathOf(url))) return;
+    event.preventDefault();
+    if (/^https?:/.test(url)) void shell.openExternal(url);
+  });
+  welcome.webContents.setWindowOpenHandler(({ url: link }) => {
     if (/^https?:/.test(link)) void shell.openExternal(link);
     return { action: "deny" };
   });
-  signIn.on("closed", () => (signIn = null));
+  welcome.on("closed", () => (welcome = null));
 }
 
 /* ---------- Messages from the page (see preload.js) ---------- */
@@ -173,22 +196,85 @@ const SCREEN_SETTINGS = MAC
   ? "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
   : null;
 
-/** macOS asks once for Screen Recording. Explain and open Settings if it was refused. */
-async function screenAllowed() {
+/** Let macOS's prompts and System Settings sit above Persuna while you answer them. */
+function stepAside(aside) {
+  if (!overlay) return;
+  if (aside) overlay.setAlwaysOnTop(false);
+  else overlay.setAlwaysOnTop(true, "floating");
+}
+
+/** Bring a dialog to the front: Persuna lives in the menu bar, so it isn't the active app. */
+async function ask(options) {
+  app.focus({ steal: true });
+  return dialog.showMessageBox(options);
+}
+
+let permissionWatch = 0;
+
+/**
+ * macOS Screen Recording, asked once. The first time, macOS shows its own
+ * prompt; Persuna's own questions wait until that's answered, so the two
+ * never sit on top of each other. Once you turn Persuna on in System
+ * Settings, it offers to restart (macOS needs that before it can see).
+ */
+async function ensureScreenPermission() {
   if (!MAC) return true;
-  const status = systemPreferences.getMediaAccessStatus("screen");
-  if (status === "granted" || status === "not-determined") return true;
-  const { response } = await dialog.showMessageBox({
-    type: "info",
-    message: "Persuna needs Screen Recording permission to watch",
-    detail:
-      "Open System Settings → Privacy & Security → Screen Recording, turn on Persuna, then quit and reopen Persuna. It only watches while you have watching turned on.",
-    buttons: ["Open System Settings", "Not now"],
-    defaultId: 0,
-    cancelId: 1,
-  });
-  if (response === 0) void shell.openExternal(SCREEN_SETTINGS);
-  return false;
+  let status = systemPreferences.getMediaAccessStatus("screen");
+  if (status === "granted") return true;
+  stepAside(true);
+  try {
+    if (status === "not-determined") {
+      // Asking for a capture source is what makes macOS show its one-time prompt.
+      await desktopCapturer
+        .getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } })
+        .catch(() => {});
+      status = systemPreferences.getMediaAccessStatus("screen");
+      if (status === "granted") return true;
+    }
+    const { response } = await ask({
+      type: "info",
+      message: "Let Persuna see your screen",
+      detail:
+        "1. Click Open System Settings.\n2. Under Screen & System Audio Recording, turn on Persuna (enter your password if asked).\n3. Come back and choose Restart Persuna.\n\nPersuna only watches while you have watching turned on, and keeps no screenshots.",
+      buttons: ["Open System Settings", "Restart Persuna", "Not now"],
+      defaultId: 0,
+      cancelId: 2,
+    });
+    if (response === 1) {
+      app.relaunch();
+      app.exit(0);
+    }
+    if (response === 0) {
+      void shell.openExternal(SCREEN_SETTINGS);
+      offerRestartWhenAllowed();
+    }
+    return false;
+  } finally {
+    stepAside(false);
+  }
+}
+
+/** After System Settings opens, wait for Persuna to be turned on, then offer the restart. */
+function offerRestartWhenAllowed() {
+  clearInterval(permissionWatch);
+  const until = Date.now() + 5 * 60_000;
+  permissionWatch = setInterval(async () => {
+    if (Date.now() > until) return clearInterval(permissionWatch);
+    if (systemPreferences.getMediaAccessStatus("screen") !== "granted") return;
+    clearInterval(permissionWatch);
+    const { response } = await ask({
+      type: "info",
+      message: "Persuna can now see your screen",
+      detail: "Restart Persuna so macOS lets it start watching.",
+      buttons: ["Restart now", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) {
+      app.relaunch();
+      app.exit(0);
+    }
+  }, 2000);
 }
 
 /** The remembered screen or window, or ask once (and offer to remember). */
@@ -212,7 +298,8 @@ async function chooseSource() {
     ...(screens[0] ? [{ label: "My whole screen", source: screens[0], kind: "screen" }] : []),
     ...windows.slice(0, 10).map((w) => ({ label: w.name.slice(0, 60), source: w, kind: "window" })),
   ];
-  const { response, checkboxChecked } = await dialog.showMessageBox({
+  stepAside(true);
+  const { response, checkboxChecked } = await ask({
     type: "question",
     message: "What should Persuna watch?",
     detail:
@@ -223,6 +310,7 @@ async function chooseSource() {
     checkboxLabel: "Remember this, and don't ask again (change it from the menu bar icon)",
     checkboxChecked: true,
   });
+  stepAside(false);
   const picked = choices[response];
   if (!picked) return null;
   if (checkboxChecked) {
@@ -312,7 +400,7 @@ if (!app.requestSingleInstanceLock()) {
     // Persona's "watch" calls getDisplayMedia(); answer it with the chosen source.
     ses.setDisplayMediaRequestHandler(async (request, callback) => {
       if (!isOurs(request.securityOrigin ?? request.frame?.url ?? "")) return callback({});
-      if (!(await screenAllowed())) return callback({});
+      if (!(await ensureScreenPermission())) return callback({});
       const source = await chooseSource();
       callback(source ? { video: source } : {});
     });

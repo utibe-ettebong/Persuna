@@ -119,7 +119,13 @@ function store(key: string, value: unknown) {
  * when you leave.
  */
 export function Companion(props: CompanionProps) {
-  const [open, setOpen] = useState(Boolean(props.standalone) || !props.setupDone);
+  // On the desktop there's no panel to open: Persuna is just itself, with captions.
+  const [open, setOpen] = useState(
+    !props.overlay && (Boolean(props.standalone) || !props.setupDone),
+  );
+  const [typing, setTyping] = useState(false);
+  const [heard, setHeard] = useState<string | null>(null);
+  const [dismissedJob, setDismissedJob] = useState<string | null>(null);
   const [setupDone, setSetupDone] = useState(props.setupDone);
   const [name, setName] = useState(props.name);
   const [look, setLook] = useState(props.avatar);
@@ -159,6 +165,8 @@ export function Companion(props: CompanionProps) {
   const home = useRef<{ x: number; y: number } | null>(null);
   const backHome = useRef(0);
   const talkingNow = useRef(false);
+  // The desktop app lets Persuna speak before any click (see desktop/main.js).
+  const overlayRef = useRef(Boolean(props.overlay));
   // The first meeting's answers and transcript. Refs, because `send` (which
   // routes replies here) is created once and must see the latest.
   const setupDraft = useRef<{
@@ -193,7 +201,7 @@ export function Companion(props: CompanionProps) {
     // Browsers only allow speech after the person has interacted with the page.
     const activation = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } })
       .userActivation;
-    if (activation && !activation.hasBeenActive) {
+    if (activation && !activation.hasBeenActive && !overlayRef.current) {
       queued.current = line;
       return;
     }
@@ -361,6 +369,9 @@ export function Companion(props: CompanionProps) {
       setError(null);
       setCaption(null);
       setText("");
+      // On the desktop, briefly show what you said beside Persuna.
+      setHeard(body);
+      window.setTimeout(() => setHeard((h) => (h === body ? null : h)), 5000);
       const pending: CompanionMessage = {
         id: `pending-${Date.now()}`,
         role: "user",
@@ -870,6 +881,11 @@ export function Companion(props: CompanionProps) {
   function toggleOpen() {
     // Tapping Persona while it talks just stops it talking.
     if (talkingNow.current) return interrupt();
+    // On the desktop, tapping Persuna starts (or stops) talking with it.
+    if (props.overlay) {
+      setCaption(null);
+      return void toggleConversation();
+    }
     const wrap = caption === WRAP_UP_OFFER;
     setCaption(null);
     setOpen((o) => !o);
@@ -911,6 +927,140 @@ export function Companion(props: CompanionProps) {
   const published = props.skills.filter((s) => s.published);
   const column = Boolean(props.standalone || pip);
 
+  // Quick choices during the first meeting: looks and first tasks.
+  const setupChips = (
+    <>
+      {setupStep === "look" && (
+        <div className="persona-in flex flex-wrap gap-1 self-start" aria-label="Looks">
+          {LOOK_IDS.map((id) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => void setupReply(LOOKS[id].label)}
+              aria-label={`${LOOKS[id].label} look`}
+              title={LOOKS[id].label}
+              className="rounded-2xl p-1 hover:bg-accent-soft"
+            >
+              <PersonaOrb look={id} size={38} animate={false} />
+            </button>
+          ))}
+        </div>
+      )}
+      {setupStep === "task" && (
+        <div className="persona-in flex flex-wrap gap-1.5 self-start">
+          {[...props.skills.map((s) => s.name), "Try the sample", "Later"].map((label) => (
+            <button
+              key={label}
+              type="button"
+              onClick={() => void setupReply(label === "Try the sample" ? "sample" : label)}
+              className={`rounded-full px-3 py-1.5 text-sm ${card} hover:text-accent`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+
+  // What Persuna is asking you to decide right now (permissions, a task, teaching).
+  const assistCards = (
+    <>
+      {askWake && (
+        <div className={`persona-in space-y-2 rounded-[22px] p-4 text-sm ${card}`}>
+          <p>
+            <strong>Say &ldquo;Hey {name}&rdquo; to wake me.</strong> While this is on, your browser
+            listens for my name. In Chrome and Edge, that listening is done by the browser
+            maker&apos;s speech service, not by PERSUNA. I start a conversation when I hear my name;
+            nothing else is kept. Turn it off any time.
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setWake(true)}
+              className="rounded-full bg-accent px-4 py-1.5 text-sm text-accent-ink"
+            >
+              Turn it on
+            </button>
+            <button
+              type="button"
+              onClick={() => setAskWake(false)}
+              className="rounded-full px-3 py-1.5 text-sm text-muted hover:text-foreground"
+            >
+              Not now
+            </button>
+          </div>
+        </div>
+      )}
+      {askWatch && (
+        <div className={`persona-in space-y-2 rounded-[22px] p-4 text-sm ${card}`}>
+          <p>
+            {props.overlay ? (
+              <>
+                <strong>Let me watch while you work.</strong> I&apos;ll watch your whole screen or
+                one app you choose (I&apos;ll ask once, and remember). I never see myself.
+              </>
+            ) : (
+              <>
+                <strong>Pick one window for me to watch.</strong> It can be any app (Figma, your
+                video editor, a spreadsheet): choose it under &ldquo;Window&rdquo;.
+              </>
+            )}{" "}
+            I look every 30 seconds while it changes, write down your <em>steps</em>, skip names and
+            figures, and keep no screenshots. Stop any time.
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => void startWatch()}
+              className="rounded-full bg-accent px-4 py-1.5 text-sm text-accent-ink"
+            >
+              {props.overlay ? "Start watching" : "Choose a window"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setAskWatch(false)}
+              className="rounded-full px-3 py-1.5 text-sm text-muted hover:text-foreground"
+            >
+              Not now
+            </button>
+          </div>
+        </div>
+      )}
+      {!watching && watchNote && focusSkill && (
+        <div
+          className={`persona-in flex items-center gap-3 rounded-full px-4 py-2 text-sm ${card}`}
+        >
+          <span className="flex-1">Teach what I saw to {focusSkill.name}?</span>
+          <button
+            type="button"
+            onClick={() => void teachWatched()}
+            className="rounded-full bg-accent px-3 py-1 text-accent-ink"
+          >
+            Teach it
+          </button>
+        </div>
+      )}
+      {task && (
+        <div className={`persona-in rounded-[22px] ${card}`}>
+          <TaskComposer
+            skills={published}
+            initial={task.skill}
+            onCancel={() => setTask(null)}
+            onDone={(added, job) => {
+              setTask(null);
+              setMessages((all) => [
+                ...all,
+                ...added.map((m) => (m.jobId === job.id ? { ...m, job } : m)),
+              ]);
+              void sayAloud(added.at(-1)?.content ?? "");
+            }}
+          />
+        </div>
+      )}
+    </>
+  );
+
   const conversationView = (
     <div
       ref={stream}
@@ -929,36 +1079,7 @@ export function Companion(props: CompanionProps) {
               {m.content}
             </Bubble>
           ))}
-          {setupStep === "look" && (
-            <div className="persona-in flex flex-wrap gap-1 self-start" aria-label="Looks">
-              {LOOK_IDS.map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => void setupReply(LOOKS[id].label)}
-                  aria-label={`${LOOKS[id].label} look`}
-                  title={LOOKS[id].label}
-                  className="rounded-2xl p-1 hover:bg-accent-soft"
-                >
-                  <PersonaOrb look={id} size={38} animate={false} />
-                </button>
-              ))}
-            </div>
-          )}
-          {setupStep === "task" && (
-            <div className="persona-in flex flex-wrap gap-1.5 self-start">
-              {[...props.skills.map((s) => s.name), "Try the sample", "Later"].map((label) => (
-                <button
-                  key={label}
-                  type="button"
-                  onClick={() => void setupReply(label === "Try the sample" ? "sample" : label)}
-                  className={`rounded-full px-3 py-1.5 text-sm ${card} hover:text-accent`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
+          {setupChips}
         </>
       ) : (
         <>
@@ -994,98 +1115,7 @@ export function Companion(props: CompanionProps) {
               ))}
             </div>
           )}
-          {askWake && (
-            <div className={`persona-in space-y-2 rounded-[22px] p-4 text-sm ${card}`}>
-              <p>
-                <strong>Say &ldquo;Hey {name}&rdquo; to wake me.</strong> While this is on, your
-                browser listens for my name. In Chrome and Edge, that listening is done by the
-                browser maker&apos;s speech service, not by PERSUNA. I start a conversation when I
-                hear my name; nothing else is kept. Turn it off any time.
-              </p>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setWake(true)}
-                  className="rounded-full bg-accent px-4 py-1.5 text-sm text-accent-ink"
-                >
-                  Turn it on
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAskWake(false)}
-                  className="rounded-full px-3 py-1.5 text-sm text-muted hover:text-foreground"
-                >
-                  Not now
-                </button>
-              </div>
-            </div>
-          )}
-          {askWatch && (
-            <div className={`persona-in space-y-2 rounded-[22px] p-4 text-sm ${card}`}>
-              <p>
-                {props.overlay ? (
-                  <>
-                    <strong>Let me watch while you work.</strong> I&apos;ll watch your whole screen
-                    or one app you choose (I&apos;ll ask once, and remember). I never see myself.
-                  </>
-                ) : (
-                  <>
-                    <strong>Pick one window for me to watch.</strong> It can be any app (Figma, your
-                    video editor, a spreadsheet): choose it under &ldquo;Window&rdquo;.
-                  </>
-                )}{" "}
-                I look every 30 seconds while it changes, write down your <em>steps</em>, skip names
-                and figures, and keep no screenshots. Stop any time.
-              </p>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => void startWatch()}
-                  className="rounded-full bg-accent px-4 py-1.5 text-sm text-accent-ink"
-                >
-                  {props.overlay ? "Start watching" : "Choose a window"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAskWatch(false)}
-                  className="rounded-full px-3 py-1.5 text-sm text-muted hover:text-foreground"
-                >
-                  Not now
-                </button>
-              </div>
-            </div>
-          )}
-          {!watching && watchNote && focusSkill && (
-            <div
-              className={`persona-in flex items-center gap-3 rounded-full px-4 py-2 text-sm ${card}`}
-            >
-              <span className="flex-1">Teach what I saw to {focusSkill.name}?</span>
-              <button
-                type="button"
-                onClick={() => void teachWatched()}
-                className="rounded-full bg-accent px-3 py-1 text-accent-ink"
-              >
-                Teach it
-              </button>
-            </div>
-          )}
-          {task && (
-            <div className={`persona-in rounded-[22px] ${card}`}>
-              <TaskComposer
-                skills={published}
-                initial={task.skill}
-                onCancel={() => setTask(null)}
-                onDone={(added, job) => {
-                  setTask(null);
-                  setMessages((all) => [
-                    ...all,
-                    ...added.map((m) => (m.jobId === job.id ? { ...m, job } : m)),
-                  ]);
-                  void sayAloud(added.at(-1)?.content ?? "");
-                }}
-              />
-            </div>
-          )}
+          {assistCards}
         </>
       )}
       {error && (
@@ -1263,6 +1293,170 @@ export function Companion(props: CompanionProps) {
   );
 
   if (props.standalone) return columnView;
+
+  if (props.overlay && spot) {
+    const right = spot.x + ORB / 2 > window.innerWidth / 2;
+    const low = spot.y > 360;
+    const side = right ? "right-[calc(100%+12px)] items-end" : "left-[calc(100%+12px)] items-start";
+    const latestJob = [...messages].reverse().find((m) => m.jobId && m.jobId !== dismissedJob);
+    const showSetupInput = !setupDone && busy === "idle";
+    const hasCards =
+      (!setupDone && (setupStep === "look" || setupStep === "task")) ||
+      (setupDone && (askWake || askWatch || Boolean(task) || Boolean(watchNote && !watching))) ||
+      Boolean(latestJob);
+    return (
+      <section
+        data-persona
+        aria-label={`${name}, your assistant`}
+        className="pointer-events-none fixed z-50"
+        style={{
+          left: spot.x,
+          top: spot.y,
+          width: ORB,
+          transition: glide
+            ? "left 1.1s cubic-bezier(.45,.05,.25,1), top 1.1s cubic-bezier(.45,.05,.25,1)"
+            : "none",
+        }}
+      >
+        {/* Words, beside Persuna: what it says, and briefly what it heard. */}
+        <div
+          className={`absolute flex w-max max-w-80 flex-col gap-2 ${side} ${low ? "bottom-6" : "top-2"}`}
+          aria-live="polite"
+        >
+          {hasCards && (
+            <div className="pointer-events-auto flex w-80 flex-col gap-2">
+              {!setupDone ? setupChips : assistCards}
+              {latestJob?.jobId && (
+                <div className={`persona-in rounded-[22px] p-3 text-sm ${glass}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="flex-1">{latestJob.content}</span>
+                    <button
+                      type="button"
+                      onClick={() => setDismissedJob(latestJob.jobId!)}
+                      aria-label="Close"
+                      className="text-muted hover:text-foreground"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <JobCard jobId={latestJob.jobId} initial={latestJob.job} />
+                </div>
+              )}
+            </div>
+          )}
+          {heard && (
+            <p className="persona-in self-end rounded-[22px] bg-gradient-to-br from-accent to-plum-2 px-4 py-2 text-sm text-white shadow-lg">
+              {heard}
+            </p>
+          )}
+          {(caption || busy !== "idle") && (
+            <button
+              type="button"
+              onClick={() => setCaption(null)}
+              className={`persona-in pointer-events-auto max-w-80 px-4 py-2.5 text-left text-sm leading-snug ${glass} rounded-[22px] ${
+                right ? "rounded-tr-md" : "rounded-tl-md"
+              }`}
+            >
+              {busy !== "idle" && !caption ? (
+                <span className="flex gap-1 py-1" aria-label={status}>
+                  {[0, 1, 2].map((i) => (
+                    <span
+                      key={i}
+                      className="persona-dot h-2 w-2 rounded-full bg-accent"
+                      style={{ animationDelay: `${i * 0.15}s` }}
+                    />
+                  ))}
+                </span>
+              ) : caption && caption.length > 260 ? (
+                `${caption.slice(0, 260)}…`
+              ) : (
+                caption
+              )}
+            </button>
+          )}
+          {error && (
+            <p className="persona-in pointer-events-auto rounded-full bg-danger/10 px-3 py-1.5 text-sm text-danger backdrop-blur">
+              {error}
+            </p>
+          )}
+          {(typing || showSetupInput) && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void send(text);
+                if (setupDone) setTyping(false);
+              }}
+              className={`persona-in pointer-events-auto flex w-80 items-center gap-1.5 rounded-full p-1.5 pl-4 ${glass}`}
+            >
+              <label className="sr-only" htmlFor="persona-input">
+                Message {name}
+              </label>
+              <input
+                id="persona-input"
+                autoFocus
+                value={text}
+                onChange={(e) => {
+                  interrupt();
+                  setText(e.target.value);
+                }}
+                onKeyDown={(e) => e.key === "Escape" && setupDone && setTyping(false)}
+                autoComplete="off"
+                placeholder={setupDone ? `Type to ${name}…` : "Type, or tap me and just talk"}
+                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint"
+              />
+              <button
+                type="submit"
+                disabled={!text.trim()}
+                aria-label="Send"
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ink text-ink-foreground disabled:opacity-30"
+              >
+                <Icon name="send" />
+              </button>
+            </form>
+          )}
+        </div>
+
+        {/* Persuna. Tap to talk; hover for a few actions. */}
+        <div className="group pointer-events-auto relative">
+          {setupDone && (
+            <div
+              className={`absolute bottom-7 flex items-center gap-1 rounded-full px-1.5 py-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 ${glass} ${
+                right ? "right-[calc(100%+6px)]" : "left-[calc(100%+6px)]"
+              }`}
+            >
+              <Chip label="Type instead" active={typing} onClick={() => setTyping((t) => !t)}>
+                <Icon name="keyboard" />
+              </Chip>
+              {actions}
+            </div>
+          )}
+          <button
+            type="button"
+            aria-label={`${name}: ${conversing ? "stop talking" : talking ? "interrupt" : "talk"} (${status})`}
+            aria-pressed={conversing}
+            title={talking ? "Tap to interrupt" : conversing ? "Tap to stop" : "Tap to talk"}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggleOpen();
+              }
+            }}
+            style={{
+              touchAction: "none",
+              transform: `rotate(${tilt}deg)`,
+              transition: "transform .6s ease",
+            }}
+            className="cursor-grab select-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent active:cursor-grabbing"
+          >
+            {orb(false)}
+          </button>
+        </div>
+      </section>
+    );
+  }
 
   if (!spot) return pip ? createPortal(columnView, pip.document.body) : null;
   const onRight = spot.x + ORB / 2 > window.innerWidth / 2;
