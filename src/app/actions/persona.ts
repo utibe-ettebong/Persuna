@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { unstable_rethrow } from "next/navigation";
 import { z } from "zod";
 import { slugField, uuidField } from "@/lib/action-state";
-import { readUploadedText } from "@/lib/docs/read-file";
+import { readTaskInput } from "@/lib/docs/read-input";
+import { createFileStore } from "@/lib/models/files";
 import { actorOf, requireUser } from "@/lib/auth/session";
 import { createModelClient, createTranscriber } from "@/lib/models";
 import { readAudio } from "@/lib/models/transcribe";
@@ -98,7 +99,9 @@ export async function personaRunTaskAction(form: FormData) {
   return run(async () => {
     const user = await requireUser();
     const slug = slugField.parse(form.get("skill"));
-    const text = (await readUploadedText(form.get("file"))) ?? String(form.get("text") ?? "");
+    const text =
+      (await readTaskInput(form.get("file"), createModelClient(user), createFileStore())) ??
+      String(form.get("text") ?? "");
     if (!text.trim()) throw new Error("Paste the input or upload a file first.");
     if (text.length > 100_000) throw new Error("That's too long for one task.");
     const result = await runTask(createModelClient(user), user, { slug, text });

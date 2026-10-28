@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@/lib/models/gateway";
+import type { ChatMessage, ContentPart } from "@/lib/models/gateway";
 import { toneInstruction } from "@/lib/persona/tone";
 import type { PersonaState, PersonaTurn } from "@/lib/persona/types";
 import { INTERVIEW_QUESTIONS } from "./interview";
@@ -55,7 +55,7 @@ export function draftMessages(sheet: SkillSheet, shots: Pair[], input: string): 
   return [
     {
       role: "system",
-      content: `You do one task exactly the way a specific person does it. Follow their skill sheet precisely; where the sheet is silent, copy what the reference examples do. Never invent facts that are not in the input. Reply with only the finished output, with no preamble or commentary.
+      content: `You do one task exactly the way a specific person does it. Follow their skill sheet precisely; where the sheet is silent, copy what the reference examples do. Never invent facts that are not in the input. Lines like "[notes.pdf · page 2]" in the input only say which document and page the text came from: don't copy them into the output. Reply with only the finished output, with no preamble or commentary.
 
 ${renderSheet(sheet)}`,
     },
@@ -314,6 +314,69 @@ Reply with one JSON object and nothing else: { "say": "..." or null, "step": "..
         },
         { type: "image_url", image_url: { url: frame } },
       ],
+    },
+  ];
+}
+
+/* ---------- Reading documents (PDFs, scans, photos) ---------- */
+
+/**
+ * Transcribes one document, page by page, word for word. The transcription
+ * becomes the job's input: the text every quote in the draft is checked against.
+ */
+export function transcribeMessages(name: string, document: ContentPart): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: `You transcribe documents exactly. Copy every page's text word for word, in reading order, keeping lists, line breaks and numbers as written. For tables, write one row per line with cells separated by " | ". For charts, write the title, the axes and the values you can read. For handwriting, transcribe what is legible and write [illegible] where it isn't. Never summarise, correct or add anything.
+
+Reply with one JSON object and nothing else: { "pages": [{ "page": 1, "text": "..." }] }`,
+    },
+    {
+      role: "user",
+      content: [{ type: "text", text: fence("transcribe_document", name) }, document],
+    },
+  ];
+}
+
+/* ---------- Grounding: is every statement in a draft backed by the input? ---------- */
+
+/** Lists a draft's factual statements, each with the passage of the input that supports it. */
+export function groundingMessages(input: string, draft: string): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: `You check a draft against its input. List every factual statement in the draft: names, roles, dates, times, figures, decisions, actions, owners and deadlines. Skip headings, formatting and wording that only restructures the input. For each statement, copy word for word the shortest passage of the input that supports it (at least a few words, exactly as written, without changing spelling or punctuation). If nothing in the input supports it, give an empty quote. Do not judge style.
+
+Reply with one JSON object and nothing else: { "claims": [{ "claim": "the statement", "quote": "exact words from the input" }] }`,
+    },
+    {
+      role: "user",
+      content: `${fence("ground_input", input)}\n\n${fence("ground_draft", draft)}`,
+    },
+  ];
+}
+
+/**
+ * Asks for the draft again, without the statements the input doesn't support.
+ * The workshop's verification pattern: refuse with specific feedback, retry.
+ */
+export function redraftMessages(
+  sheet: SkillSheet,
+  shots: Pair[],
+  input: string,
+  draft: string,
+  unsupported: string[],
+): ChatMessage[] {
+  return [
+    ...draftMessages(sheet, shots, input),
+    { role: "assistant", content: draft },
+    {
+      role: "user",
+      content: `These statements in your draft are not supported by the input:\n${fence(
+        "unsupported",
+        unsupported.map((c) => `- ${c}`).join("\n"),
+      )}\n\nRewrite the draft in the same format, removing or correcting those statements so everything comes from the input. Reply with only the finished output.`,
     },
   ];
 }

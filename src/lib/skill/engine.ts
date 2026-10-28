@@ -3,7 +3,8 @@
  * learn from a correction. Everything here takes a {@link ModelClient} so it
  * runs the same against real providers, in tests, and from the CLI.
  */
-import type { Completion, ModelClient } from "@/lib/models/gateway";
+import type { Completion, ContentPart, ModelClient } from "@/lib/models/gateway";
+import { z } from "zod";
 import { completeJson } from "@/lib/models/json";
 import {
   deterministicFlags,
@@ -19,9 +20,18 @@ import {
   methodNotesMessages,
   redactMessages,
   screenWalkthroughMessages,
+  transcribeMessages,
+  groundingMessages,
+  redraftMessages,
   selfCheckMessages,
   type SkillMeta,
 } from "./prompts";
+import {
+  assessClaims,
+  groundingClaims,
+  MAX_REDRAFTS,
+  type GroundingReport,
+} from "@/lib/jobs/grounding";
 import { namedEntities, type NamedEntity } from "./redact";
 import { closestPairs } from "./retrieve";
 import { replicationScore } from "./score";
@@ -208,4 +218,89 @@ export async function mapLimit<T, R>(
   });
   await Promise.all(workers);
   return results;
+}
+
+const transcription = z.object({
+  pages: z.array(z.object({ page: z.coerce.number().int().min(1), text: z.string() })).min(1),
+});
+
+/** One document (an uploaded PDF, or an image) as its pages' text, word for word. */
+export async function transcribeDocument(
+  client: ModelClient,
+  name: string,
+  document: ContentPart,
+): Promise<{ page: number; text: string }[]> {
+  const { value } = await completeJson(
+    client,
+    "extract",
+    transcribeMessages(name, document),
+    transcription,
+    { maxTokens: 16_384 },
+  );
+  return value.pages.filter((p) => p.text.trim());
+}
+
+/** Checks each factual statement in a draft against the input (quotes verified in code). */
+export async function checkGrounding(
+  client: ModelClient,
+  input: string,
+  draft: string,
+  redrafts = 0,
+): Promise<GroundingReport> {
+  const { value } = await completeJson(
+    client,
+    "evaluate",
+    groundingMessages(input, draft),
+    groundingClaims,
+    { maxTokens: 8192 },
+  );
+  return assessClaims(value.claims, input, redrafts);
+}
+
+/**
+ * Drafts, checks every statement against the input, and when some aren't
+ * supported, asks for the draft again with exactly those listed, up to
+ * {@link MAX_REDRAFTS} times. Whatever is still unsupported comes back in the
+ * report, for the owner to see.
+ */
+export async function draftGrounded(
+  client: ModelClient,
+  sheet: SkillSheet,
+  shots: Pair[],
+  input: string,
+): Promise<{ draft: string; completion: Completion; grounding: GroundingReport }> {
+  let completion = await client.complete("draft", draftMessages(sheet, shots, input), {
+    temperature: 0.2,
+    maxTokens: 4096,
+  });
+  let draft = completion.text.trim();
+  if (!draft) throw new Error("The model returned an empty draft");
+  let tokens = { prompt: completion.promptTokens, completion: completion.completionTokens };
+  let report = await checkGrounding(client, input, draft);
+  while (report.unsupported.length && report.redrafts < MAX_REDRAFTS) {
+    const again = await client.complete(
+      "draft",
+      redraftMessages(
+        sheet,
+        shots,
+        input,
+        draft,
+        report.unsupported.map((c) => c.claim),
+      ),
+      { temperature: 0.2, maxTokens: 4096 },
+    );
+    if (!again.text.trim()) break;
+    completion = again;
+    draft = again.text.trim();
+    tokens = {
+      prompt: tokens.prompt + again.promptTokens,
+      completion: tokens.completion + again.completionTokens,
+    };
+    report = await checkGrounding(client, input, draft, report.redrafts + 1);
+  }
+  return {
+    draft,
+    completion: { ...completion, promptTokens: tokens.prompt, completionTokens: tokens.completion },
+    grounding: report,
+  };
 }

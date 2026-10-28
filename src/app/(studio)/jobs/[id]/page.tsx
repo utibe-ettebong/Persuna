@@ -59,6 +59,33 @@ export default async function JobPage({ params }: Params) {
         {job.rating && <Badge tone="good">renter rated {job.rating}/5</Badge>}
       </div>
 
+      {job.grounding && (
+        <Card
+          className={`p-4 text-sm ${job.grounding.unsupported.length ? "border-warn/50" : "border-good/40"}`}
+        >
+          <h2
+            className={`text-sm font-semibold ${job.grounding.unsupported.length ? "text-warn" : "text-good"}`}
+          >
+            {job.grounding.unsupported.length
+              ? `${job.grounding.unsupported.length} of ${job.grounding.checked} statements aren't backed by the input`
+              : `All ${job.grounding.checked} statements checked against the input`}
+          </h2>
+          <p className="mt-1 text-muted">
+            Each fact in the draft was matched to the exact words in the input that support it, and
+            each quote was checked word for word.
+            {job.grounding.redrafts > 0 &&
+              ` The draft was rewritten ${job.grounding.redrafts === 1 ? "once" : `${job.grounding.redrafts} times`} to remove unsupported statements.`}
+          </p>
+          {job.grounding.unsupported.length > 0 && (
+            <ul className="mt-2 list-disc space-y-1 pl-5">
+              {job.grounding.unsupported.map((c, i) => (
+                <li key={i}>{c.claim}</li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
+
       {job.flags.length > 0 && (
         <Card className="border-warn/50 p-4">
           <h2 className="text-sm font-semibold text-warn">

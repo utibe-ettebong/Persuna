@@ -20,7 +20,10 @@ export function createMockClient(): ModelClient {
       const user = lastUser ? textOf(lastUser.content) : "";
       const system = textOf(messages.find((m) => m.role === "system")?.content ?? "");
       let text: string;
-      if (user.includes("<persona_user>")) text = JSON.stringify(mockPersona(user));
+      if (user.includes("<transcribe_document>")) text = JSON.stringify(mockTranscription(user));
+      else if (user.includes("<ground_draft>")) text = JSON.stringify(mockGrounding(user));
+      else if (user.includes("<unsupported>")) text = mockRedraft(messages, user);
+      else if (user.includes("<persona_user>")) text = JSON.stringify(mockPersona(user));
       else if (user.includes("<persona_observe>")) text = JSON.stringify(mockObserve(user));
       else if (role === "draft") text = mockDraft(user, system);
       else if (user.includes("<screen_walkthrough>"))
@@ -308,6 +311,62 @@ function mockObserve(user: string) {
   return {
     say: seen === 0 ? "I'm watching this window. I'll jot down your steps quietly." : null,
     step: `${steps[seen % steps.length]} (mock)`,
+  };
+}
+
+/**
+ * Stand-in for the grounding check: each draft line with a number is a claim,
+ * quoted from the input line holding its numbers; if a number isn't in the
+ * input, there's no quote (unsupported).
+ */
+function mockGrounding(user: string) {
+  const input = blocks(user, "ground_input")[0] ?? "";
+  const draft = blocks(user, "ground_draft")[0] ?? "";
+  const inputLines = input.split(/\r?\n/);
+  const claims = draft
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^[#*\-|\s]+|[*|\s]+$/g, "").trim())
+    .filter((l) => /\d/.test(l) && l.length > 3)
+    .map((claim) => {
+      const numbers = claim.match(/\d[\d,.:]*/g) ?? [];
+      const line = inputLines.find((l) =>
+        numbers.every((n) => l.includes(n.replace(/[.,:]+$/, ""))),
+      );
+      return { claim, quote: line?.trim() ?? "" };
+    });
+  return { claims };
+}
+
+/** Stand-in for a redraft: the previous draft without the lines holding unsupported statements. */
+function mockRedraft(messages: ChatMessage[], user: string) {
+  const previous = textOf(messages.findLast((m) => m.role === "assistant")?.content ?? "");
+  const bad = (blocks(user, "unsupported")[0] ?? "")
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^-\s*/, "").trim())
+    .filter(Boolean);
+  return previous
+    .split(/\r?\n/)
+    .filter(
+      (line) =>
+        !bad.some(
+          (b) =>
+            line.includes(b) ||
+            b.includes(line.replace(/^[#*\-|\s]+|[*|\s]+$/g, "").trim() || "\u0000"),
+        ),
+    )
+    .join("\n");
+}
+
+/** Stand-in for reading a PDF or image: fixed meeting notes, so the flow works offline. */
+function mockTranscription(user: string) {
+  const name = blocks(user, "transcribe_document")[0] ?? "document";
+  return {
+    pages: [
+      {
+        page: 1,
+        text: `Mock transcription of ${name}.\nOps sync, 14 October. Chair: Sam. Present: Sam, Ife, Tunde.\nAgreed: the stock count moves to Thursdays.\nAction: Tunde to send the revised rota by Friday.`,
+      },
+    ],
   };
 }
 

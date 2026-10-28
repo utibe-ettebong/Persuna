@@ -15,7 +15,9 @@ const roleSchema = z.object({
    * For "thinking" models: how hard to think before answering (sent as
    * reasoning_effort). Unset sends nothing, which every provider accepts.
    */
-  reasoningEffort: z.enum(["none", "low", "medium", "high"]).optional(),
+  reasoningEffort: z.enum(["none", "low", "medium", "high", "max"]).optional(),
+  /** Another model on the same provider, used when this one is "not found" (404). */
+  fallbackModel: z.string().min(1).optional(),
 });
 
 export type ModelRoleConfig = z.infer<typeof roleSchema>;
@@ -189,7 +191,8 @@ export function modelConfig(role: ModelRole): ModelRoleConfig {
   const pick = rolePicker(prefix);
   // A role that borrows EXTRACT's provider also takes its reasoning setting,
   // so a setting meant for one provider is never sent to another.
-  const effort = setting(`${roleKey(prefix) ? prefix : "EXTRACT"}_REASONING_EFFORT`);
+  const own = roleKey(prefix) ? prefix : "EXTRACT";
+  const effort = setting(`${own}_REASONING_EFFORT`);
 
   return parseOrThrow(
     roleSchema,
@@ -198,6 +201,7 @@ export function modelConfig(role: ModelRole): ModelRoleConfig {
       apiKey: pick("API_KEY"),
       model: pick("MODEL"),
       reasoningEffort: effort?.toLowerCase(),
+      fallbackModel: setting(`${own}_FALLBACK_MODEL`),
     },
     `${prefix}_* model settings`,
   );

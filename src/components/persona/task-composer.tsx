@@ -86,11 +86,11 @@ export function TaskComposer({
         className="w-full rounded-2xl bg-background/70 px-4 py-3 outline-none ring-1 ring-line focus:ring-2 focus:ring-accent"
       />
       <label className="block text-muted">
-        …or upload a file (.md, .txt, .docx)
+        …or upload a file: text, Word, PDF, a scan or a photo
         <input
           ref={file}
           type="file"
-          accept=".md,.txt,.docx"
+          accept=".md,.markdown,.txt,.docx,.pdf,.png,.jpg,.jpeg,.webp"
           className="mt-1 block w-full text-xs"
         />
       </label>

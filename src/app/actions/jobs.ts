@@ -5,7 +5,8 @@ import { z } from "zod";
 import { attempt, uuidField, type ActionState } from "@/lib/action-state";
 import { assertJobOwner, ownedSkillById, ownedSkillBySlug } from "@/lib/auth/access";
 import { requireUser } from "@/lib/auth/session";
-import { readUploadedText } from "@/lib/docs/read-file";
+import { readTaskInput } from "@/lib/docs/read-input";
+import { createFileStore } from "@/lib/models/files";
 import { createJob, reviewJob, setTrustLevel } from "@/lib/jobs/service";
 import { createModelClient, createTranscriber } from "@/lib/models";
 import { readAudio } from "@/lib/models/transcribe";
@@ -20,7 +21,8 @@ export async function createJobAction(_: ActionState, form: FormData): Promise<A
     const audio = readAudio(form.get("audio"));
     const input = audio
       ? (await createTranscriber(await requireUser()).transcribe(audio, audio.name)).text
-      : ((await readUploadedText(form.get("inputFile"))) ?? String(form.get("inputText") ?? ""));
+      : ((await readTaskInput(form.get("inputFile"), createModelClient(user), createFileStore())) ??
+        String(form.get("inputText") ?? ""));
     if (!input.trim()) throw new Error("Paste the notes, upload a file or record a voice note.");
     const job = await createJob(createModelClient(await requireUser()), {
       skillId,

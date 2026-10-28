@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { ModelRole } from "@/env";
 import type { ChatMessage, ModelClient } from "@/lib/models/gateway";
 import { extractJson } from "@/lib/models/json";
-import { extractSheet, mapLimit, proposeCorrection, runTestCase } from "./engine";
+import {
+  draftGrounded,
+  extractSheet,
+  mapLimit,
+  proposeCorrection,
+  runTestCase,
+  transcribeDocument,
+} from "./engine";
 import type { Pair, SkillSheet } from "./types";
 
 type Reply = string | ((messages: ChatMessage[]) => string);
@@ -155,5 +162,60 @@ describe("mapLimit", () => {
     });
     expect(out).toEqual([50, 10, 30, 20]);
     expect(peak).toBe(2);
+  });
+});
+
+describe("draftGrounded", () => {
+  const input = "Budget: spend to date is 41,500 against 60,000.";
+  const claims = (list: [string, string][]) =>
+    JSON.stringify({ claims: list.map(([claim, quote]) => ({ claim, quote })) });
+
+  it("rewrites a draft whose statements the input doesn't support, then accepts it", async () => {
+    const { client, calls } = fakeClient({
+      draft: ["Spend is 99,000.", "Spend to date is 41,500."],
+      evaluate: [
+        claims([["Spend is 99,000.", ""]]),
+        claims([["Spend to date is 41,500.", "spend to date is 41,500"]]),
+      ],
+    });
+    const result = await draftGrounded(client, sheet, [], input);
+    expect(result.draft).toBe("Spend to date is 41,500.");
+    expect(result.grounding).toEqual({ checked: 1, unsupported: [], redrafts: 1 });
+    // The redraft request names exactly the unsupported statement.
+    const redraft = calls.filter((c) => c.role === "draft")[1].messages.at(-1)!;
+    expect(String(redraft.content)).toContain("- Spend is 99,000.");
+  });
+
+  it("stops after two redrafts and reports what's still unsupported", async () => {
+    const { client, calls } = fakeClient({
+      draft: ["Made up.", "Still made up.", "Made up again."],
+      evaluate: [1, 2, 3].map(() => claims([["Approved 75,000.", "approved 75,000"]])),
+    });
+    const result = await draftGrounded(client, sheet, [], input);
+    expect(result.grounding.redrafts).toBe(2);
+    expect(result.grounding.unsupported.map((c) => c.claim)).toEqual(["Approved 75,000."]);
+    expect(calls.filter((c) => c.role === "draft")).toHaveLength(3);
+  });
+});
+
+describe("transcribeDocument", () => {
+  it("returns each page's text and drops empty pages", async () => {
+    const { client, calls } = fakeClient({
+      extract: [
+        JSON.stringify({
+          pages: [
+            { page: 1, text: "Ops sync" },
+            { page: 2, text: "  " },
+          ],
+        }),
+      ],
+    });
+    const pages = await transcribeDocument(client, "notes.pdf", {
+      type: "file",
+      file: { file_id: "file-1" },
+    });
+    expect(pages).toEqual([{ page: 1, text: "Ops sync" }]);
+    const parts = calls[0].messages[1].content as { type: string }[];
+    expect(parts.map((p) => p.type)).toEqual(["text", "file"]);
   });
 });
