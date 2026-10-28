@@ -43,13 +43,26 @@ export interface ModelClient {
 
 const completionResponse = z.object({
   model: z.string().optional(),
-  choices: z.array(z.object({ message: z.object({ content: z.string().nullable() }) })).min(1),
+  choices: z
+    .array(
+      z.object({
+        message: z.object({ content: z.string().nullable() }),
+        finish_reason: z.string().nullish(),
+      }),
+    )
+    .min(1),
   usage: z
     .object({ prompt_tokens: z.number().optional(), completion_tokens: z.number().optional() })
     .optional(),
 });
 
 const RETRYABLE = new Set([408, 409, 429, 500, 502, 503, 504]);
+/**
+ * "Thinking" models can spend the whole token budget reasoning and return no
+ * answer. Then the call is made once more with this much more room, up to the cap.
+ */
+export const THINKING_ROOM_FACTOR = 3;
+export const MAX_TOKENS_CAP = 16_384;
 const MAX_ATTEMPTS = 3;
 
 /** A role whose key was rejected is sent to the EXTRACT model for this long. */
@@ -98,12 +111,36 @@ async function callOnce(
   options: CompleteOptions,
   fetchImpl: typeof fetch,
 ): Promise<Completion> {
+  const maxTokens = options.maxTokens ?? 4096;
+  const first = await post(config, role, messages, options, maxTokens, fetchImpl);
+  if (first.text.trim() || first.finish !== "length" || maxTokens >= MAX_TOKENS_CAP) {
+    return first.completion;
+  }
+  // It thought until it ran out of room: once more, with more room.
+  const roomier = Math.min(maxTokens * THINKING_ROOM_FACTOR, MAX_TOKENS_CAP);
+  const second = await post(config, role, messages, options, roomier, fetchImpl);
+  return {
+    ...second.completion,
+    promptTokens: first.completion.promptTokens + second.completion.promptTokens,
+    completionTokens: first.completion.completionTokens + second.completion.completionTokens,
+  };
+}
+
+async function post(
+  config: ModelRoleConfig,
+  role: ModelRole,
+  messages: ChatMessage[],
+  options: CompleteOptions,
+  maxTokens: number,
+  fetchImpl: typeof fetch,
+): Promise<{ completion: Completion; text: string; finish: string | null }> {
   const url = `${config.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const body = JSON.stringify({
     model: config.model,
     messages,
     temperature: options.temperature ?? 0,
-    max_tokens: options.maxTokens ?? 4096,
+    max_tokens: maxTokens,
+    ...(config.reasoningEffort && { reasoning_effort: config.reasoningEffort }),
   });
 
   for (let attempt = 1; ; attempt++) {
@@ -143,11 +180,16 @@ async function callOnce(
     const parsed = completionResponse.safeParse(await response.json());
     if (!parsed.success) throw new ModelError(role, "unexpected response shape");
     const data = parsed.data;
+    const text = data.choices[0].message.content ?? "";
     return {
-      text: data.choices[0].message.content ?? "",
-      model: data.model ?? config.model,
-      promptTokens: data.usage?.prompt_tokens ?? 0,
-      completionTokens: data.usage?.completion_tokens ?? 0,
+      text,
+      finish: data.choices[0].finish_reason ?? null,
+      completion: {
+        text,
+        model: data.model ?? config.model,
+        promptTokens: data.usage?.prompt_tokens ?? 0,
+        completionTokens: data.usage?.completion_tokens ?? 0,
+      },
     };
   }
 }

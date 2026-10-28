@@ -54,6 +54,9 @@ export default defineRailway(() => {
       EVAL_BASE_URL: preserve(),
       EVAL_API_KEY: preserve(),
       EVAL_MODEL: preserve(),
+      EXTRACT_REASONING_EFFORT: preserve(),
+      DRAFT_REASONING_EFFORT: preserve(),
+      EVAL_REASONING_EFFORT: preserve(),
     },
   });
 

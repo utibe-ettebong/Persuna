@@ -79,4 +79,43 @@ describe("createGateway", () => {
     const client = createGateway(() => config, fetchImpl as typeof fetch);
     await expect(client.complete("draft", [])).rejects.toMatchObject({ keyRejected: true });
   });
+
+  it("gives a thinking model more room when it used the whole budget thinking", async () => {
+    const empty = {
+      choices: [{ message: { content: "" }, finish_reason: "length" }],
+      usage: { completion_tokens: 1024 },
+    };
+    const fetchImpl = vi.fn().mockResolvedValueOnce(ok(empty)).mockResolvedValueOnce(ok(reply));
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+    const result = await client.complete("draft", [], { maxTokens: 1024 });
+    expect(result.text).toBe("hello");
+    const budgets = fetchImpl.mock.calls.map(
+      (c) => JSON.parse((c[1] as RequestInit).body as string).max_tokens,
+    );
+    expect(budgets).toEqual([1024, 3072]);
+    expect(result.completionTokens).toBe(1024 + 2);
+  });
+
+  it("does not retry a short answer that simply finished", async () => {
+    const fetchImpl = vi.fn(async () =>
+      ok({ choices: [{ message: { content: "" }, finish_reason: "stop" }] }),
+    );
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+    await client.complete("draft", []);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends reasoning_effort only when the role sets it", async () => {
+    const fetchImpl = vi.fn(async () => ok(reply));
+    await createGateway(
+      () => ({ ...config, reasoningEffort: "low" }),
+      fetchImpl as typeof fetch,
+    ).complete("draft", []);
+    await createGateway(() => config, fetchImpl as typeof fetch).complete("draft", []);
+    const sent = fetchImpl.mock.calls.map((c) =>
+      JSON.parse((c as unknown as [string, RequestInit])[1].body as string),
+    );
+    expect(sent[0].reasoning_effort).toBe("low");
+    expect(sent[1]).not.toHaveProperty("reasoning_effort");
+  });
 });
