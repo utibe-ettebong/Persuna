@@ -30,7 +30,8 @@ export async function personaTurn(
     "draft",
     personaChatMessages(state, history.slice(-HISTORY_TURNS), text),
     personaReply,
-    { maxTokens: 1024 },
+    // Room for "thinking" models to reason before the short reply.
+    { maxTokens: 4096 },
   );
   return tidyReply(value, state);
 }
@@ -66,7 +67,7 @@ export async function personaObserve(
     "extract",
     personaObserveMessages(input.name, input.focus, input.recentSteps.slice(-6), input.frame),
     personaObservation,
-    { maxTokens: 300 },
+    { maxTokens: 2048 },
   );
   return value;
 }

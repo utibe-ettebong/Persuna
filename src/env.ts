@@ -11,6 +11,11 @@ const roleSchema = z.object({
   baseUrl: z.url(),
   apiKey: z.string().min(1),
   model: z.string().min(1),
+  /**
+   * For "thinking" models: how hard to think before answering (sent as
+   * reasoning_effort). Unset sends nothing, which every provider accepts.
+   */
+  reasoningEffort: z.enum(["none", "low", "medium", "high"]).optional(),
 });
 
 export type ModelRoleConfig = z.infer<typeof roleSchema>;
@@ -180,12 +185,21 @@ export function trustThresholds() {
 }
 
 export function modelConfig(role: ModelRole): ModelRoleConfig {
-  const pick = rolePicker(PREFIX[role]);
+  const prefix = PREFIX[role];
+  const pick = rolePicker(prefix);
+  // A role that borrows EXTRACT's provider also takes its reasoning setting,
+  // so a setting meant for one provider is never sent to another.
+  const effort = setting(`${roleKey(prefix) ? prefix : "EXTRACT"}_REASONING_EFFORT`);
 
   return parseOrThrow(
     roleSchema,
-    { baseUrl: pick("BASE_URL"), apiKey: pick("API_KEY"), model: pick("MODEL") },
-    `${PREFIX[role]}_* model settings`,
+    {
+      baseUrl: pick("BASE_URL"),
+      apiKey: pick("API_KEY"),
+      model: pick("MODEL"),
+      reasoningEffort: effort?.toLowerCase(),
+    },
+    `${prefix}_* model settings`,
   );
 }
 
