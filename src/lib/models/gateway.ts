@@ -2,11 +2,13 @@ import { z } from "zod";
 import { env, modelConfig, type ModelRole, type ModelRoleConfig } from "@/env";
 
 /**
- * Text, or (in user messages) text with images or an uploaded file (a PDF sent
- * through the provider's Files API), as OpenAI-style content parts.
+ * Text, or (in user messages) text with images, a recording (base64 audio) or
+ * an uploaded file (a PDF sent through the provider's Files API), as
+ * OpenAI-style content parts.
  */
 export type ContentPart =
   | { type: "text"; text: string }
+  | { type: "input_audio"; input_audio: { data: string; format: "wav" | "mp3" } }
   | { type: "image_url"; image_url: { url: string } }
   | { type: "file"; file: { file_id: string; filename?: string } };
 

@@ -23,6 +23,11 @@ const ROLE_INFO = {
     model: "Muse Spark Open (Modal or Baseten)",
     use: "Scores drafts and runs the self-check.",
   },
+  listen: {
+    name: "Listen",
+    model: "Muse Spark (Meta Model API)",
+    use: "Hears what you say to Persuna directly and answers, with no transcription first.",
+  },
   transcribe: {
     name: "Transcribe",
     model: "Muse Voice Transcribe",

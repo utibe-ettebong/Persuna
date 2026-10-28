@@ -10,6 +10,7 @@ import { AddNoteForm, AddTodoForm } from "@/components/persona/add-note-form";
 import { LocalTime } from "@/components/persona/local-time";
 import {
   ClearChatButton,
+  DisconnectAppButton,
   ForgetButton,
   PersonaProfileForm,
   TeachNoteButton,
@@ -18,6 +19,7 @@ import {
 import { Badge, Card, PageHeader, PanelTitle, Prose } from "@/components/ui";
 import { PersonaOrb } from "@/components/persona/orb";
 import { requireUser } from "@/lib/auth/session";
+import { listConnections } from "@/lib/connections/service";
 import { DESKTOP_DOWNLOAD_URL } from "@/lib/persona/looks";
 import {
   coachingForAll,
@@ -30,8 +32,11 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export default async function PersonaPage() {
+type Props = { searchParams: Promise<{ apps?: string }> };
+
+export default async function PersonaPage({ searchParams }: Props) {
   const user = await requireUser();
+  const appsMessage = (await searchParams).apps?.slice(0, 200) ?? null;
   const [{ profile, focusSkill, messages }, notes, reminders, coaching, handle, tone] =
     await Promise.all([
       companion(user.id),
@@ -41,6 +46,7 @@ export default async function PersonaPage() {
       ensureHandle(user.id),
       toneSummary(user.id),
     ]);
+  const apps = await listConnections(user.id);
 
   return (
     <div className="space-y-10">
@@ -135,6 +141,39 @@ export default async function PersonaPage() {
                 ))}
               </ul>
             )}
+          </Card>
+
+          <span id="apps" className="block scroll-mt-24" />
+          <Card className="p-5">
+            <PanelTitle>Apps {profile.name} can use</PanelTitle>
+            <p className="mb-3 text-sm text-muted">
+              Connect an app and just ask: &ldquo;what did Ada email me about?&rdquo;, &ldquo;put
+              lunch with Sam on Friday at 1&rdquo;, &ldquo;add these notes to Notion&rdquo;.{" "}
+              {profile.name} asks before sending or creating anything.
+            </p>
+            {appsMessage && <p className="mb-3 text-sm text-accent">{appsMessage}</p>}
+            <ul className="divide-y divide-line">
+              {apps.map((app) => (
+                <li key={app.provider} className="flex flex-wrap items-center gap-3 py-2 text-sm">
+                  <span className="flex-1">
+                    <strong>{app.apps}</strong>
+                    {app.account && <span className="block text-muted">{app.account}</span>}
+                  </span>
+                  {app.account ? (
+                    <DisconnectAppButton provider={app.provider} name={app.name} />
+                  ) : app.available ? (
+                    <a
+                      href={`/api/connections/${app.provider}`}
+                      className="label-mono text-accent underline"
+                    >
+                      Connect
+                    </a>
+                  ) : (
+                    <span className="label-mono text-faint">Not set up on this server</span>
+                  )}
+                </li>
+              ))}
+            </ul>
           </Card>
 
           <span id="conversation" className="block scroll-mt-24" />

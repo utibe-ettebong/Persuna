@@ -25,6 +25,7 @@ export function createMockClient(): ModelClient {
       else if (user.includes("<unsupported>")) text = mockRedraft(messages, user);
       else if (user.includes("<persona_user>")) text = JSON.stringify(mockPersona(user));
       else if (user.includes("<persona_observe>")) text = JSON.stringify(mockObserve(user));
+      else if (user.includes("<task>")) text = JSON.stringify(mockAppStep(user));
       else if (role === "draft") text = mockDraft(user, system);
       else if (user.includes("<screen_walkthrough>"))
         text = mockScreenSteps(lastUser?.content ?? "");
@@ -263,6 +264,12 @@ function mockPersonaTurn(user: string): {
     };
   }
 
+  if (
+    /\b(e-?mails?|inbox|gmail|calendar|schedule a|notion)\b/.test(lower) &&
+    !/\bskill\b/.test(lower)
+  ) {
+    return { reply: "On it.", actions: [{ type: "app_task", goal: text.trim() }] };
+  }
   if (/\b(stop|quit|end) (?:watching|following)\b/.test(lower)) {
     return {
       reply: "Okay, I've stopped watching.",
@@ -825,4 +832,19 @@ function sentence(s: string): string {
   if (!t) return t;
   const capped = t[0].toUpperCase() + t.slice(1);
   return /[.!?]$/.test(capped) ? capped : `${capped}.`;
+}
+
+/** A task in connected apps, offline: look once if there's a search tool, then answer. */
+function mockAppStep(user: string) {
+  const results = user.match(/<tool_result>([\s\S]*?)<\/tool_result>/g) ?? [];
+  if (!results.length && /e-?mail|inbox/i.test(user)) {
+    return { tool: "gmail_search", args: { query: "newer_than:7d" }, reply: null };
+  }
+  return {
+    tool: null,
+    args: null,
+    reply: results.length
+      ? `I looked and found ${results.length === 1 ? "one result" : `${results.length} results`}.`
+      : "Done.",
+  };
 }

@@ -1,3 +1,4 @@
+import { voiceMode } from "@/env";
 import { companion } from "@/lib/persona/service";
 import { Companion } from "./companion";
 
@@ -23,6 +24,7 @@ export async function CompanionMount({
       skills={persona.skills}
       standalone={standalone}
       overlay={overlay}
+      voiceMode={voiceMode()}
       messages={persona.messages.map((m) => ({
         id: m.id,
         role: m.role,

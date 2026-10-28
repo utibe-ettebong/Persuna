@@ -31,6 +31,9 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Skips the healthcheck, the Paystack webhook (signature-checked) and static assets.
-  matcher: ["/((?!api/health|api/webhooks/paystack|_next/static|_next/image|favicon.ico).*)"],
+  // Skips the healthcheck, the Paystack webhook (signature-checked), the voice
+  // agent's brain (checked by shared secret and signed session) and static assets.
+  matcher: [
+    "/((?!api/health|api/webhooks/paystack|api/persona/llm|_next/static|_next/image|favicon.ico).*)",
+  ],
 };

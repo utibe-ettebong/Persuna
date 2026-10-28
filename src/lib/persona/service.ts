@@ -9,6 +9,9 @@ import { db, schema } from "@/db/client";
 import type { PersonaMessage, PersonaNote } from "@/db/schema";
 import { audit, type Actor } from "@/lib/audit";
 import type { ModelClient } from "@/lib/models/gateway";
+import type { Transcriber } from "@/lib/models/transcribe";
+import { confirmAppAction, doAppTask, type AppConfirm } from "@/lib/connections/service";
+import { UsageLimitError } from "@/lib/models/usage";
 import { findNames } from "@/lib/skill/engine";
 import { INTERVIEW_QUESTIONS, type InterviewAnswers } from "@/lib/skill/interview";
 import { redact, redactTogether, scanText } from "@/lib/skill/redact";
@@ -31,7 +34,7 @@ import {
   splitPairs,
 } from "@/lib/skill/service";
 import { normalizeText } from "@/lib/text";
-import { env } from "@/env";
+import { env, modelProvider, voiceMode } from "@/env";
 import { createJob, getJob, reviewJob } from "@/lib/jobs/service";
 import { personaObserve, personaTurn, HISTORY_TURNS } from "./brain";
 import { coachSkill, suggestTestSplit, type SkillStats } from "./coach";
@@ -46,7 +49,7 @@ import {
   type Tone,
 } from "./tone";
 import { buildWrapUp } from "./wrapup";
-import type { PersonaState } from "./types";
+import type { PersonaReply, PersonaState } from "./types";
 
 const { personaProfiles, personaMessages, personaNotes, personaReminders, skills, jobs, listings } =
   schema;
@@ -217,6 +220,8 @@ export interface ChatResult {
   switchTo: { slug: string; name: string } | null;
   /** Start or stop watching the screen (starting still asks the user's permission). */
   watch: "start" | "stop" | null;
+  /** A send or create in the user's apps, waiting for their OK. */
+  appConfirm: AppConfirm | null;
 }
 
 export interface PublishConfirm {
@@ -229,20 +234,63 @@ export interface PublishConfirm {
   lowerThan: number | null;
 }
 
+/** The listening model couldn't hear or answer a recording; nothing was saved or done. */
+export class NotHeardError extends Error {
+  constructor(readonly reason: unknown) {
+    super("I couldn't make that out. Try again?");
+    this.name = "NotHeardError";
+  }
+}
+
+/**
+ * A spoken message. With VOICE_MODE=listen (the default) the listening model
+ * hears the recording itself and answers in one call; if it can't, or with
+ * VOICE_MODE=transcribe or the offline mock, it's transcribed first.
+ */
+export async function chatFromVoice(
+  client: ModelClient,
+  transcriber: Transcriber,
+  userId: string,
+  input: { audio: File; clock: Clock; actor: Actor },
+): Promise<ChatResult> {
+  if (voiceMode() !== "transcribe" && modelProvider() !== "mock") {
+    try {
+      const audio = Buffer.from(await input.audio.arrayBuffer()).toString("base64");
+      return await chat(client, userId, { audio, clock: input.clock, actor: input.actor });
+    } catch (error) {
+      if (!(error instanceof NotHeardError)) throw error;
+      console.warn(`[persona] listening failed, transcribing instead: ${String(error.reason)}`);
+    }
+  }
+  const { text } = await transcriber.transcribe(input.audio, input.audio.name);
+  if (!text.trim()) throw new Error("I couldn't make that out. Try again?");
+  return chat(client, userId, { text, clock: input.clock, actor: input.actor });
+}
+
 /** One message from the user: think, apply the actions, save both sides. */
 export async function chat(
   client: ModelClient,
   userId: string,
-  input: { text: string; clock: Clock; actor: Actor },
+  input: ({ text: string } | { audio: string }) & { clock: Clock; actor: Actor },
 ): Promise<ChatResult> {
-  const text = normalizeText(input.text).slice(0, 4000);
-  if (!text) throw new Error("Say something first");
+  const spoken = "audio" in input;
+  const typed = spoken ? "" : normalizeText(input.text).slice(0, 4000);
+  if (!spoken && !typed) throw new Error("Say something first");
   const state = await stateFor(userId, input.clock);
   const history = (await recentMessages(userId, HISTORY_TURNS)).map((m) => ({
     role: m.role,
     content: m.content,
   }));
-  const reply = await personaTurn(client, state, history, text);
+  let reply: PersonaReply;
+  try {
+    reply = await personaTurn(client, state, history, spoken ? { audio: input.audio } : typed);
+  } catch (error) {
+    if (spoken && !(error instanceof UsageLimitError)) throw new NotHeardError(error);
+    throw error;
+  }
+  // A recording: the model wrote down what it heard. Nothing heard, nothing done.
+  const text = spoken ? normalizeText(reply.heard ?? "").slice(0, 4000) : typed;
+  if (!text) throw spoken ? new NotHeardError(null) : new Error("Say something first");
 
   const profile = await getProfile(userId);
   const owned = await listSkills(userId);
@@ -264,6 +312,7 @@ export async function chat(
   let reminderSet = false;
   let navigate: string | null = null;
   let watch: ChatResult["watch"] = null;
+  let appConfirm: ChatResult["appConfirm"] = null;
 
   for (const action of reply.actions) {
     if (action.type === "remember") {
@@ -425,6 +474,17 @@ export async function chat(
         playful: action.playful ?? undefined,
         note: action.note ?? undefined,
       });
+    } else if (action.type === "app_task") {
+      const done = await doAppTask(client, userId, {
+        goal: action.goal,
+        now: input.clock.now,
+        offset: input.clock.offset,
+        name: profile.name,
+        actor: input.actor,
+      });
+      extra.push(`\n\n${done.reply}`);
+      appConfirm = done.confirm;
+      if (done.needsConnecting) link = { href: "/persona#apps", label: "Connect your apps" };
     } else if (action.type === "watch_screen") {
       watch = action.on ? "start" : "stop";
     } else if (action.type === "wrap_up") {
@@ -478,6 +538,7 @@ export async function chat(
     confirm,
     switchTo,
     watch,
+    appConfirm,
   };
 }
 
@@ -1265,6 +1326,16 @@ export async function addExampleFromChat(
 }
 
 /** Publishes after the user confirmed in the chat. */
+/** The user OK'd a send or create in their apps: do it, and say so in the conversation. */
+export async function confirmAppFromChat(userId: string, token: string, actor: Actor) {
+  const done = await confirmAppAction(userId, token, actor);
+  const [message] = await db()
+    .insert(personaMessages)
+    .values({ userId, role: "assistant", content: done.message })
+    .returning();
+  return { message, link: done.href ? { href: done.href, label: "Open it" } : null };
+}
+
 export async function publishFromChat(
   userId: string,
   input: { slug: string; versionId: string; confirmLower: boolean },

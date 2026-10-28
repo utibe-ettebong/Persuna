@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ModelClient } from "@/lib/models/gateway";
 import { createMockClient } from "@/lib/models/mock";
 import { personaObserve, personaTurn, tidyReply } from "./brain";
 import type { PersonaState } from "./types";
@@ -244,5 +245,38 @@ describe("building skills by conversation (offline mock)", () => {
       { type: "publish_skill", skill: null },
       { type: "suggest_switch", skill: null, task: null },
     ]);
+  });
+});
+
+describe("hearing a recording directly", () => {
+  it("sends the audio to the listening model and keeps what it heard", async () => {
+    const calls: { role: string; content: unknown }[] = [];
+    const client: ModelClient = {
+      async complete(role, messages) {
+        calls.push({ role, content: messages.at(-1)?.content });
+        const reply = { heard: "Remind me at four", reply: "Okay, four it is.", actions: [] };
+        return { text: JSON.stringify(reply), model: "fake", promptTokens: 0, completionTokens: 0 };
+      },
+    };
+    const reply = await personaTurn(client, state(), [], { audio: "UklGRg==" });
+    expect(calls[0].role).toBe("listen");
+    expect(calls[0].content).toEqual([
+      expect.objectContaining({ type: "text" }),
+      { type: "input_audio", input_audio: { data: "UklGRg==", format: "wav" } },
+    ]);
+    expect(reply.heard).toBe("Remind me at four");
+  });
+});
+
+describe("tasks in connected apps", () => {
+  it("hands email, calendar and Notion requests to the app task", async () => {
+    for (const text of [
+      "What did Ada email me about?",
+      "Put lunch on my calendar Friday at 1",
+      "Add this to Notion",
+    ]) {
+      const reply = await personaTurn(createMockClient(), state(), [], text);
+      expect(reply.actions).toEqual([{ type: "app_task", goal: text }]);
+    }
   });
 });

@@ -9,6 +9,9 @@ import { createFileStore } from "@/lib/models/files";
 import { actorOf, requireUser } from "@/lib/auth/session";
 import { createModelClient, createTranscriber } from "@/lib/models";
 import { readAudio } from "@/lib/models/transcribe";
+import { takeTurns } from "@/lib/persona/voice-agent";
+import { PROVIDER_IDS } from "@/lib/connections/providers";
+import { disconnect } from "@/lib/connections/service";
 import {
   AVATARS,
   addExampleFromChat,
@@ -16,6 +19,8 @@ import {
   publishFromChat,
   addTodo,
   chat,
+  chatFromVoice,
+  confirmAppFromChat,
   completeSetup,
   deleteReminder,
   jobForChat,
@@ -200,6 +205,28 @@ export async function personaCheckInAction(day: string) {
 }
 
 /** Speech to text for the companion's mic button. The audio isn't kept. */
+/** What the last spoken turns (through ElevenLabs Agents) set up on screen. */
+export async function personaAgentTurnsAction() {
+  return run(async () => {
+    const user = await requireUser();
+    return takeTurns(user.id);
+  });
+}
+
+/** Something said out loud to Persona: heard (or transcribed) and answered in one go. */
+export async function personaVoiceAction(form: FormData, clock: z.input<typeof clockField>) {
+  return run(async () => {
+    const user = await requireUser();
+    const audio = readAudio(form.get("audio"));
+    if (!audio) throw new Error("Nothing was recorded");
+    return chatFromVoice(createModelClient(user), createTranscriber(user), user.id, {
+      audio,
+      clock: clockField.parse(clock),
+      actor: actorOf(user),
+    });
+  });
+}
+
 export async function personaTranscribeAction(form: FormData) {
   return run(async () => {
     const user = await requireUser();
@@ -326,5 +353,21 @@ export async function personaPublishAction(slug: string, versionId: string, conf
     });
     revalidatePath("/skills");
     return result;
+  });
+}
+
+/** The user OK'd sending or creating something in one of their apps. */
+export async function personaAppConfirmAction(token: string) {
+  return run(async () => {
+    const user = await requireUser();
+    return confirmAppFromChat(user.id, z.string().min(10).max(20_000).parse(token), actorOf(user));
+  });
+}
+
+export async function disconnectAppAction(provider: string) {
+  return run(async () => {
+    const user = await requireUser();
+    await disconnect(user.id, z.enum(PROVIDER_IDS).parse(provider), actorOf(user));
+    revalidatePath("/persona");
   });
 }
