@@ -39,6 +39,31 @@ export const personaAction = z.discriminatedUnion("type", [
     page: z.enum(["persona", "todos", "skills", "skill", "jobs", "market", "earnings", "audit"]),
     skill: z.string().trim().max(80).nullish(),
   }),
+  /** The user wants Persona to learn a new kind of task: a new skill, which becomes the focus. */
+  z.object({
+    type: z.literal("create_skill"),
+    name: z.string().trim().min(3).max(120),
+    task: z.string().trim().min(10).max(1000),
+    input: z.string().trim().max(120).nullish(),
+    output: z.string().trim().max(120).nullish(),
+  }),
+  /** The user wants to give an example (before and after): the app opens a card for it. */
+  z.object({ type: z.literal("add_example"), skill: z.string().trim().max(80).nullish() }),
+  /** Learn the skill's rules from its examples. */
+  z.object({ type: z.literal("train_skill"), skill: z.string().trim().max(80).nullish() }),
+  /** Score the skill against its held-back examples. */
+  z.object({ type: z.literal("test_skill"), skill: z.string().trim().max(80).nullish() }),
+  /** Publish the skill's current version (the app asks the user to confirm first). */
+  z.object({ type: z.literal("publish_skill"), skill: z.string().trim().max(80).nullish() }),
+  /**
+   * The user has moved on to something that belongs to a different skill (or a
+   * new one): Persona asks before switching. `skill` is the other skill's slug.
+   */
+  z.object({
+    type: z.literal("suggest_switch"),
+    skill: z.string().trim().max(80).nullish(),
+    task: z.string().trim().max(200).nullish(),
+  }),
   /** The user said how they want to be spoken to. */
   z.object({
     type: z.literal("set_tone"),
@@ -63,6 +88,8 @@ export const personaObservation = z.object({
   say: z.string().trim().max(400).nullish(),
   /** One method step seen on screen, or null when nothing new happened. */
   step: z.string().trim().max(400).nullish(),
+  /** What the user seems to be doing, when it isn't today's focus at all; else null. */
+  offFocus: z.string().trim().max(200).nullish(),
 });
 export type PersonaObservation = z.infer<typeof personaObservation>;
 
@@ -80,6 +107,9 @@ export interface PersonaState {
     task: string;
     hasRules: boolean;
     published: boolean;
+    trainExamples: number;
+    testExamples: number;
+    score: number | null;
     unanswered: { key: InterviewKey; question: string }[];
   } | null;
   skills: { slug: string; name: string; published: boolean }[];
@@ -89,6 +119,8 @@ export interface PersonaState {
   tone: Tone;
   /** The question Persona asked in its last message, if any. */
   lastAsked: InterviewKey | null;
+  /** The skill Persona just offered to switch to (it asked "switch?"), if any. */
+  pendingSwitch: { slug: string; name: string } | null;
 }
 
 export interface PersonaTurn {

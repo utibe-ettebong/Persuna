@@ -145,7 +145,7 @@ export async function createVersion(
   });
 }
 
-async function getVersion(versionId: string) {
+export async function getVersion(versionId: string) {
   const version = await db().query.skillVersions.findFirst({
     where: eq(skillVersions.id, versionId),
   });

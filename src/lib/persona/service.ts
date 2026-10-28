@@ -17,7 +17,13 @@ import {
   NotFoundError,
   createSampleSkill,
   createSkill,
+  addPair,
+  extractVersion,
+  getVersion,
   latestScore,
+  publishVersion,
+  runEval,
+  scanPair,
   listSkills,
   proposeFromMethodNotes,
   publishedScore,
@@ -28,7 +34,7 @@ import { normalizeText } from "@/lib/text";
 import { env } from "@/env";
 import { createJob, getJob, reviewJob } from "@/lib/jobs/service";
 import { personaObserve, personaTurn, HISTORY_TURNS } from "./brain";
-import { coachSkill, type SkillStats } from "./coach";
+import { coachSkill, suggestTestSplit, type SkillStats } from "./coach";
 import { localToUtc, startOfLocalDay, utcToLocal, type OffsetMinutes } from "./when";
 import { notices, unseen } from "./notices";
 import {
@@ -142,6 +148,7 @@ async function stateFor(userId: string, clock: Clock): Promise<PersonaState> {
   const owned = await listSkills(userId);
   const todos = await openReminders(userId);
   const focus = owned.find((s) => s.id === profile.focusSkillId) ?? null;
+  const focusStats = focus ? await skillStats(focus) : null;
   const [last] = await db()
     .select()
     .from(personaMessages)
@@ -162,6 +169,9 @@ async function stateFor(userId: string, clock: Clock): Promise<PersonaState> {
           task: focus.taskDescription,
           hasRules: Boolean(focus.currentVersionId),
           published: Boolean(focus.publishedVersionId),
+          trainExamples: focusStats?.trainPairs ?? 0,
+          testExamples: focusStats?.testPairs ?? 0,
+          score: focusStats?.score ?? null,
           unanswered: INTERVIEW_QUESTIONS.filter((q) => !focus.interview?.[q.key]?.trim()).map(
             (q) => ({ key: q.key, question: q.question }),
           ),
@@ -174,9 +184,19 @@ async function stateFor(userId: string, clock: Clock): Promise<PersonaState> {
     })),
     todos: todos.slice(0, 20).map((t) => t.text),
     lastAsked:
-      last?.role === "assistant" ? ((last.askedKey as PersonaState["lastAsked"]) ?? null) : null,
+      last?.role === "assistant" && last.askedKey && !last.askedKey.startsWith(SWITCH)
+        ? (last.askedKey as PersonaState["lastAsked"])
+        : null,
+    pendingSwitch: (() => {
+      if (last?.role !== "assistant" || !last.askedKey?.startsWith(SWITCH)) return null;
+      const other = owned.find((s) => s.slug === last.askedKey!.slice(SWITCH.length));
+      return other ? { slug: other.slug, name: other.name } : null;
+    })(),
   };
 }
+
+/** askedKey prefix marking "Persuna asked whether to switch to this skill". */
+const SWITCH = "switch:";
 
 export interface ChatResult {
   messages: PersonaMessage[];
@@ -189,6 +209,22 @@ export interface ChatResult {
   reminderSet: boolean;
   /** A page Persona should take the user to. */
   navigate: string | null;
+  /** Persona wants an example for this skill: the app shows the example card. */
+  example: { skill: { slug: string; name: string } } | null;
+  /** Something the user must confirm before it happens (publishing). */
+  confirm: PublishConfirm | null;
+  /** Persona asked whether to switch to this skill. */
+  switchTo: { slug: string; name: string } | null;
+}
+
+export interface PublishConfirm {
+  kind: "publish";
+  skill: { slug: string; name: string };
+  versionId: string;
+  version: number;
+  score: number;
+  /** The published version scores higher: publishing this one lowers quality. */
+  lowerThan: number | null;
 }
 
 /** One message from the user: think, apply the actions, save both sides. */
@@ -216,6 +252,13 @@ export async function chat(
   let link: ChatResult["link"] = null;
   const extra: string[] = [];
   let task: ChatResult["task"] = null;
+  let example: ChatResult["example"] = null;
+  let confirm: ChatResult["confirm"] = null;
+  let switchTo: ChatResult["switchTo"] = null;
+  let asked: string | null = reply.asked ?? null;
+  // The skill an action means: the one named, else today's.
+  const target = (slug: string | null | undefined) =>
+    owned.find((s) => s.slug === slug) ?? owned.find((s) => s.id === focusSkillId) ?? null;
   let reminderSet = false;
   let navigate: string | null = null;
 
@@ -250,6 +293,90 @@ export async function chat(
         .values({ userId, text: action.text, dueAt: dueAt && dueAt > new Date() ? dueAt : null });
       reminderSet ||= Boolean(dueAt);
       link = { href: "/persona#todos", label: "See your to-dos" };
+    } else if (action.type === "create_skill") {
+      const created = await createSkill(
+        {
+          slug: slugify(action.name) || "my-task",
+          name: action.name,
+          taskDescription: action.task,
+          inputType: action.input || "text",
+          outputType: action.output || "text",
+        },
+        userId,
+        input.actor,
+      );
+      owned.push(created);
+      focus = created.name;
+      focusSkillId = created.id;
+      link = { href: `/skills/${created.slug}`, label: `Open ${created.name}` };
+    } else if (action.type === "add_example") {
+      const skill = target(action.skill);
+      if (skill) example = { skill: { slug: skill.slug, name: skill.name } };
+      else extra.push("Tell me which task first: say what you're working on, or name a new one.");
+    } else if (action.type === "train_skill") {
+      const skill = target(action.skill);
+      if (!skill) {
+        extra.push("Which task should I learn? Tell me what you're working on first.");
+      } else if ((await skillStats(skill)).trainPairs === 0) {
+        extra.push(`I need at least one example of ${skill.name} first. Say "add an example".`);
+      } else {
+        const version = await extractVersion(client, skill.slug);
+        extra.push(
+          `Done: I learned ${version.sheet.rules.length} rules for ${skill.name} (version ${version.version}). Next, say "test yourself" and I'll score my drafts against your examples.`,
+        );
+        link = { href: `/skills/${skill.slug}/rules`, label: "See the rules" };
+      }
+    } else if (action.type === "test_skill") {
+      const skill = target(action.skill);
+      const stats = skill ? await skillStats(skill) : null;
+      if (!skill?.currentVersionId) {
+        extra.push(
+          `I haven't learned any rules for ${skill?.name ?? "that"} yet. Say "train yourself" first.`,
+        );
+      } else if (!stats?.testPairs) {
+        extra.push(
+          'Hold back at least one example for testing: add one and tick "use this to test me".',
+        );
+      } else {
+        const run = await runEval(client, skill.currentVersionId);
+        const score = run.meanScore === null ? null : Math.round(run.meanScore);
+        const advice = coachSkill(await skillStats(skill));
+        extra.push(
+          score === null
+            ? "The test run didn't produce a score. Have a look at it."
+            : `I scored ${score} out of 100 against your held-back examples. ${advice.stage === "publish" || advice.stage === "list" ? 'Say "publish it" when you\'re happy.' : advice.message}`,
+        );
+        link = { href: `/runs/${run.id}`, label: "See the test run" };
+      }
+    } else if (action.type === "publish_skill") {
+      const skill = target(action.skill);
+      if (!skill?.currentVersionId) {
+        extra.push(`There's nothing to publish for ${skill?.name ?? "that"} yet. Train me first.`);
+      } else {
+        const version = await getVersion(skill.currentVersionId);
+        const score = await latestScore(version.id);
+        const published = await publishedScore(skill);
+        if (score === null) {
+          extra.push(`Test this version first: say "test yourself".`);
+        } else if (skill.publishedVersionId === version.id) {
+          extra.push(`${skill.name} version ${version.version} is already the published one.`);
+        } else {
+          confirm = {
+            kind: "publish",
+            skill: { slug: skill.slug, name: skill.name },
+            versionId: version.id,
+            version: version.version,
+            score: Math.round(score),
+            lowerThan: published !== null && score < published ? Math.round(published) : null,
+          };
+        }
+      }
+    } else if (action.type === "suggest_switch") {
+      const other = owned.find((s) => s.slug === action.skill);
+      if (other && other.id !== focusSkillId) {
+        switchTo = { slug: other.slug, name: other.name };
+        asked = `${SWITCH}${other.slug}`;
+      }
     } else if (action.type === "run_task") {
       const named = owned.find((s) => s.slug === action.skill);
       const fallback = owned.find((s) => s.id === focusSkillId);
@@ -326,7 +453,7 @@ export async function chat(
         userId,
         role: "assistant",
         content: [reply.reply, ...extra].join(" ").replace(/ \n/g, "\n"),
-        askedKey: reply.asked ?? null,
+        askedKey: asked,
         skillId: focusSkillId,
       },
     ])
@@ -342,6 +469,9 @@ export async function chat(
     task,
     reminderSet,
     navigate,
+    example,
+    confirm,
+    switchTo,
   };
 }
 
@@ -391,6 +521,8 @@ export async function observe(
   userId: string,
   input: { frame: string; noteId: string | null },
 ): Promise<{
+  /** What the user seems to be doing when it isn't today's focus. */
+  offFocus: string | null;
   say: string | null;
   step: string | null;
   noteId: string | null;
@@ -436,7 +568,7 @@ export async function observe(
       .values({ userId, role: "assistant", kind: "observation", content: seen.say })
       .returning();
   }
-  return { say: seen.say ?? null, step, noteId, message };
+  return { say: seen.say ?? null, step, noteId, message, offFocus: seen.offFocus ?? null };
 }
 
 /** Teaches the steps from a watched (or any) note to the focus skill. */
@@ -1067,5 +1199,85 @@ export async function pulse(userId: string, input: { clock: Clock; path: string 
   return {
     reminders: reminders.map((r) => ({ id: r.id, text: r.text })),
     notices: said.map((m, i) => ({ message: m, href: fresh[i].href })),
+  };
+}
+
+/* ---------- Building a skill by conversation ---------- */
+
+/**
+ * An example given to Persuna (what the user started with, and their finished
+ * version). Names and identifiers are replaced with placeholders before it's
+ * kept, since skills hold method, never material.
+ */
+export async function addExampleFromChat(
+  client: ModelClient,
+  userId: string,
+  input: { slug: string; before: string; after: string; test: boolean | null; actor: Actor },
+) {
+  const skill = (await listSkills(userId)).find((s) => s.slug === input.slug);
+  if (!skill) throw new NotFoundError("That skill isn't yours");
+  const before = normalizeText(input.before);
+  const after = normalizeText(input.after);
+  if (!before || !after)
+    throw new Error("Add both what you started with and your finished version.");
+  const scan = await scanPair(client, before, after);
+  const replaced = scan.inputFindings.length + scan.outputFindings.length;
+  const stats = await skillStats(skill);
+  const test = input.test ?? suggestTestSplit(stats.trainPairs, stats.testPairs);
+  const base = slugify(scan.redactedInput.split("\n")[0] ?? "") || "example";
+  let saved = false;
+  for (let n = 1; !saved && n <= 20; n++) {
+    try {
+      await addPair(skill.id, {
+        slug: n === 1 ? base : `${base}-${n}`,
+        split: test ? "test" : "train",
+        input: scan.redactedInput,
+        output: scan.redactedOutput,
+        redacted: replaced > 0,
+      });
+      saved = true;
+    } catch (error) {
+      if (!/already exists/.test((error as Error).message)) throw error;
+    }
+  }
+  const now = await skillStats(skill);
+  const next = !now.trainPairs
+    ? "Add one more to learn from."
+    : !now.hasRules
+      ? 'Say "train yourself" when you\'re ready, or add more.'
+      : 'Say "train yourself" to learn from it, then "test yourself".';
+  const content = `Saved that ${test ? "for testing me" : "to learn from"}${
+    replaced
+      ? `, with ${replaced} name${replaced === 1 ? "" : "s"} and details replaced by placeholders`
+      : ""
+  }. ${skill.name} now has ${now.trainPairs} to learn from and ${now.testPairs} to test me. ${next}`;
+  const [message] = await db()
+    .insert(personaMessages)
+    .values({ userId, role: "assistant", content, skillId: skill.id })
+    .returning();
+  return { message, link: { href: `/skills/${skill.slug}/examples`, label: "See the examples" } };
+}
+
+/** Publishes after the user confirmed in the chat. */
+export async function publishFromChat(
+  userId: string,
+  input: { slug: string; versionId: string; confirmLower: boolean },
+) {
+  const skill = (await listSkills(userId)).find((s) => s.slug === input.slug);
+  if (!skill) throw new NotFoundError("That skill isn't yours");
+  const version = await getVersion(input.versionId);
+  if (version.skillId !== skill.id) throw new NotFoundError("No such version");
+  await publishVersion(skill.id, version.id, input.confirmLower);
+  const content =
+    `Published ${skill.name} version ${version.version}. Real jobs now use it, starting at trust level 0 (I'll send you everything to approve). ${
+      skill.trustLevel > 0 ? "Its trust level went back to 0 for the new version." : ""
+    }`.trim();
+  const [message] = await db()
+    .insert(personaMessages)
+    .values({ userId, role: "assistant", content, skillId: skill.id })
+    .returning();
+  return {
+    message,
+    link: { href: `/skills/${skill.slug}/listing`, label: "List it in the marketplace" },
   };
 }

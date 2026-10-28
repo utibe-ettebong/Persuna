@@ -8,6 +8,7 @@ import {
   toneInstruction,
 } from "./tone";
 import { matchWakeWord } from "./wake";
+import { suggestTestSplit } from "./coach";
 
 const now = new Date("2026-10-27T12:00:00Z");
 const ago = (h: number) => new Date(now.getTime() - h * 3_600_000);
@@ -136,5 +137,15 @@ describe("matchWakeWord", () => {
     expect(matchWakeWord("hey nina", "Nova")).toBeNull();
     expect(matchWakeWord("hey ox", "Ox")).toEqual({ rest: "" });
     expect(matchWakeWord("hey of", "Ox")).toBeNull();
+  });
+});
+
+describe("suggestTestSplit", () => {
+  it("holds back about one example in four, never the first ones", () => {
+    expect(suggestTestSplit(0, 0)).toBe(false);
+    expect(suggestTestSplit(1, 0)).toBe(false);
+    expect(suggestTestSplit(2, 0)).toBe(true);
+    expect(suggestTestSplit(3, 1)).toBe(false);
+    expect(suggestTestSplit(6, 1)).toBe(true);
   });
 });

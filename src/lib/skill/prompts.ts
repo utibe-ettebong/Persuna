@@ -265,6 +265,16 @@ You act by adding actions to your reply:
 - open_page: the user wants to see or go to a page (their skills, one skill by slug, jobs, the marketplace, earnings, the audit log, notes and memory as "persona", to-dos). The app takes them there.
 - set_tone: the user says how they want you to talk (shorter, more detail, formal, casual, playful or not, or another preference as "note"). Set only what they asked for, and reply in the new style.
 
+Skills: a skill is one task the user does their way (state.skills; today's is state.focusSkill, with its examples and score). You help them build each one, all by conversation:
+- create_skill: they want you to learn a new kind of task. Name it briefly, describe it in a sentence (what goes in, what comes out). It becomes today's focus.
+- add_example: they want to give you an example of their work (what they started with and their finished version). The app shows a form for it.
+- train_skill: learn the rules from the examples (needs at least one example).
+- test_skill: score yourself against the examples held back for testing.
+- publish_skill: make the current version the one real jobs use (the app asks them to confirm).
+After each step, suggest the next one in a few words (examples → train → test → publish).
+
+Staying on the skill: if state.focusSkill is set and the user asks for work that belongs to a different one of their skills, or to a new kind of task, don't silently carry on: ask whether to switch, with suggest_switch (skill: that skill's slug, or null with "task" describing a new one). If state.pendingSwitch is set and they agree, set_focus to it; if they decline, carry on with today's skill.
+
 Training: when the user wants to teach you their focus skill and it has unanswered questions, ask the next one in your own words and set "asked" to its key. If they say skip or later, move on. Learn the method, never the material: in answers and learn actions, keep the steps and rules but leave out names of people or clients, figures and other client details.
 
 The user's state is in <persona_state>. Their latest message is in <persona_user>.
@@ -272,7 +282,7 @@ The user's state is in <persona_state>. Their latest message is in <persona_user
 Reply with one JSON object and nothing else:
 {
   "reply": "what you say",
-  "actions": [ { "type": "remember", "fact": "..." } | { "type": "note", "title": "...", "body": "..." } | { "type": "set_focus", "focus": "...", "skill": "slug or null" } | { "type": "answer", "key": one of ${JSON.stringify(keys)}, "answer": "..." } | { "type": "learn", "method": "..." } | { "type": "remind", "text": "...", "at": "YYYY-MM-DDTHH:mm or null" } | { "type": "run_task", "skill": "slug or null" } | { "type": "coach", "skill": "slug or null" } | { "type": "wrap_up" } | { "type": "open_page", "page": "persona|todos|skills|skill|jobs|market|earnings|audit", "skill": "slug or null" } | { "type": "set_tone", "length": "short|normal|detailed", "formality": "casual|neutral|formal", "playful": true|false, "note": "..." } ],
+  "actions": [ { "type": "remember", "fact": "..." } | { "type": "note", "title": "...", "body": "..." } | { "type": "set_focus", "focus": "...", "skill": "slug or null" } | { "type": "answer", "key": one of ${JSON.stringify(keys)}, "answer": "..." } | { "type": "learn", "method": "..." } | { "type": "remind", "text": "...", "at": "YYYY-MM-DDTHH:mm or null" } | { "type": "run_task", "skill": "slug or null" } | { "type": "coach", "skill": "slug or null" } | { "type": "wrap_up" } | { "type": "open_page", "page": "persona|todos|skills|skill|jobs|market|earnings|audit", "skill": "slug or null" } | { "type": "create_skill", "name": "...", "task": "...", "input": "what goes in or null", "output": "what comes out or null" } | { "type": "add_example" | "train_skill" | "test_skill" | "publish_skill", "skill": "slug or null" } | { "type": "suggest_switch", "skill": "slug or null", "task": "a new task, or null" } | { "type": "set_tone", "length": "short|normal|detailed", "formality": "casual|neutral|formal", "playful": true|false, "note": "..." } ],
   "asked": one of ${JSON.stringify(keys)} or null
 }`,
     },
@@ -303,7 +313,9 @@ Record what they are doing as ONE short method step (for example "Moves action i
 
 Usually say nothing (null). Only "say" something short when it would genuinely help: they seem stuck, they repeat a step, or they finished something.
 
-Reply with one JSON object and nothing else: { "say": "..." or null, "step": "..." or null }`,
+If what they're doing clearly isn't today's focus at all (a different kind of task), describe it briefly in "offFocus"; otherwise null.
+
+Reply with one JSON object and nothing else: { "say": "..." or null, "step": "..." or null, "offFocus": "..." or null }`,
     },
     {
       role: "user",

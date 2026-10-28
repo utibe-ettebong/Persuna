@@ -7,6 +7,7 @@ import { createPortal } from "react-dom";
 import {
   personaChatAction,
   personaCheckInAction,
+  personaPublishAction,
   personaPulseAction,
   personaSetupAction,
   personaObserveAction,
@@ -14,7 +15,7 @@ import {
   personaTranscribeAction,
 } from "@/app/actions/persona";
 import { toTranscribableWav } from "@/lib/audio/convert";
-import type { ChatJob } from "@/lib/persona/service";
+import type { ChatJob, PublishConfirm } from "@/lib/persona/service";
 import { LOOKS, LOOK_IDS, lookOf } from "@/lib/persona/looks";
 import {
   SETUP_QUESTIONS,
@@ -25,6 +26,7 @@ import {
 } from "@/lib/persona/onboarding";
 import { clock } from "./clock";
 import { Icon } from "./icons";
+import { ExampleCard } from "./example-card";
 import { JobCard } from "./job-card";
 import { PersonaOrb, type OrbState } from "./orb";
 import { MAX_LOOKS, startWatching, type Watcher } from "./screen-watch";
@@ -44,6 +46,8 @@ export interface CompanionMessage {
   kind: string;
   content: string;
   jobId?: string | null;
+  /** Persuna asked whether to switch to this skill: show Switch / Stay. */
+  switchTo?: { slug: string; name: string } | null;
   link?: { href: string; label: string } | null;
   job?: ChatJob;
 }
@@ -122,6 +126,11 @@ export function Companion(props: CompanionProps) {
     !props.overlay && (Boolean(props.standalone) || !props.setupDone),
   );
   const [typing, setTyping] = useState(false);
+  // Building a skill by conversation: the example card and the publish confirmation.
+  const [example, setExample] = useState<{ slug: string; name: string } | null>(null);
+  const [confirm, setConfirm] = useState<PublishConfirm | null>(null);
+  const [confirmLower, setConfirmLower] = useState(false);
+  const offFocusAsked = useRef(false);
   const [heard, setHeard] = useState<string | null>(null);
   const [dismissedJob, setDismissedJob] = useState<string | null>(null);
   const [setupDone, setSetupDone] = useState(props.setupDone);
@@ -181,10 +190,18 @@ export function Companion(props: CompanionProps) {
   const captionTimer = useRef(0);
   const lastInput = useRef(0);
   // Read by callbacks that outlive a render (voice loop, reminders).
-  const live = useRef({ voiceOn, busy, talking, open, pip, name });
+  const live = useRef({
+    voiceOn,
+    busy,
+    talking,
+    open,
+    pip,
+    name,
+    focusName: focusSkill?.name ?? null,
+  });
   useEffect(() => {
-    live.current = { voiceOn, busy, talking, open, pip, name };
-  }, [voiceOn, busy, talking, open, pip, name]);
+    live.current = { voiceOn, busy, talking, open, pip, name, focusName: focusSkill?.name ?? null };
+  }, [voiceOn, busy, talking, open, pip, name, focusSkill]);
 
   /* ---------- Speaking ---------- */
 
@@ -428,13 +445,18 @@ export function Companion(props: CompanionProps) {
       setMessages((all) => [
         ...all.filter((m) => m.id !== pending.id),
         { ...mine, role: "user" },
-        { ...reply, role: "assistant", link: res.value.link },
+        { ...reply, role: "assistant", link: res.value.link, switchTo: res.value.switchTo },
       ]);
       setFocus(res.value.focus.text);
       setFocusSkill(res.value.focus.skill);
       if (res.value.task) {
         setTask(res.value.task);
         setOpen(true);
+      }
+      if (res.value.example) setExample(res.value.example.skill);
+      if (res.value.confirm) {
+        setConfirm(res.value.confirm);
+        setConfirmLower(false);
       }
       if (res.value.navigate) {
         const href = res.value.navigate;
@@ -795,6 +817,7 @@ export function Companion(props: CompanionProps) {
     setError(null);
     let note: string | null = null;
     let count = 0;
+    offFocusAsked.current = false;
     try {
       watcher.current = await startWatching({
         onFrame: async (frame) => {
@@ -811,6 +834,18 @@ export function Companion(props: CompanionProps) {
           }
           note = res.value.noteId;
           setWatchNote(note);
+          // What's on screen isn't today's skill: ask once per watching session.
+          if (res.value.offFocus && !offFocusAsked.current) {
+            offFocusAsked.current = true;
+            const line = `This looks like ${res.value.offFocus}${
+              live.current.focusName ? `, not ${live.current.focusName}` : ""
+            }. Want me to switch? Tell me which skill, or say "new skill" and what it is.`;
+            setMessages((all) => [
+              ...all,
+              { id: `offfocus-${Date.now()}`, role: "assistant", kind: "chat", content: line },
+            ]);
+            express(line);
+          }
           if (res.value.message) {
             const line = res.value.message;
             setMessages((all) => [...all, { ...line, role: "assistant" }]);
@@ -1000,8 +1035,98 @@ export function Companion(props: CompanionProps) {
   );
 
   // What Persuna is asking you to decide right now (permissions, a task, teaching).
+  /** Publishes after the user confirms it. */
+  async function publishConfirmed() {
+    if (!confirm) return;
+    setBusy("thinking");
+    const res = await personaPublishAction(confirm.skill.slug, confirm.versionId, confirmLower);
+    setBusy("idle");
+    if (!res.ok) return setError(res.error);
+    setConfirm(null);
+    setMessages((all) => [
+      ...all,
+      { ...res.value.message, role: "assistant", link: res.value.link },
+    ]);
+    express(res.value.message.content, "", res.value.message.id);
+  }
+
+  const lastMessage = messages.at(-1);
+  const switchOffer = lastMessage?.role === "assistant" ? lastMessage.switchTo : null;
+
   const assistCards = (
     <>
+      {switchOffer && busy === "idle" && (
+        <div
+          className={`persona-in flex items-center gap-2 self-start rounded-full px-2 py-1.5 text-sm ${card}`}
+        >
+          <button
+            type="button"
+            onClick={() => void send(`Yes, switch to ${switchOffer.name}`)}
+            className="rounded-full bg-accent px-4 py-1.5 text-accent-ink"
+          >
+            Switch to {switchOffer.name}
+          </button>
+          <button
+            type="button"
+            onClick={() => void send(`No, stay on ${focusSkill?.name ?? "this"}`)}
+            className="rounded-full px-3 py-1.5 text-muted hover:text-foreground"
+          >
+            Stay
+          </button>
+        </div>
+      )}
+      {example && (
+        <div className={`persona-in rounded-[22px] ${card}`}>
+          <ExampleCard
+            skill={example}
+            onCancel={() => setExample(null)}
+            onDone={(message) => {
+              setExample(null);
+              setMessages((all) => [...all, message]);
+              express(message.content, "", message.id);
+            }}
+          />
+        </div>
+      )}
+      {confirm && (
+        <div className={`persona-in space-y-3 rounded-[22px] p-4 text-sm ${card}`}>
+          <p>
+            <strong>
+              Publish {confirm.skill.name} version {confirm.version}?
+            </strong>{" "}
+            It scored {confirm.score} against your held-back examples. Real jobs will use it, and
+            its trust level starts again at 0, so I&apos;ll send you everything to approve.
+          </p>
+          {confirm.lowerThan !== null && (
+            <label className="flex items-start gap-2 text-warn">
+              <input
+                type="checkbox"
+                checked={confirmLower}
+                onChange={(e) => setConfirmLower(e.target.checked)}
+                className="mt-1"
+              />
+              It scores lower than the version live now ({confirm.lowerThan}). Publish anyway.
+            </label>
+          )}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={busy !== "idle" || (confirm.lowerThan !== null && !confirmLower)}
+              onClick={() => void publishConfirmed()}
+              className="rounded-full bg-accent px-4 py-1.5 text-accent-ink disabled:opacity-50"
+            >
+              Publish
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirm(null)}
+              className="rounded-full px-3 py-1.5 text-muted hover:text-foreground"
+            >
+              Not yet
+            </button>
+          </div>
+        </div>
+      )}
       {askWake && (
         <div className={`persona-in space-y-2 rounded-[22px] p-4 text-sm ${card}`}>
           <p>
@@ -1338,7 +1463,14 @@ export function Companion(props: CompanionProps) {
     const showSetupInput = !setupDone && busy === "idle";
     const hasCards =
       (!setupDone && (setupStep === "look" || setupStep === "task")) ||
-      (setupDone && (askWake || askWatch || Boolean(task) || Boolean(watchNote && !watching))) ||
+      (setupDone &&
+        (askWake ||
+          askWatch ||
+          Boolean(task) ||
+          Boolean(example) ||
+          Boolean(confirm) ||
+          Boolean(switchOffer && busy === "idle") ||
+          Boolean(watchNote && !watching))) ||
       Boolean(latestJob);
     return (
       <section
