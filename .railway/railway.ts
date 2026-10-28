@@ -57,6 +57,9 @@ export default defineRailway(() => {
       EXTRACT_REASONING_EFFORT: preserve(),
       DRAFT_REASONING_EFFORT: preserve(),
       EVAL_REASONING_EFFORT: preserve(),
+      EXTRACT_FALLBACK_MODEL: preserve(),
+      DRAFT_FALLBACK_MODEL: preserve(),
+      EVAL_FALLBACK_MODEL: preserve(),
     },
   });
 

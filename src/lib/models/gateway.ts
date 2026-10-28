@@ -112,18 +112,56 @@ async function callOnce(
   fetchImpl: typeof fetch,
 ): Promise<Completion> {
   const maxTokens = options.maxTokens ?? 4096;
-  const first = await post(config, role, messages, options, maxTokens, fetchImpl);
+  const first = await postFindingModel(config, role, messages, options, maxTokens, fetchImpl);
   if (first.text.trim() || first.finish !== "length" || maxTokens >= MAX_TOKENS_CAP) {
     return first.completion;
   }
   // It thought until it ran out of room: once more, with more room.
   const roomier = Math.min(maxTokens * THINKING_ROOM_FACTOR, MAX_TOKENS_CAP);
-  const second = await post(config, role, messages, options, roomier, fetchImpl);
+  const second = await postFindingModel(config, role, messages, options, roomier, fetchImpl);
   return {
     ...second.completion,
     promptTokens: first.completion.promptTokens + second.completion.promptTokens,
     completionTokens: first.completion.completionTokens + second.completion.completionTokens,
   };
+}
+
+/**
+ * Providers sometimes answer "model not found" (404) for a model they do
+ * serve (seen on Meta's muse-spark-1.3). Try once more, then the role's
+ * fallback model if one is set (*_FALLBACK_MODEL).
+ */
+async function postFindingModel(
+  config: ModelRoleConfig,
+  role: ModelRole,
+  messages: ChatMessage[],
+  options: CompleteOptions,
+  maxTokens: number,
+  fetchImpl: typeof fetch,
+) {
+  try {
+    return await post(config, role, messages, options, maxTokens, fetchImpl);
+  } catch (error) {
+    if (!(error instanceof ModelError) || !error.modelMissing) throw error;
+    await backoff(1);
+    try {
+      return await post(config, role, messages, options, maxTokens, fetchImpl);
+    } catch (again) {
+      if (!(again instanceof ModelError) || !again.modelMissing || !config.fallbackModel)
+        throw again;
+      console.warn(
+        `[models] ${config.model} was not found at ${config.baseUrl}; using ${config.fallbackModel} for this ${role} call.`,
+      );
+      return post(
+        { ...config, model: config.fallbackModel },
+        role,
+        messages,
+        options,
+        maxTokens,
+        fetchImpl,
+      );
+    }
+  }
 }
 
 async function post(
@@ -174,6 +212,7 @@ async function post(
         role,
         `HTTP ${response.status}: ${detail}`,
         response.status === 401 || response.status === 403,
+        response.status === 404 && /model_not_found|model.*not.*found/i.test(detail),
       );
     }
 
@@ -200,6 +239,8 @@ export class ModelError extends Error {
     message: string,
     /** The provider refused the API key (401/403). */
     readonly keyRejected = false,
+    /** The provider said the model doesn't exist (404 model_not_found). */
+    readonly modelMissing = false,
   ) {
     super(`[${role} model] ${message}`);
     this.name = "ModelError";

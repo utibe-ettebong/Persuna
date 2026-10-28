@@ -5,8 +5,8 @@
  * (POST /api/persona/speak), and otherwise the browser's speech synthesis
  * with the most natural voice available. Listening is hands-free: the microphone stays open,
  * a recording starts when you speak and ends after a short pause, and each
- * utterance is handed back for transcription. Listening pauses while Persona
- * is thinking or talking, so it doesn't hear itself.
+ * utterance is handed back for transcription. While Persona talks it only
+ * listens for you talking over it, judged against its own voice's loudness.
  */
 
 const PREFERRED = [
@@ -51,58 +51,133 @@ export function canSpeak(): boolean {
   return typeof window !== "undefined" && "speechSynthesis" in window;
 }
 
+/** Cloud requests stay under this many characters; longer replies go in pieces. */
+export const CLOUD_CHUNK_CHARS = 350;
+
+/**
+ * Groups sentences for the cloud voice: the first sentence alone, so speech
+ * starts quickly, then pieces of up to {@link CLOUD_CHUNK_CHARS}.
+ */
+export function speechChunks(sentences: string[]): string[] {
+  const chunks: string[] = [];
+  for (const sentence of sentences) {
+    const last = chunks.at(-1);
+    if (chunks.length > 1 && last && last.length + sentence.length + 1 <= CLOUD_CHUNK_CHARS) {
+      chunks[chunks.length - 1] = `${last} ${sentence}`;
+    } else chunks.push(sentence);
+  }
+  return chunks;
+}
+
+export interface SpeakHandlers {
+  /** 0–1 "mouth" value. */
+  onLevel: (level: number) => void;
+  /** A piece of the text has just started being spoken: show it now. */
+  onSpoken?: (text: string) => void;
+}
+
 let generation = 0;
+let queue: Promise<void> = Promise.resolve();
+let lastLevel = 0;
 /** Set once the server says it has no cloud voice (or it keeps failing). */
 let cloudOff = false;
 let cloudFailures = 0;
 let playing: HTMLAudioElement | null = null;
 let audioCtx: AudioContext | null = null;
 
+/** Assumed loudness of the browser's voice, which can't be measured. */
+const BROWSER_VOICE_LEVEL = 0.2;
+
+/** How loud Persona's own voice is right now (to tell it apart from yours). */
+export const ownLevel = () => lastLevel;
+
 /**
- * Says `text`: in the cloud voice when there is one (styled to the user's
- * tone on the server), else the browser's. `onLevel` gets a
- * 0–1 "mouth" value. Resolves when done or cancelled.
+ * Says `text` in full, after anything already being said (lines queue up
+ * instead of cutting each other off). Uses the cloud voice when there is one
+ * (styled to the user's tone on the server), else the browser's. Resolves
+ * when this line has been spoken, or when speech is stopped.
  */
-export async function speak(text: string, onLevel: (level: number) => void): Promise<void> {
-  const mine = ++generation;
-  stopAudio();
-  if (canSpeak()) speechSynthesis.cancel();
-  if (!cloudOff && (await speakInCloud(text, onLevel, mine))) return;
-  if (mine === generation) await speakInBrowser(text, onLevel, mine);
+export function speak(text: string, handlers: SpeakHandlers): Promise<void> {
+  const mine = generation;
+  const level = (l: number) => {
+    lastLevel = l;
+    handlers.onLevel(l);
+  };
+  const run = async () => {
+    if (mine !== generation) return;
+    const sentences = speakable(text);
+    if (!sentences.length) return;
+    if (!cloudOff && (await speakInCloud(sentences, { ...handlers, onLevel: level }, mine))) return;
+    // The browser voice's mouth movement is animation, not a measurement of how
+    // loud it is, so for telling your voice apart assume a moderate level.
+    const animated = (l: number) => {
+      lastLevel = l > 0 ? BROWSER_VOICE_LEVEL : 0;
+      handlers.onLevel(l);
+    };
+    if (mine === generation)
+      await speakInBrowser(sentences, { ...handlers, onLevel: animated }, mine);
+  };
+  const done = queue.then(run, run);
+  queue = done.catch(() => {});
+  return done;
+}
+
+/** Fetches one piece of cloud speech; null means "use the browser voice". */
+async function fetchSpeech(text: string): Promise<Blob | null> {
+  try {
+    const res = await fetch("/api/persona/speak", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (res.status === 204) {
+      cloudOff = true;
+      return null;
+    }
+    if (!res.ok) {
+      if (++cloudFailures >= 3) cloudOff = true;
+      return null;
+    }
+    cloudFailures = 0;
+    return await res.blob();
+  } catch {
+    return null;
+  }
 }
 
 async function speakInCloud(
-  text: string,
-  onLevel: (level: number) => void,
+  sentences: string[],
+  handlers: SpeakHandlers,
   mine: number,
 ): Promise<boolean> {
-  let res: Response;
-  try {
-    res = await fetch("/api/persona/speak", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: speakable(text).join(" ") }),
-    });
-  } catch {
-    return false;
+  const chunks = speechChunks(sentences);
+  // Fetch the next piece while the current one plays, so there are no gaps.
+  let next = fetchSpeech(chunks[0]);
+  for (let i = 0; i < chunks.length; i++) {
+    const blob = await next;
+    if (mine !== generation) return true;
+    if (!blob) {
+      // The cloud voice failed part-way: say the rest in the browser's voice.
+      if (i === 0) return false;
+      await speakInBrowser(chunks.slice(i), handlers, mine);
+      return true;
+    }
+    if (i + 1 < chunks.length) next = fetchSpeech(chunks[i + 1]);
+    handlers.onSpoken?.(chunks[i]);
+    if (!(await play(blob, handlers.onLevel, mine))) {
+      await speakInBrowser(chunks.slice(i), handlers, mine);
+      return true;
+    }
   }
-  if (res.status === 204) {
-    cloudOff = true;
-    return false;
-  }
-  if (!res.ok) {
-    if (++cloudFailures >= 3) cloudOff = true;
-    return false;
-  }
-  cloudFailures = 0;
-  const url = URL.createObjectURL(await res.blob());
-  if (mine !== generation) {
-    URL.revokeObjectURL(url);
-    return true;
-  }
+  return true;
+}
+
+/** Plays one piece of audio, driving the mouth from the real sound. */
+async function play(blob: Blob, onLevel: (l: number) => void, mine: number): Promise<boolean> {
+  if (mine !== generation) return true;
+  const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
   playing = audio;
-  // Drive the mouth from the real audio.
   let meter = 0;
   try {
     audioCtx ??= new AudioContext();
@@ -145,18 +220,25 @@ function stopAudio() {
   }
 }
 
+/** Longest a single sentence may take before we assume the browser went quiet. */
+const SENTENCE_LIMIT_MS = 30_000;
+
 /**
- * Says `text` sentence by sentence (long single utterances get cut off in
- * some browsers). `onLevel` gets a 0–1 "mouth" value. Resolves when done or
- * cancelled; never hangs, even where no voice is installed.
+ * Says sentences one at a time in the browser's voice (long utterances get
+ * cut off in some browsers). A sentence counts as finished when the browser
+ * says so, or, where it never does, once it has stopped speaking: never on a
+ * guess while it's still talking.
  */
 async function speakInBrowser(
-  text: string,
-  onLevel: (level: number) => void,
+  sentences: string[],
+  handlers: SpeakHandlers,
   mine: number,
 ): Promise<void> {
-  if (!canSpeak()) return;
-  for (const sentence of speakable(text)) {
+  if (!canSpeak()) {
+    sentences.forEach((s) => handlers.onSpoken?.(s));
+    return;
+  }
+  for (const sentence of sentences) {
     if (mine !== generation) break;
     await new Promise<void>((resolve) => {
       const u = new SpeechSynthesisUtterance(sentence);
@@ -165,28 +247,47 @@ async function speakInBrowser(
       u.rate = 1.03;
       u.pitch = 1.05;
       let pulse = 0;
+      let shown = false;
+      const show = () => {
+        if (shown) return;
+        shown = true;
+        handlers.onSpoken?.(sentence);
+      };
       const finish = () => {
         clearInterval(pulse);
-        clearTimeout(guard);
-        onLevel(0);
+        clearInterval(watch);
+        handlers.onLevel(0);
+        show();
         resolve();
       };
       u.onstart = () => {
-        pulse = window.setInterval(() => onLevel(0.35 + Math.random() * 0.65), 90);
+        show();
+        pulse = window.setInterval(() => handlers.onLevel(0.35 + Math.random() * 0.65), 90);
       };
-      u.onboundary = () => onLevel(1);
+      u.onboundary = () => handlers.onLevel(1);
       u.onend = finish;
       u.onerror = finish;
       // Some browsers never fire events (no voices, or blocked before a click).
-      const guard = window.setTimeout(finish, 1200 + sentence.split(/\s+/).length * 450);
+      // Wait at least a sensible time, then until the browser is quiet.
+      const started = Date.now();
+      const atLeast = 1200 + sentence.split(/\s+/).length * 450;
+      const watch = window.setInterval(() => {
+        const elapsed = Date.now() - started;
+        if (mine !== generation) return finish();
+        if (elapsed < atLeast) return;
+        if (!speechSynthesis.speaking || elapsed > SENTENCE_LIMIT_MS) finish();
+      }, 200);
       speechSynthesis.speak(u);
     });
   }
-  onLevel(0);
+  handlers.onLevel(0);
 }
 
+/** Stops speaking now and drops anything waiting to be said. */
 export function stopSpeaking() {
   generation++;
+  queue = Promise.resolve();
+  lastLevel = 0;
   stopAudio();
   if (canSpeak()) speechSynthesis.cancel();
 }
@@ -200,10 +301,17 @@ export interface Conversation {
 }
 
 const START_LEVEL = 0.08;
-/** Talking over Persona needs a clearly louder voice, held, so its own audio doesn't count. */
-const BARGE_LEVEL = 0.22;
-const BARGE_HOLD_MS = 280;
-const SILENCE_MS = 1100;
+/**
+ * Talking over Persona needs a clearly louder voice than Persona's own coming
+ * out of the speakers, held for a moment, so its own voice never interrupts it.
+ */
+const BARGE_LEVEL = 0.3;
+const BARGE_OVER_OWN = 1.4;
+/** Speech dips between syllables, so "talking over" means loud for most of this window. */
+const BARGE_WINDOW_MS = 700;
+const BARGE_SHARE = 0.6;
+/** A pause this long ends your turn; shorter ones are just you thinking. */
+const SILENCE_MS = 1700;
 const MIN_SPEECH_MS = 350;
 /** Persona cuts in after this much uninterrupted talking. */
 export const LONG_TURN_MS = 25_000;
@@ -242,7 +350,8 @@ export async function startConversation(handlers: {
   let chunks: Blob[] = [];
   let speechStart = 0;
   let lastLoud = 0;
-  let loudSince = 0;
+  /** Recent moments while Persona speaks: [time, were you louder than it]. */
+  let recent: [number, boolean][] = [];
   let bargeUntil = 0;
   let stopped = false;
 
@@ -277,9 +386,13 @@ export async function startConversation(handlers: {
     if (handlers.speaking() && now > bargeUntil) {
       // Persona started talking while you were mid-sentence: keep what you said.
       if (recorder) end("persona");
-      loudSince = level > BARGE_LEVEL ? loudSince || now : 0;
-      if (loudSince && now - loudSince >= BARGE_HOLD_MS) {
-        loudSince = 0;
+      const over = Math.max(BARGE_LEVEL, ownLevel() * BARGE_OVER_OWN + 0.12);
+      recent.push([now, level > over]);
+      recent = recent.filter(([t]) => now - t <= BARGE_WINDOW_MS);
+      const spanned = recent.length > 0 && now - recent[0][0] >= BARGE_WINDOW_MS * 0.9;
+      const share = recent.filter(([, loud]) => loud).length / Math.max(1, recent.length);
+      if (spanned && share >= BARGE_SHARE) {
+        recent = [];
         // Persona takes a moment to fall silent; keep this recording meanwhile.
         bargeUntil = now + 1500;
         handlers.onBargeIn();
@@ -287,6 +400,7 @@ export async function startConversation(handlers: {
       }
       return;
     }
+    recent = [];
     handlers.onLevel(level);
     if (handlers.busy() && !recorder) return;
     if (level > START_LEVEL) {

@@ -118,4 +118,41 @@ describe("createGateway", () => {
     expect(sent[0].reasoning_effort).toBe("low");
     expect(sent[1]).not.toHaveProperty("reasoning_effort");
   });
+
+  it("retries a model-not-found answer, then uses the fallback model", async () => {
+    const missing = () =>
+      new Response(
+        '{"error":{"code":"model_not_found","message":"The requested model was not found."}}',
+        {
+          status: 404,
+        },
+      );
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(ok(reply));
+    const client = createGateway(
+      () => ({ ...config, model: "muse-spark-1.3", fallbackModel: "muse-spark-1.2" }),
+      fetchImpl as typeof fetch,
+    );
+    const pending = client.complete("extract", []);
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toMatchObject({ text: "hello" });
+    const models = fetchImpl.mock.calls.map(
+      (c) => JSON.parse((c[1] as RequestInit).body as string).model,
+    );
+    expect(models).toEqual(["muse-spark-1.3", "muse-spark-1.3", "muse-spark-1.2"]);
+  });
+
+  it("gives up on a missing model when no fallback is set", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response('{"error":{"code":"model_not_found"}}', { status: 404 }),
+    );
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+    const pending = client.complete("extract", []).catch((e) => e);
+    await vi.runAllTimersAsync();
+    expect(await pending).toMatchObject({ modelMissing: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
 });

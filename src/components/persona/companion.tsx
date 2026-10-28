@@ -85,8 +85,6 @@ const WRAP_UP_HOUR = 17;
 const REMINDER_POLL_MS = 30_000;
 /** With no input on the page for this long, Persona dozes until you move. */
 const DOZE_MS = 5 * 60_000;
-/** Spoken replies stop after this many sentences; the rest stays on screen. */
-const SPOKEN_SENTENCES = 4;
 
 /** Inside the fading conversation: no backdrop blur (it shows as a box under the fade). */
 const card = "bg-card/95 shadow-[0_10px_34px_-14px_rgba(29,22,29,0.35)] ring-1 ring-foreground/5";
@@ -165,6 +163,9 @@ export function Companion(props: CompanionProps) {
   const home = useRef<{ x: number; y: number } | null>(null);
   const backHome = useRef(0);
   const talkingNow = useRef(false);
+  // Lines queued or being spoken, and the message whose words are appearing as spoken.
+  const speaking = useRef(0);
+  const [revealing, setRevealing] = useState<{ id: string; shown: string } | null>(null);
   // The desktop app lets Persuna speak before any click (see desktop/main.js).
   const overlayRef = useRef(Boolean(props.overlay));
   // The first meeting's answers and transcript. Refs, because `send` (which
@@ -196,43 +197,78 @@ export function Companion(props: CompanionProps) {
     );
   }, []);
 
-  const sayAloud = useCallback(async (line: string) => {
-    if (!live.current.voiceOn || !line.trim()) return;
-    // Browsers only allow speech after the person has interacted with the page.
-    const activation = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } })
-      .userActivation;
-    if (activation && !activation.hasBeenActive && !overlayRef.current) {
-      queued.current = line;
-      return;
-    }
-    const sentences = line.match(/[^.!?]+[.!?]*/g) ?? [line];
-    const spoken =
-      sentences.length > SPOKEN_SENTENCES
-        ? `${sentences.slice(0, SPOKEN_SENTENCES).join(" ")} The rest is on screen.`
-        : line;
-    talkingNow.current = true;
-    setTalking(true);
-    await speak(spoken, setLevel);
-    talkingNow.current = false;
-    setTalking(false);
-  }, []);
+  /**
+   * Says a line in full, after anything already being said. Its words appear
+   * as they're spoken (`onSpoken`), not all at once beforehand. Resolves
+   * false when it couldn't speak (voice off, or the browser needs a click
+   * first), so the caller shows the whole line instead.
+   */
+  const sayAloud = useCallback(
+    async (line: string, onSpoken?: (soFar: string) => void): Promise<boolean> => {
+      if (!live.current.voiceOn || !line.trim()) return false;
+      // Browsers only allow speech after the person has interacted with the page.
+      const activation = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } })
+        .userActivation;
+      if (activation && !activation.hasBeenActive && !overlayRef.current) {
+        queued.current = line;
+        return false;
+      }
+      let soFar = "";
+      speaking.current += 1;
+      talkingNow.current = true;
+      setTalking(true);
+      try {
+        await speak(line, {
+          onLevel: setLevel,
+          onSpoken: (piece) => {
+            soFar = soFar ? `${soFar} ${piece}` : piece;
+            onSpoken?.(soFar);
+          },
+        });
+      } finally {
+        speaking.current = Math.max(0, speaking.current - 1);
+        if (speaking.current === 0) {
+          talkingNow.current = false;
+          setTalking(false);
+        }
+      }
+      return true;
+    },
+    [],
+  );
 
   /** Stop Persona mid-sentence: tapping it, typing, or talking over it. */
   const interrupt = useCallback(() => {
     if (!talkingNow.current) return;
     stopSpeaking();
+    speaking.current = 0;
+    setRevealing(null);
     talkingNow.current = false;
     setTalking(false);
     setLevel(0);
   }, []);
 
-  /** Persona says something: a caption by the orb (when closed) and out loud. */
+  /**
+   * Persona says something. Out loud when its voice is on, with the words
+   * appearing as they're spoken (in the caption beside it, or in the
+   * conversation for message `id`); all at once when it's silent.
+   */
   const express = useCallback(
-    (line: string, lead = "") => {
-      if (!live.current.open && !live.current.pip) showCaption(line);
+    (line: string, lead = "", id?: string) => {
+      const asCaption = !live.current.open && !live.current.pip;
       // If you're mid-sentence, Persona says so as it cuts in; your words so far are kept.
       const cutting = conversation.current?.userSpeaking() ? CUT_IN : "";
-      void sayAloud(`${lead || cutting}${line}`);
+      if (live.current.voiceOn) {
+        if (id) setRevealing({ id, shown: "" });
+        if (asCaption) setCaption(null);
+      }
+      void sayAloud(`${lead || cutting}${line}`, (soFar) => {
+        if (id) setRevealing((r) => (r?.id === id ? { id, shown: soFar } : r));
+        if (asCaption) showCaption(soFar);
+      }).then((spoke) => {
+        if (id) setRevealing((r) => (r?.id === id ? null : r));
+        if (!spoke && asCaption) showCaption(line);
+      });
     },
     [sayAloud, showCaption],
   );
@@ -282,7 +318,7 @@ export function Companion(props: CompanionProps) {
       if (res.ok && res.value && props.setupDone) {
         const greeting = res.value;
         setMessages((all) => [...all, { ...greeting, role: "assistant" }]);
-        express(greeting.content);
+        express(greeting.content, "", greeting.id);
       }
     });
     return () => {
@@ -318,7 +354,7 @@ export function Companion(props: CompanionProps) {
           ...all,
           { ...n.message, role: "assistant", link: { href: n.href, label: "Take a look" } },
         ]);
-        express(n.message.content);
+        express(n.message.content, "", n.message.id);
         // If the thing it's talking about is on screen, go and point at it.
         if (!live.current.open) perchBy(document.querySelector(`main a[href="${n.href}"]`));
       }
@@ -416,7 +452,7 @@ export function Companion(props: CompanionProps) {
       ) {
         void Notification.requestPermission();
       }
-      express(reply.content, lead);
+      express(reply.content, lead, reply.id);
     },
     // setupReply, flyTo and perchBy read live state through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1091,7 +1127,7 @@ export function Companion(props: CompanionProps) {
           )}
           {messages.slice(-60).map((m) => (
             <Bubble key={m.id} role={m.role} kind={m.kind} wide={Boolean(m.jobId)}>
-              {m.content}
+              {revealing?.id === m.id ? revealing.shown || "…" : m.content}
               {m.jobId && <JobCard jobId={m.jobId} initial={m.job} />}
               {m.link && (
                 <Link
