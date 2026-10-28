@@ -5,7 +5,8 @@ import { z } from "zod";
 import { attempt, slugField, uuidField, type ActionState } from "@/lib/action-state";
 import { assertOrderAccess, ownedSkillBySlug } from "@/lib/auth/access";
 import { requireUser } from "@/lib/auth/session";
-import { readUploadedText } from "@/lib/docs/read-file";
+import { readTaskInput } from "@/lib/docs/read-input";
+import { createFileStore } from "@/lib/models/files";
 import { complainAboutJob } from "@/lib/jobs/service";
 import {
   acceptOrder,
@@ -68,7 +69,11 @@ export async function rentAction(_: ActionState, form: FormData): Promise<Action
       Object.fromEntries(form),
     );
     const user = await requireUser();
-    const input = (await readUploadedText(form.get("inputFile"))) ?? inputText ?? "";
+    // A renter's PDF or scan is read for them (counted against their daily allowance).
+    const input =
+      (await readTaskInput(form.get("inputFile"), createModelClient(user), createFileStore())) ??
+      inputText ??
+      "";
     if (!input.trim()) throw new Error("Paste your notes or upload a file.");
     const { jobId, redirectUrl } = await rentSkill(
       createModelClient(await requireUser()),

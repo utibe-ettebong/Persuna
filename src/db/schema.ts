@@ -14,6 +14,7 @@ import {
   unique,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { GroundingReport } from "@/lib/jobs/grounding";
 import type { JobFlag } from "@/lib/jobs/self-check";
 import type { Tone } from "@/lib/persona/tone";
 import type { InterviewAnswers } from "@/lib/skill/interview";
@@ -277,6 +278,8 @@ export const jobs = pgTable(
     trustLevel: integer("trust_level").notNull().default(0),
     /** Problems the self-check found. Flagged jobs always go to the owner. */
     flags: jsonb("flags").$type<JobFlag[]>().notNull().default([]),
+    /** Each statement in the draft checked against the input (null for older jobs). */
+    grounding: jsonb("grounding").$type<GroundingReport>(),
     /** Renter paid for guaranteed owner review, whatever the trust level. */
     ownerReviewRequired: boolean("owner_review_required").notNull().default(false),
     complaint: text("complaint"),

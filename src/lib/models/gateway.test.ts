@@ -200,4 +200,22 @@ describe("createGateway", () => {
     await expect(client.complete("extract", [])).rejects.toBeInstanceOf(ModelError);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it("asks for JSON mode when told to, and drops it if the provider refuses", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response('{"error":{"message":"response_format json_object is not supported"}}', {
+          status: 400,
+        }),
+      )
+      .mockResolvedValueOnce(ok(reply));
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+    await expect(client.complete("draft", [], { json: true })).resolves.toMatchObject({
+      text: "hello",
+    });
+    const sent = fetchImpl.mock.calls.map((c) => JSON.parse((c[1] as RequestInit).body as string));
+    expect(sent[0].response_format).toEqual({ type: "json_object" });
+    expect(sent[1]).not.toHaveProperty("response_format");
+  });
 });

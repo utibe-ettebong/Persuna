@@ -1,9 +1,14 @@
 import { z } from "zod";
 import { env, modelConfig, type ModelRole, type ModelRoleConfig } from "@/env";
 
-/** Text, or (in user messages) text and images, as OpenAI-style content parts. */
+/**
+ * Text, or (in user messages) text with images or an uploaded file (a PDF sent
+ * through the provider's Files API), as OpenAI-style content parts.
+ */
 export type ContentPart =
-  { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } }
+  | { type: "file"; file: { file_id: string; filename?: string } };
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -27,6 +32,8 @@ export interface Completion {
 export interface CompleteOptions {
   temperature?: number;
   maxTokens?: number;
+  /** Ask the provider for a guaranteed JSON object (response_format json_object). */
+  json?: boolean;
 }
 
 /**
@@ -166,8 +173,8 @@ async function postFindingModel(
 
 /**
  * Not every model takes every reasoning setting (Meta's muse-spark-1.2 has no
- * "max"). If the provider refuses the setting, ask again without it rather
- * than fail.
+ * "max") or offers JSON mode. If the provider refuses either, ask again
+ * without it rather than fail.
  */
 async function postKeepingEffort(
   config: ModelRoleConfig,
@@ -176,24 +183,37 @@ async function postKeepingEffort(
   options: CompleteOptions,
   maxTokens: number,
   fetchImpl: typeof fetch,
-) {
+): ReturnType<typeof post> {
   try {
     return await post(config, role, messages, options, maxTokens, fetchImpl);
   } catch (error) {
-    if (!(error instanceof ModelError) || !error.effortRejected || !config.reasoningEffort) {
-      throw error;
+    if (!(error instanceof ModelError)) throw error;
+    if (error.effortRejected && config.reasoningEffort) {
+      console.warn(
+        `[models] ${config.model} doesn't accept reasoning_effort "${config.reasoningEffort}"; asking without it.`,
+      );
+      return postKeepingEffort(
+        { ...config, reasoningEffort: undefined },
+        role,
+        messages,
+        options,
+        maxTokens,
+        fetchImpl,
+      );
     }
-    console.warn(
-      `[models] ${config.model} doesn't accept reasoning_effort "${config.reasoningEffort}"; asking without it.`,
-    );
-    return post(
-      { ...config, reasoningEffort: undefined },
-      role,
-      messages,
-      options,
-      maxTokens,
-      fetchImpl,
-    );
+    if (error.jsonModeRejected && options.json) {
+      // Without JSON mode, completeJson still parses and repairs the reply.
+      console.warn(`[models] ${config.model} doesn't offer JSON mode; asking without it.`);
+      return postKeepingEffort(
+        config,
+        role,
+        messages,
+        { ...options, json: false },
+        maxTokens,
+        fetchImpl,
+      );
+    }
+    throw error;
   }
 }
 
@@ -212,6 +232,7 @@ async function post(
     temperature: options.temperature ?? 0,
     max_tokens: maxTokens,
     ...(config.reasoningEffort && { reasoning_effort: config.reasoningEffort }),
+    ...(options.json && { response_format: { type: "json_object" } }),
   });
 
   for (let attempt = 1; ; attempt++) {
@@ -247,6 +268,7 @@ async function post(
         response.status === 401 || response.status === 403,
         response.status === 404 && /model_not_found|model.*not.*found/i.test(detail),
         response.status === 400 && /reasoning_effort/i.test(detail),
+        response.status === 400 && /response_format|json_object|json mode/i.test(detail),
       );
     }
 
@@ -277,6 +299,8 @@ export class ModelError extends Error {
     readonly modelMissing = false,
     /** The provider refused the reasoning_effort value for this model (400). */
     readonly effortRejected = false,
+    /** The provider doesn't offer JSON mode for this model (400). */
+    readonly jsonModeRejected = false,
   ) {
     super(`[${role} model] ${message}`);
     this.name = "ModelError";

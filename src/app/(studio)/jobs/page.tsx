@@ -1,3 +1,4 @@
+import { TASK_FILE_ACCEPT } from "@/lib/docs/read-input";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { createJobAction } from "@/app/actions/jobs";
@@ -75,11 +76,11 @@ export default async function JobsPage() {
                   placeholder="Paste the input here…"
                 />
               </Field>
-              <Field label="…or upload" hint=".md, .txt or .docx">
+              <Field label="…or upload" hint="text, Word, PDF, a scan or a photo">
                 <input
                   type="file"
                   name="inputFile"
-                  accept=".md,.markdown,.txt,.docx"
+                  accept={TASK_FILE_ACCEPT}
                   className="mt-1 block w-full text-sm text-muted file:mr-3 file:rounded file:border file:border-line file:bg-subtle file:px-2 file:py-1"
                 />
               </Field>

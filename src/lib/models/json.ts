@@ -26,6 +26,8 @@ export async function completeJson<T>(
   schema: z.ZodType<T>,
   options?: CompleteOptions,
 ): Promise<{ value: T; completion: Completion }> {
+  // JSON mode makes a valid object far more likely; the parse-and-repair below still stands.
+  options = { json: true, ...options };
   const first = await client.complete(role, messages, options);
   const firstTry = parse(first.text, schema);
   if (firstTry.ok) return { value: firstTry.value, completion: first };

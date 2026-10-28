@@ -1,3 +1,4 @@
+import { TASK_FILE_ACCEPT } from "@/lib/docs/read-input";
 import type { Metadata } from "next";
 import { rentAction } from "@/app/actions/market";
 import { ActionForm } from "@/components/action-form";
@@ -81,11 +82,11 @@ export default async function ListingDetailPage({ params }: Params) {
             <Field label={skill.inputType}>
               <textarea name="inputText" rows={8} className={`${inputClass} font-mono text-xs`} />
             </Field>
-            <Field label="…or upload" hint=".md, .txt or .docx">
+            <Field label="…or upload" hint="text, Word, PDF, a scan or a photo">
               <input
                 type="file"
                 name="inputFile"
-                accept=".md,.markdown,.txt,.docx"
+                accept={TASK_FILE_ACCEPT}
                 className="mt-1 block w-full text-sm text-muted file:mr-3 file:rounded file:border file:border-line file:bg-subtle file:px-2 file:py-1"
               />
             </Field>

@@ -10,12 +10,13 @@ import { env, trustThresholds } from "@/env";
 import { audit, type Actor } from "@/lib/audit";
 import type { ModelClient } from "@/lib/models/gateway";
 import { refundForJob } from "@/lib/payments/service";
-import { selfCheck } from "@/lib/skill/engine";
-import { draftMessages } from "@/lib/skill/prompts";
+import { draftGrounded, selfCheck } from "@/lib/skill/engine";
 import { closestPairs } from "@/lib/skill/retrieve";
 import { NotFoundError, trainingPairs } from "@/lib/skill/service";
 import { normalizeText } from "@/lib/text";
 import { classifyEdit } from "./edit-size";
+import { groundingFlags } from "./grounding";
+import { mergeFlags } from "./self-check";
 import {
   canSetLevel,
   eligibility,
@@ -100,22 +101,22 @@ export async function draftJob(client: ModelClient, jobId: string, random = Math
 
   const train = await trainingPairs(job.skillId);
   const shots = closestPairs(job.input, train, 3);
-  const completion = await client.complete(
-    "draft",
-    draftMessages(version.sheet, shots, job.input),
-    {
-      temperature: 0.2,
-      maxTokens: 4096,
-    },
-  );
-  const draft = completion.text.trim();
-  if (!draft) throw new Error("The model returned an empty draft");
-  const flags = await selfCheck(
+  // Draft, check every statement against the input, redraft what isn't supported.
+  const { draft, completion, grounding } = await draftGrounded(
     client,
     version.sheet,
+    shots,
     job.input,
-    draft,
-    train.map((p) => p.input.length),
+  );
+  const flags = mergeFlags(
+    groundingFlags(grounding),
+    await selfCheck(
+      client,
+      version.sheet,
+      job.input,
+      draft,
+      train.map((p) => p.input.length),
+    ),
   );
 
   const review = needsOwnerReview({
@@ -130,6 +131,7 @@ export async function draftJob(client: ModelClient, jobId: string, random = Math
     .set({
       draft,
       flags,
+      grounding,
       shotExampleIds: shots.map((s) => s.id),
       model: completion.model,
       promptTokens: completion.promptTokens,
@@ -153,7 +155,13 @@ export async function draftJob(client: ModelClient, jobId: string, random = Math
     entityType: "job",
     entityId: jobId,
     skillId: job.skillId,
-    details: { flags: flags.map((f) => f.kind), trustLevel: skill.trustLevel },
+    details: {
+      flags: flags.map((f) => f.kind),
+      trustLevel: skill.trustLevel,
+      statementsChecked: grounding.checked,
+      unsupported: grounding.unsupported.length,
+      redrafts: grounding.redrafts,
+    },
   });
   return row;
 }
