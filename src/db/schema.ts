@@ -495,3 +495,30 @@ export type PersonaProfile = typeof personaProfiles.$inferSelect;
 export type PersonaMessage = typeof personaMessages.$inferSelect;
 export type PersonaNote = typeof personaNotes.$inferSelect;
 export type PersonaReminder = typeof personaReminders.$inferSelect;
+
+/**
+ * Apps Persona may use for the user (Google for Gmail and Calendar, Notion),
+ * connected by OAuth. Tokens are encrypted at rest (CONNECTIONS_KEY) and
+ * never leave the server.
+ */
+export const appConnections = pgTable(
+  "app_connections",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    /** google or notion. */
+    provider: text("provider").notNull(),
+    /** Which account it is (an email, a workspace name), to show the user. */
+    account: text("account").notNull(),
+    scopes: text("scopes").notNull().default(""),
+    accessToken: text("access_token").notNull(),
+    refreshToken: text("refresh_token"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique().on(t.userId, t.provider)],
+);
+export type AppConnection = typeof appConnections.$inferSelect;

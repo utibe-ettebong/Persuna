@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import {
+  disconnectAppAction,
   personaClearChatAction,
   personaForgetAction,
   personaProfileAction,
@@ -260,5 +261,29 @@ export function ToneForm({ tone, instruction }: { tone: Tone; instruction: strin
         {instruction}
       </p>
     </div>
+  );
+}
+
+export function DisconnectAppButton({ provider, name }: { provider: string; name: string }) {
+  const [pending, start] = useTransition();
+  const router = useRouter();
+  return (
+    <button
+      type="button"
+      disabled={pending}
+      onClick={() =>
+        start(async () => {
+          if (
+            !confirm(`Disconnect ${name}? Persuna won't be able to use it until you connect again.`)
+          )
+            return;
+          const res = await disconnectAppAction(provider);
+          if (res.ok) router.refresh();
+        })
+      }
+      className="label-mono text-muted underline hover:text-danger disabled:opacity-50"
+    >
+      {pending ? "Disconnecting…" : "Disconnect"}
+    </button>
   );
 }

@@ -42,6 +42,17 @@ const envSchema = z.object({
    * ELEVENLABS_AGENT_ID). Default: agent when that's set, otherwise listen.
    */
   VOICE_MODE: z.enum(["listen", "transcribe", "agent"]).optional(),
+  /**
+   * Encrypts connected apps' tokens at rest and signs actions waiting for the
+   * user's OK. Any long random string; changing it disconnects every app.
+   */
+  CONNECTIONS_KEY: z.string().min(32).optional(),
+  /** Google OAuth client (Gmail and Calendar). Redirect: {APP_URL}/api/connections/google/callback */
+  GOOGLE_CLIENT_ID: z.string().min(1).optional(),
+  GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
+  /** Notion public integration. Redirect: {APP_URL}/api/connections/notion/callback */
+  NOTION_CLIENT_ID: z.string().min(1).optional(),
+  NOTION_CLIENT_SECRET: z.string().min(1).optional(),
   /** The ElevenLabs agent created by `npm run voice:agent`. */
   ELEVENLABS_AGENT_ID: z.string().min(1).optional(),
   /** Shared secret ElevenLabs sends when it calls Persona's brain (/api/persona/llm). */

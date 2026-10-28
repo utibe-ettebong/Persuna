@@ -10,6 +10,8 @@ import { actorOf, requireUser } from "@/lib/auth/session";
 import { createModelClient, createTranscriber } from "@/lib/models";
 import { readAudio } from "@/lib/models/transcribe";
 import { takeTurns } from "@/lib/persona/voice-agent";
+import { PROVIDER_IDS } from "@/lib/connections/providers";
+import { disconnect } from "@/lib/connections/service";
 import {
   AVATARS,
   addExampleFromChat,
@@ -18,6 +20,7 @@ import {
   addTodo,
   chat,
   chatFromVoice,
+  confirmAppFromChat,
   completeSetup,
   deleteReminder,
   jobForChat,
@@ -350,5 +353,21 @@ export async function personaPublishAction(slug: string, versionId: string, conf
     });
     revalidatePath("/skills");
     return result;
+  });
+}
+
+/** The user OK'd sending or creating something in one of their apps. */
+export async function personaAppConfirmAction(token: string) {
+  return run(async () => {
+    const user = await requireUser();
+    return confirmAppFromChat(user.id, z.string().min(10).max(20_000).parse(token), actorOf(user));
+  });
+}
+
+export async function disconnectAppAction(provider: string) {
+  return run(async () => {
+    const user = await requireUser();
+    await disconnect(user.id, z.enum(PROVIDER_IDS).parse(provider), actorOf(user));
+    revalidatePath("/persona");
   });
 }

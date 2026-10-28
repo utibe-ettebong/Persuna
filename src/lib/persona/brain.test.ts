@@ -267,3 +267,16 @@ describe("hearing a recording directly", () => {
     expect(reply.heard).toBe("Remind me at four");
   });
 });
+
+describe("tasks in connected apps", () => {
+  it("hands email, calendar and Notion requests to the app task", async () => {
+    for (const text of [
+      "What did Ada email me about?",
+      "Put lunch on my calendar Friday at 1",
+      "Add this to Notion",
+    ]) {
+      const reply = await personaTurn(createMockClient(), state(), [], text);
+      expect(reply.actions).toEqual([{ type: "app_task", goal: text }]);
+    }
+  });
+});

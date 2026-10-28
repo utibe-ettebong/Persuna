@@ -13,9 +13,11 @@ import {
   personaTranscribeAction,
   personaVoiceAction,
   personaAgentTurnsAction,
+  personaAppConfirmAction,
 } from "@/app/actions/persona";
 import { toTranscribableWav } from "@/lib/audio/convert";
 import type { ChatJob, ChatResult, PublishConfirm } from "@/lib/persona/service";
+import type { AppConfirm } from "@/lib/connections/service";
 import { LOOKS, LOOK_IDS, lookOf } from "@/lib/persona/looks";
 import {
   SETUP_QUESTIONS,
@@ -143,6 +145,8 @@ export function Companion(props: CompanionProps) {
   const [example, setExample] = useState<{ slug: string; name: string } | null>(null);
   const [confirm, setConfirm] = useState<PublishConfirm | null>(null);
   const [confirmLower, setConfirmLower] = useState(false);
+  // A send or create in the user's apps, waiting for their OK.
+  const [appConfirm, setAppConfirm] = useState<AppConfirm | null>(null);
   const offFocusAsked = useRef(false);
   const [dismissedJob, setDismissedJob] = useState<string | null>(null);
   const [setupDone, setSetupDone] = useState(props.setupDone);
@@ -458,6 +462,7 @@ export function Companion(props: CompanionProps) {
     if (value.watch === "start" && !watcher.current) void startWatch();
     if (value.watch === "stop") watcher.current?.stop();
     if (value.example) setExample(value.example.skill);
+    if (value.appConfirm) setAppConfirm(value.appConfirm);
     if (value.confirm) {
       setConfirm(value.confirm);
       setConfirmLower(false);
@@ -1130,6 +1135,21 @@ export function Companion(props: CompanionProps) {
     express(res.value.message.content);
   }
 
+  /** Does the send or create the user just OK'd. */
+  async function appConfirmed() {
+    if (!appConfirm) return;
+    setBusy("thinking");
+    const res = await personaAppConfirmAction(appConfirm.token);
+    setBusy("idle");
+    setAppConfirm(null);
+    if (!res.ok) return setError(res.error);
+    setMessages((all) => [
+      ...all,
+      { ...res.value.message, role: "assistant", link: res.value.link },
+    ]);
+    express(res.value.message.content);
+  }
+
   const lastMessage = messages.at(-1);
   const switchOffer = lastMessage?.role === "assistant" ? lastMessage.switchTo : null;
 
@@ -1203,6 +1223,29 @@ export function Companion(props: CompanionProps) {
               className="rounded-full px-3 py-1.5 text-muted hover:text-foreground"
             >
               Not yet
+            </button>
+          </div>
+        </div>
+      )}
+      {appConfirm && (
+        <div className={`persona-in space-y-3 rounded-[22px] p-4 text-sm ${card}`}>
+          <p className="label-mono text-muted">{appConfirm.app}</p>
+          <p className="max-h-48 overflow-y-auto whitespace-pre-wrap">{appConfirm.preview}</p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={busy !== "idle"}
+              onClick={() => void appConfirmed()}
+              className="rounded-full bg-accent px-4 py-1.5 text-accent-ink disabled:opacity-50"
+            >
+              Go ahead
+            </button>
+            <button
+              type="button"
+              onClick={() => setAppConfirm(null)}
+              className="rounded-full px-3 py-1.5 text-muted hover:text-foreground"
+            >
+              Cancel
             </button>
           </div>
         </div>
@@ -1316,6 +1359,7 @@ export function Companion(props: CompanionProps) {
         Boolean(task) ||
         Boolean(example) ||
         Boolean(confirm) ||
+        Boolean(appConfirm) ||
         Boolean(switchOffer && busy === "idle") ||
         Boolean(watchNote && !watching))) ||
     Boolean(latestJob);

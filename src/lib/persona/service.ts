@@ -10,6 +10,7 @@ import type { PersonaMessage, PersonaNote } from "@/db/schema";
 import { audit, type Actor } from "@/lib/audit";
 import type { ModelClient } from "@/lib/models/gateway";
 import type { Transcriber } from "@/lib/models/transcribe";
+import { confirmAppAction, doAppTask, type AppConfirm } from "@/lib/connections/service";
 import { UsageLimitError } from "@/lib/models/usage";
 import { findNames } from "@/lib/skill/engine";
 import { INTERVIEW_QUESTIONS, type InterviewAnswers } from "@/lib/skill/interview";
@@ -219,6 +220,8 @@ export interface ChatResult {
   switchTo: { slug: string; name: string } | null;
   /** Start or stop watching the screen (starting still asks the user's permission). */
   watch: "start" | "stop" | null;
+  /** A send or create in the user's apps, waiting for their OK. */
+  appConfirm: AppConfirm | null;
 }
 
 export interface PublishConfirm {
@@ -309,6 +312,7 @@ export async function chat(
   let reminderSet = false;
   let navigate: string | null = null;
   let watch: ChatResult["watch"] = null;
+  let appConfirm: ChatResult["appConfirm"] = null;
 
   for (const action of reply.actions) {
     if (action.type === "remember") {
@@ -470,6 +474,17 @@ export async function chat(
         playful: action.playful ?? undefined,
         note: action.note ?? undefined,
       });
+    } else if (action.type === "app_task") {
+      const done = await doAppTask(client, userId, {
+        goal: action.goal,
+        now: input.clock.now,
+        offset: input.clock.offset,
+        name: profile.name,
+        actor: input.actor,
+      });
+      extra.push(`\n\n${done.reply}`);
+      appConfirm = done.confirm;
+      if (done.needsConnecting) link = { href: "/persona#apps", label: "Connect your apps" };
     } else if (action.type === "watch_screen") {
       watch = action.on ? "start" : "stop";
     } else if (action.type === "wrap_up") {
@@ -523,6 +538,7 @@ export async function chat(
     confirm,
     switchTo,
     watch,
+    appConfirm,
   };
 }
 
@@ -1310,6 +1326,16 @@ export async function addExampleFromChat(
 }
 
 /** Publishes after the user confirmed in the chat. */
+/** The user OK'd a send or create in their apps: do it, and say so in the conversation. */
+export async function confirmAppFromChat(userId: string, token: string, actor: Actor) {
+  const done = await confirmAppAction(userId, token, actor);
+  const [message] = await db()
+    .insert(personaMessages)
+    .values({ userId, role: "assistant", content: done.message })
+    .returning();
+  return { message, link: done.href ? { href: done.href, label: "Open it" } : null };
+}
+
 export async function publishFromChat(
   userId: string,
   input: { slug: string; versionId: string; confirmLower: boolean },

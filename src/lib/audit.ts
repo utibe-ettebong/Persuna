@@ -9,7 +9,8 @@ export type Actor = "owner" | "system" | "employer" | `renter:${string}` | `user
 export interface AuditInput {
   actor: Actor;
   action: string;
-  entityType: "skill" | "pair" | "version" | "correction" | "job" | "listing" | "transaction";
+  entityType:
+    "skill" | "pair" | "version" | "correction" | "job" | "listing" | "transaction" | "connection";
   entityId?: string | null;
   skillId?: string | null;
   /** Small facts only (ids, scores, statuses). Never job text or pair content. */

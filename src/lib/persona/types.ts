@@ -33,6 +33,11 @@ export const personaAction = z.discriminatedUnion("type", [
   z.object({ type: z.literal("coach"), skill: z.string().trim().max(80).nullish() }),
   /** The user asked for a summary of their day. */
   z.object({ type: z.literal("wrap_up") }),
+  /**
+   * The user wants something done or found in their connected apps (email,
+   * calendar, Notion): the goal in their words, with any details they gave.
+   */
+  z.object({ type: z.literal("app_task"), goal: z.string().trim().min(3).max(1000) }),
   /** The user wants Persona to start or stop watching their screen (the app asks permission). */
   z.object({ type: z.literal("watch_screen"), on: z.boolean() }),
   /** The user wants to see a page: Persona takes them there. */
