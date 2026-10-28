@@ -78,6 +78,8 @@ export const personaAction = z.discriminatedUnion("type", [
 export type PersonaAction = z.infer<typeof personaAction>;
 
 export const personaReply = z.object({
+  /** When the message was a recording: what the user said, word for word. */
+  heard: z.string().trim().max(4000).nullish(),
   reply: z.string().trim().min(1).max(1500),
   actions: z.array(personaAction).max(6).default([]),
   /** The interview question this reply asks, so the next answer can be saved against it. */

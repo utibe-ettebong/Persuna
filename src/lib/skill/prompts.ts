@@ -242,9 +242,10 @@ Describe the method, not the material. Never copy names of people or organisatio
 export function personaChatMessages(
   state: PersonaState,
   history: PersonaTurn[],
-  text: string,
+  message: string | { audio: string },
 ): ChatMessage[] {
   const keys = INTERVIEW_QUESTIONS.map((q) => q.key);
+  const spoken = typeof message !== "string";
   return [
     {
       role: "system",
@@ -278,10 +279,19 @@ Staying on the skill: if state.focusSkill is set and the user asks for work that
 
 Training: when the user wants to teach you their focus skill and it has unanswered questions, ask the next one in your own words and set "asked" to its key. If they say skip or later, move on. Learn the method, never the material: in answers and learn actions, keep the steps and rules but leave out names of people or clients, figures and other client details.
 
-The user's state is in <persona_state>. Their latest message is in <persona_user>.
+The user's state is in <persona_state>. ${
+        spoken
+          ? `Their latest message is the attached recording: they said it out loud. Write exactly what they said in "heard" (their words, not a summary), then answer it.`
+          : "Their latest message is in <persona_user>."
+      }
 
 Reply with one JSON object and nothing else:
-{
+{${
+        spoken
+          ? `
+  "heard": "what they said, word for word",`
+          : ""
+      }
   "reply": "what you say",
   "actions": [ { "type": "remember", "fact": "..." } | { "type": "note", "title": "...", "body": "..." } | { "type": "set_focus", "focus": "...", "skill": "slug or null" } | { "type": "answer", "key": one of ${JSON.stringify(keys)}, "answer": "..." } | { "type": "learn", "method": "..." } | { "type": "remind", "text": "...", "at": "YYYY-MM-DDTHH:mm or null" } | { "type": "run_task", "skill": "slug or null" } | { "type": "coach", "skill": "slug or null" } | { "type": "wrap_up" } | { "type": "watch_screen", "on": true|false } | { "type": "open_page", "page": "persona|todos|skills|skill|jobs|market|earnings|audit", "skill": "slug or null" } | { "type": "create_skill", "name": "...", "task": "...", "input": "what goes in or null", "output": "what comes out or null" } | { "type": "add_example" | "train_skill" | "test_skill" | "publish_skill", "skill": "slug or null" } | { "type": "suggest_switch", "skill": "slug or null", "task": "a new task, or null" } | { "type": "set_tone", "length": "short|normal|detailed", "formality": "casual|neutral|formal", "playful": true|false, "note": "..." } ],
   "asked": one of ${JSON.stringify(keys)} or null
@@ -290,7 +300,12 @@ Reply with one JSON object and nothing else:
     ...history.map((m) => ({ role: m.role, content: m.content })),
     {
       role: "user",
-      content: `${fence("persona_state", JSON.stringify(state, null, 1))}\n\n${fence("persona_user", text)}`,
+      content: spoken
+        ? [
+            { type: "text", text: fence("persona_state", JSON.stringify(state, null, 1)) },
+            { type: "input_audio", input_audio: { data: message.audio, format: "wav" } },
+          ]
+        : `${fence("persona_state", JSON.stringify(state, null, 1))}\n\n${fence("persona_user", message)}`,
     },
   ];
 }

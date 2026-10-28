@@ -15,13 +15,17 @@ const roleSchema = z.object({
    * For "thinking" models: how hard to think before answering (sent as
    * reasoning_effort). Unset sends nothing, which every provider accepts.
    */
-  reasoningEffort: z.enum(["none", "low", "medium", "high", "max"]).optional(),
+  reasoningEffort: z.enum(["none", "minimal", "low", "medium", "high", "max"]).optional(),
   /** Another model on the same provider, used when this one is "not found" (404). */
   fallbackModel: z.string().min(1).optional(),
 });
 
 export type ModelRoleConfig = z.infer<typeof roleSchema>;
-export type ModelRole = "extract" | "draft" | "evaluate";
+/**
+ * extract, draft and evaluate run the training loop; listen is Persona hearing
+ * a spoken message directly (audio in, reply out), with no transcription first.
+ */
+export type ModelRole = "extract" | "draft" | "evaluate" | "listen";
 
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
@@ -30,6 +34,18 @@ const envSchema = z.object({
   MODEL_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(5),
   MODEL_TIMEOUT_MS: z.coerce.number().int().min(1000).default(180_000),
   MODEL_PROVIDER: z.enum(["live", "mock"]).optional(),
+  /**
+   * How Persona hears you. "listen": the recording goes straight to the
+   * LISTEN model (Muse Spark), no transcription. "transcribe": transcribe
+   * first, then reply. "agent": ElevenLabs Agents handles listening, turn
+   * taking and voice, with Persona's own server as its brain (needs
+   * ELEVENLABS_AGENT_ID). Default: agent when that's set, otherwise listen.
+   */
+  VOICE_MODE: z.enum(["listen", "transcribe", "agent"]).optional(),
+  /** The ElevenLabs agent created by `npm run voice:agent`. */
+  ELEVENLABS_AGENT_ID: z.string().min(1).optional(),
+  /** Shared secret ElevenLabs sends when it calls Persona's brain (/api/persona/llm). */
+  ELEVENLABS_LLM_SECRET: z.string().min(24).optional(),
   JOB_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
   PLATFORM_FEE_PERCENT: z.coerce.number().min(0).max(50).default(20),
   LISTING_MIN_SCORE: z.coerce.number().min(0).max(100).default(80),
@@ -84,6 +100,7 @@ const ROLE_PREFIXES = {
   extract: "EXTRACT",
   draft: "DRAFT",
   evaluate: "EVAL",
+  listen: "LISTEN",
   transcribe: "TRANSCRIBE",
 } as const;
 
@@ -109,6 +126,7 @@ const PREFIX: Record<ModelRole, string> = {
   extract: "EXTRACT",
   draft: "DRAFT",
   evaluate: "EVAL",
+  listen: "LISTEN",
 };
 
 /**
@@ -130,6 +148,31 @@ export interface SpeechConfig {
   apiKey: string;
   model: string;
   voice: string;
+}
+
+/** How Persona hears a spoken message (see VOICE_MODE). */
+export function voiceMode(): "listen" | "transcribe" | "agent" {
+  const explicit = setting("VOICE_MODE");
+  const agent = Boolean(agentConfig());
+  if (explicit === "listen" || explicit === "transcribe") return explicit;
+  return agent ? "agent" : "listen";
+}
+
+/**
+ * ElevenLabs Agents, when set up: the agent, the ElevenLabs key (the cloud
+ * voice's) and the secret ElevenLabs sends when it calls Persona's brain.
+ */
+export function agentConfig(): {
+  agentId: string;
+  apiKey: string;
+  baseUrl: string;
+  llmSecret: string;
+} | null {
+  const speech = speechConfig();
+  const agentId = setting("ELEVENLABS_AGENT_ID");
+  const llmSecret = setting("ELEVENLABS_LLM_SECRET");
+  if (!speech || speech.api !== "elevenlabs" || !agentId || !llmSecret) return null;
+  return { agentId, apiKey: speech.apiKey, baseUrl: speech.baseUrl, llmSecret };
 }
 
 /**
@@ -192,7 +235,13 @@ export function modelConfig(role: ModelRole): ModelRoleConfig {
   // A role that borrows EXTRACT's provider also takes its reasoning setting,
   // so a setting meant for one provider is never sent to another.
   const own = roleKey(prefix) ? prefix : "EXTRACT";
-  const effort = setting(`${own}_REASONING_EFFORT`);
+  // Hearing you should be quick: it never takes the training roles' (often
+  // high) setting, and unless LISTEN_REASONING_EFFORT says otherwise it thinks
+  // as little as the model allows.
+  const effort =
+    role === "listen"
+      ? (setting("LISTEN_REASONING_EFFORT") ?? "minimal")
+      : setting(`${own}_REASONING_EFFORT`);
 
   return parseOrThrow(
     roleSchema,
@@ -228,7 +277,7 @@ function rolePicker(prefix: string) {
   };
 }
 
-const ALL_PREFIXES = ["EXTRACT", "DRAFT", "EVAL", "TRANSCRIBE"];
+const ALL_PREFIXES = ["EXTRACT", "DRAFT", "EVAL", "LISTEN", "TRANSCRIBE"];
 
 /** A role's own key, or the key of another role configured for the same base URL. */
 function roleKey(prefix: string): string | undefined {

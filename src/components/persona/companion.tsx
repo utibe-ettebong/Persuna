@@ -11,9 +11,11 @@ import {
   personaObserveAction,
   personaTeachNoteAction,
   personaTranscribeAction,
+  personaVoiceAction,
+  personaAgentTurnsAction,
 } from "@/app/actions/persona";
 import { toTranscribableWav } from "@/lib/audio/convert";
-import type { ChatJob, PublishConfirm } from "@/lib/persona/service";
+import type { ChatJob, ChatResult, PublishConfirm } from "@/lib/persona/service";
 import { LOOKS, LOOK_IDS, lookOf } from "@/lib/persona/looks";
 import {
   SETUP_QUESTIONS,
@@ -38,6 +40,7 @@ import {
   type UtteranceEnd,
 } from "./voice";
 import { startWakeWord, wakeWordSupported, type WakeListener } from "./wake-listener";
+import { startAgentCall, type AgentCall } from "./agent-voice";
 
 export interface CompanionMessage {
   id: string;
@@ -65,6 +68,8 @@ export interface CompanionProps {
   standalone?: boolean;
   /** Inside Persona Desktop's see-through layer over the whole screen. */
   overlay?: boolean;
+  /** How the server hears speech (VOICE_MODE): "agent" offers ElevenLabs Agents calls. */
+  voiceMode?: "listen" | "transcribe" | "agent";
 }
 
 type Busy = "idle" | "thinking" | "hearing";
@@ -170,6 +175,9 @@ export function Companion(props: CompanionProps) {
   const router = useRouter();
   const watcher = useRef<Watcher | null>(null);
   const conversation = useRef<Conversation | null>(null);
+  const agentCall = useRef<AgentCall | null>(null);
+  // With ElevenLabs Agents set up, use it unless the user picked Meta's listening.
+  const [agentVoice, setAgentVoice] = useState(true);
   const wake = useRef<WakeListener | null>(null);
   const drag = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean }>(null);
   const home = useRef<{ x: number; y: number } | null>(null);
@@ -320,6 +328,7 @@ export function Companion(props: CompanionProps) {
       home.current = start;
       setSpot(start);
       setVoiceOn(stored("persona.voice", true));
+      setAgentVoice(stored("persona.agentVoice", true));
       setWakeOn(stored("persona.wake", false) && wakeWordSupported());
     });
     void personaCheckInAction(clock().day).then((res) => {
@@ -425,41 +434,50 @@ export function Companion(props: CompanionProps) {
         setError(res.error);
         return;
       }
-      const [mine, reply] = res.value.messages;
-      setMessages((all) => [
-        ...all.filter((m) => m.id !== pending.id),
-        { ...mine, role: "user" },
-        { ...reply, role: "assistant", link: res.value.link, switchTo: res.value.switchTo },
-      ]);
-      setFocusSkill(res.value.focus.skill);
-      if (res.value.task) setTask(res.value.task);
-      if (res.value.watch === "start" && !watcher.current) void startWatch();
-      if (res.value.watch === "stop") watcher.current?.stop();
-      if (res.value.example) setExample(res.value.example.skill);
-      if (res.value.confirm) {
-        setConfirm(res.value.confirm);
-        setConfirmLower(false);
-      }
-      if (res.value.navigate) {
-        const href = res.value.navigate;
-        // Fly to the top of the page, open it, look at its heading.
-        flyTo({ x: 24, y: 72 }, -1);
-        window.setTimeout(() => router.push(href), 600);
-        window.setTimeout(() => perchBy(document.querySelector("main h1")), 1600);
-      }
-      if (
-        res.value.reminderSet &&
-        typeof Notification !== "undefined" &&
-        Notification.permission === "default"
-      ) {
-        void Notification.requestPermission();
-      }
-      express(reply.content, lead);
+      setMessages((all) => all.filter((m) => m.id !== pending.id));
+      answered(res.value, lead);
     },
-    // setupReply, flyTo and perchBy read live state through refs.
+    // setupReply and answered read live state through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [express, router],
+    [],
   );
+
+  /**
+   * Persona's answer to something you typed or said: show what it set up, and
+   * say it (unless the voice agent already has).
+   */
+  function answered(value: ChatResult, lead = "", spoken = false) {
+    const [mine, reply] = value.messages;
+    setMessages((all) => [
+      ...all,
+      { ...mine, role: "user" },
+      { ...reply, role: "assistant", link: value.link, switchTo: value.switchTo },
+    ]);
+    setFocusSkill(value.focus.skill);
+    if (value.task) setTask(value.task);
+    if (value.watch === "start" && !watcher.current) void startWatch();
+    if (value.watch === "stop") watcher.current?.stop();
+    if (value.example) setExample(value.example.skill);
+    if (value.confirm) {
+      setConfirm(value.confirm);
+      setConfirmLower(false);
+    }
+    if (value.navigate) {
+      const href = value.navigate;
+      // Fly to the top of the page, open it, look at its heading.
+      flyTo({ x: 24, y: 72 }, -1);
+      window.setTimeout(() => router.push(href), 600);
+      window.setTimeout(() => perchBy(document.querySelector("main h1")), 1600);
+    }
+    if (
+      value.reminderSet &&
+      typeof Notification !== "undefined" &&
+      Notification.permission === "default"
+    ) {
+      void Notification.requestPermission();
+    }
+    if (!spoken) express(reply.content, lead);
+  }
 
   const hear = useCallback(
     async (audio: Blob, end: UtteranceEnd = "pause") => {
@@ -469,33 +487,97 @@ export function Companion(props: CompanionProps) {
         const wav = await toTranscribableWav(audio, "persona");
         const form = new FormData();
         form.append("audio", wav);
-        const res = await personaTranscribeAction(form);
+        // A very long turn: Persona cut in, and says so.
+        const lead = end === "long" ? CUT_IN : "";
+        if (!setupRef.current.done) {
+          // The first meeting is scripted here, so it needs the words.
+          const res = await personaTranscribeAction(form);
+          setBusy("idle");
+          if (!res.ok) return setError(res.error);
+          if (res.value.trim()) await send(res.value, lead);
+          return;
+        }
+        // Heard and answered in one go: no separate transcription.
+        stopSpeaking();
+        const res = await personaVoiceAction(form, clock());
         setBusy("idle");
         if (!res.ok) return setError(res.error);
-        // A very long turn: Persona cut in, and says so.
-        if (res.value.trim()) await send(res.value, end === "long" ? CUT_IN : "");
+        setError(null);
+        answered(res.value, lead);
       } catch {
         setBusy("idle");
         setError("I couldn't make that out. Try again?");
       }
     },
+    // answered reads live state through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [send],
   );
 
   function endConversation() {
-    if (!conversation.current) return;
-    conversation.current.stop();
+    const agent = agentCall.current;
+    if (!conversation.current && !agent) return;
+    conversation.current?.stop();
     conversation.current = null;
+    agentCall.current = null;
+    if (agent) {
+      void agent.stop();
+      talkingNow.current = false;
+      setTalking(false);
+    }
     setConversing(false);
     chime(false);
   }
 
+  /** A call through ElevenLabs Agents. False when it isn't set up, so the page listens itself. */
+  async function startAgentConversation(): Promise<boolean> {
+    const started = await startAgentCall({
+      onSpeaking: (on) => {
+        talkingNow.current = on;
+        setTalking(on);
+        lastHeard.current = Date.now();
+      },
+      onLevel: setLevel,
+      onReply: (line) => {
+        lastHeard.current = Date.now();
+        showCaption(line);
+        // ElevenLabs carries only the words: fetch what this turn set up on screen.
+        void personaAgentTurnsAction().then((res) => {
+          if (res.ok) res.value.forEach((value) => answered(value, "", true));
+        });
+      },
+      onHeard: () => (lastHeard.current = Date.now()),
+      onEnd: () => {
+        if (agentCall.current) {
+          agentCall.current = null;
+          talkingNow.current = false;
+          setTalking(false);
+          setConversing(false);
+        }
+      },
+      onError: (message) => setError(message),
+    });
+    if (!started) return false;
+    agentCall.current = started;
+    lastHeard.current = Date.now();
+    setConversing(true);
+    chime(true);
+    return true;
+  }
+
   async function toggleConversation() {
     setError(null);
-    if (conversation.current) return endConversation();
+    if (conversation.current || agentCall.current) return endConversation();
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       setError("This browser can't use the microphone. Type instead.");
       return;
+    }
+    if (props.voiceMode === "agent" && agentVoice && setupRef.current.done) {
+      try {
+        if (await startAgentConversation()) return;
+      } catch {
+        // The voice service is down: listen here instead.
+      }
     }
     try {
       conversation.current = await startConversation({
@@ -518,6 +600,8 @@ export function Companion(props: CompanionProps) {
     setMenu(false);
     lastInput.current = Date.now();
     setDozing(false);
+    // In a voice-agent call, the shortcut or a tap ends the call.
+    if (agentCall.current) return endConversation();
     if (talkingNow.current) return interrupt();
     setCaption(null);
     void toggleConversation();
@@ -1250,6 +1334,15 @@ export function Companion(props: CompanionProps) {
         store("persona.voice", next);
         if (!next) stopSpeaking();
       },
+    },
+    {
+      label: agentVoice ? "Hear me with Meta instead" : "Hear me with ElevenLabs (faster)",
+      onSelect: () => {
+        endConversation();
+        setAgentVoice(!agentVoice);
+        store("persona.agentVoice", !agentVoice);
+      },
+      hidden: props.voiceMode !== "agent",
     },
     {
       label: wakeOn ? `Stop listening for "Hey ${name}"` : `Listen for "Hey ${name}"`,

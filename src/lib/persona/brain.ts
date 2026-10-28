@@ -19,16 +19,20 @@ import {
 /** How many earlier messages go back to the model with each turn. */
 export const HISTORY_TURNS = 12;
 
+/**
+ * One turn. The message is text, or a recording (base64 WAV) that the
+ * listening model hears directly and writes down in `heard`.
+ */
 export async function personaTurn(
   client: ModelClient,
   state: PersonaState,
   history: PersonaTurn[],
-  text: string,
+  message: string | { audio: string },
 ): Promise<PersonaReply> {
   const { value } = await completeJson(
     client,
-    "draft",
-    personaChatMessages(state, history.slice(-HISTORY_TURNS), text),
+    typeof message === "string" ? "draft" : "listen",
+    personaChatMessages(state, history.slice(-HISTORY_TURNS), message),
     personaReply,
     // Room for "thinking" models to reason before the short reply.
     { maxTokens: 4096 },
