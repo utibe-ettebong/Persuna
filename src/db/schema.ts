@@ -522,3 +522,25 @@ export const appConnections = pgTable(
   (t) => [unique().on(t.userId, t.provider)],
 );
 export type AppConnection = typeof appConnections.$inferSelect;
+
+/**
+ * Earlier versions of a renter's order and the changes they asked for, one row
+ * per round. Job text like the rest of the job: deleted with it.
+ */
+export const jobRounds = pgTable(
+  "job_rounds",
+  {
+    id: id(),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    round: integer("round").notNull(),
+    /** The version the renter had in front of them. */
+    output: text("output").notNull(),
+    /** What they asked to change. */
+    request: text("request").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [unique().on(t.jobId, t.round)],
+);
+export type JobRound = typeof jobRounds.$inferSelect;

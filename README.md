@@ -70,6 +70,12 @@ The design follows a framed, rule-drawn system: an off-white page inside vertica
 
 **Rent it out** (skill → Listing, Marketplace, Earnings)
 
+**The renter workspace** (Marketplace → an order)
+
+- A renter uploads up to 5 files (text, Word, PDF, scans, photos) and/or pastes notes. Each file is read and labelled with its name, so the work and the statement check can tell them apart.
+- When the result arrives they can **ask for changes** in plain words ("put the action items in a table", "fix the date in item 3"), up to 2 rounds (`MAX_REVISIONS`). Persuna revises the version they saw, keeping the rest, and checks every statement against the input and their request. The new version goes through the same review gate (the owner sees the request and the earlier version), and the payment stays held until the renter accepts.
+- Earlier versions and the requests made against them stay on the order for both sides, and are deleted with the job after the retention period.
+
 - A listing has a price, turnaround, sample output, owner type and an ownership declaration. It can only go live with a published version that scores at least `LISTING_MIN_SCORE` (80 by default) and with ownership declared.
 - **Employer approval:** an employee listing names their employer and gets a private approval link (`/approvals/<token>`, open without the app password). The employer approves and sets their share of earnings, or declines. The listing can't go live until approved, and changing the employer starts the approval again.
 - Owners can offer **guaranteed owner review** for an extra fee. Those jobs always come to the owner, whatever the trust level.

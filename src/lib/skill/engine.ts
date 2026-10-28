@@ -23,6 +23,7 @@ import {
   transcribeMessages,
   groundingMessages,
   redraftMessages,
+  reviseMessages,
   selfCheckMessages,
   type SkillMeta,
 } from "./prompts";
@@ -267,12 +268,19 @@ export async function draftGrounded(
   client: ModelClient,
   sheet: SkillSheet,
   shots: Pair[],
-  input: string,
+  job: string,
+  /** A renter asked for changes to `previous`: revise it rather than start again. */
+  revision?: { previous: string; request: string },
 ): Promise<{ draft: string; completion: Completion; grounding: GroundingReport }> {
-  let completion = await client.complete("draft", draftMessages(sheet, shots, input), {
-    temperature: 0.2,
-    maxTokens: 4096,
-  });
+  // In a revision, statements may also come from what the client asked for.
+  const input = revision ? `${job}\n\n${revision.request}` : job;
+  let completion = await client.complete(
+    "draft",
+    revision
+      ? reviseMessages(sheet, shots, job, revision.previous, revision.request)
+      : draftMessages(sheet, shots, job),
+    { temperature: 0.2, maxTokens: 4096 },
+  );
   let draft = completion.text.trim();
   if (!draft) throw new Error("The model returned an empty draft");
   let tokens = { prompt: completion.promptTokens, completion: completion.completionTokens };

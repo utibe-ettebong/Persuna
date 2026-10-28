@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { acceptOrderAction, complainAction } from "@/app/actions/market";
+import { acceptOrderAction, complainAction, requestChangesAction } from "@/app/actions/market";
 import { ActionForm } from "@/components/action-form";
 import { Markdown } from "@/components/markdown";
 import { Badge, buttonClass, Card, Field, inputClass, PageHeader } from "@/components/ui";
@@ -67,7 +67,9 @@ export default async function OrderPage({ params, searchParams }: Params) {
 
       {order.status === "review" && (
         <Card className="p-5 text-sm text-muted">
-          The owner reviews every result before it reaches you. Bookmark this page to check back.
+          {order.rounds.length
+            ? "Working on your changes. The new version shows here once it's ready (the owner may review it first). Bookmark this page to check back."
+            : "The owner reviews every result before it reaches you. Bookmark this page to check back."}
         </Card>
       )}
 
@@ -90,6 +92,38 @@ export default async function OrderPage({ params, searchParams }: Params) {
             </div>
             <Markdown text={order.output} />
           </Card>
+
+          {order.escrow === "held" && !order.complaint && order.revisionsLeft > 0 && (
+            <Card className="p-5">
+              <h2 className="font-display text-lg font-medium tracking-[-0.02em]">
+                Ask for changes
+              </h2>
+              <p className="mt-1 text-sm text-muted">
+                Say what to change (&ldquo;move the decisions to the top&rdquo;, &ldquo;fix the date
+                in item 3&rdquo;) and it&apos;s revised, keeping the rest. {order.revisionsLeft}{" "}
+                {order.revisionsLeft === 1 ? "round" : "rounds"} left. Your payment stays held until
+                you accept.
+              </p>
+              <ActionForm
+                action={requestChangesAction}
+                label="Ask for these changes"
+                pendingLabel="Revising…"
+                className="mt-4 space-y-3"
+              >
+                <input type="hidden" name="jobId" value={order.id} />
+                <Field label="What should change?">
+                  <textarea
+                    name="request"
+                    required
+                    minLength={5}
+                    maxLength={2000}
+                    rows={3}
+                    className={inputClass}
+                  />
+                </Field>
+              </ActionForm>
+            </Card>
+          )}
 
           {order.escrow === "held" ? (
             <Card className="p-5">
@@ -168,6 +202,26 @@ export default async function OrderPage({ params, searchParams }: Params) {
             <p className="text-sm text-muted">You reported a problem and were refunded.</p>
           )}
         </>
+      )}
+
+      {order.rounds.length > 0 && (
+        <Card className="p-5">
+          <h2 className="label-mono mb-2 text-muted">Earlier versions</h2>
+          <ol className="space-y-3">
+            {order.rounds.map((r) => (
+              <li key={r.round}>
+                <details>
+                  <summary className="cursor-pointer text-sm">
+                    Version {r.round}: you asked &ldquo;{r.request}&rdquo;
+                  </summary>
+                  <div className="mt-2 rounded-md bg-subtle p-3">
+                    <Markdown text={r.output} />
+                  </div>
+                </details>
+              </li>
+            ))}
+          </ol>
+        </Card>
       )}
     </div>
   );
