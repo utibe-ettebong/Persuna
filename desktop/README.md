@@ -1,8 +1,8 @@
 # Persuna Desktop
 
-Persuna, your PERSUNA assistant, over your whole screen. It lives in a see-through layer above your apps, even full-screen ones: just Persuna and its words, no chat window. **Call it from anywhere with ⌘⇧Space** (Ctrl+Shift+Space on Windows; if another app has taken that, Alt+Shift+Space), from _Talk to Persuna_ in its menu bar menu, or by tapping it. It chimes, listens, answers out loud, and goes quiet after 45 seconds of silence. Press the shortcut or tap it while it talks to stop it. Right-click it for the rest: type instead, watch my screen, mute, conversation and notes, hide. Clicks pass straight through to your apps everywhere else.
+Persuna, your PERSUNA assistant, over your whole screen. It lives in a see-through layer above your apps, even full-screen ones: just Persuna and its words, no chat window. **Call it from anywhere with ⌃⌥P** (Ctrl+Alt+P on Windows), by clicking Persuna in the Dock, from _Talk to Persuna_ in its menu bar menu, or by tapping it. Change the shortcut under _Call shortcut_ in that menu (⌃⌥P, ⌃⌥Space or ⌥⇧P); if another app has taken one, Persuna uses the next. When it starts, a notification says it's running and how to call it. It chimes, listens, answers out loud, and goes quiet after 45 seconds of silence. Press the shortcut or tap it while it talks to stop it. Right-click it for the rest: type instead, watch my screen, mute, conversation and notes, hide. Clicks pass straight through to your apps everywhere else.
 
-The first time, a small welcome window lets you create an account or sign in; then Persuna appears and gets to know you out loud. It sits in the menu bar (Mac) or system tray (Windows), not the Dock or taskbar.
+The first time, a small welcome window lets you create an account or sign in; then Persuna appears and gets to know you out loud. On a Mac it shows in the Dock and the menu bar; on Windows, in the system tray.
 
 **Download:** [the latest release](https://github.com/utibe-ettebong/Persuna/releases/latest).
 
