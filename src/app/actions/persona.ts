@@ -11,7 +11,9 @@ import { createModelClient, createTranscriber } from "@/lib/models";
 import { readAudio } from "@/lib/models/transcribe";
 import {
   AVATARS,
+  addExampleFromChat,
   addNote,
+  publishFromChat,
   addTodo,
   chat,
   completeSetup,
@@ -286,4 +288,43 @@ export async function addNoteAction(_: { error: string | null }, form: FormData)
     return true;
   });
   return { error: result.ok ? null : result.error };
+}
+
+/** An example given to Persuna through its card: text, or files (PDFs, scans and photos too). */
+export async function personaAddExampleAction(form: FormData) {
+  return run(async () => {
+    const user = await requireUser();
+    const client = createModelClient(user);
+    const files = createFileStore();
+    const before =
+      (await readTaskInput(form.get("beforeFile"), client, files)) ??
+      String(form.get("before") ?? "");
+    const after =
+      (await readTaskInput(form.get("afterFile"), client, files)) ??
+      String(form.get("after") ?? "");
+    const test = form.get("test");
+    const result = await addExampleFromChat(client, user.id, {
+      slug: slugField.parse(form.get("skill")),
+      before: z.string().max(100_000).parse(before),
+      after: z.string().max(100_000).parse(after),
+      test: test === "on" ? true : test === "off" ? false : null,
+      actor: actorOf(user),
+    });
+    revalidatePath("/skills");
+    return result;
+  });
+}
+
+/** Publishing, after the user confirmed it in the chat. */
+export async function personaPublishAction(slug: string, versionId: string, confirmLower: boolean) {
+  return run(async () => {
+    const user = await requireUser();
+    const result = await publishFromChat(user.id, {
+      slug: slugField.parse(slug),
+      versionId: uuidField.parse(versionId),
+      confirmLower: z.boolean().parse(confirmLower),
+    });
+    revalidatePath("/skills");
+    return result;
+  });
 }

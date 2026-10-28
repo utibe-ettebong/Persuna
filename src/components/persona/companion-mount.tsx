@@ -29,7 +29,15 @@ export async function CompanionMount({
         kind: m.kind,
         content: m.content,
         jobId: m.jobId,
+        switchTo: switchOffer(m.askedKey, persona.skills),
       }))}
     />
   );
+}
+
+/** A saved "switch to this skill?" question, so its buttons survive a reload. */
+function switchOffer(askedKey: string | null, skills: { slug: string; name: string }[]) {
+  if (!askedKey?.startsWith("switch:")) return null;
+  const skill = skills.find((s) => s.slug === askedKey.slice("switch:".length));
+  return skill ? { slug: skill.slug, name: skill.name } : null;
 }

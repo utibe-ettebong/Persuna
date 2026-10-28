@@ -71,10 +71,14 @@ interface MockPersonaState {
   memory: string[];
   focus: string | null;
   focusSkill: {
+    slug?: string;
     name: string;
     hasRules: boolean;
+    trainExamples?: number;
+    testExamples?: number;
     unanswered: { key: string; question: string }[];
   } | null;
+  pendingSwitch?: { slug: string; name: string } | null;
   skills: { slug: string; name: string; published: boolean }[];
   lastAsked: string | null;
 }
@@ -101,6 +105,84 @@ function mockPersonaTurn(user: string): {
   const skill = state.focusSkill;
   const nextQuestion = (except: string | null) =>
     skill?.unanswered.find((q) => q.key !== except) ?? null;
+
+  // Persuna offered to switch skills: yes switches, anything else stays.
+  if (state.pendingSwitch) {
+    const other = state.pendingSwitch;
+    if (/^(yes|yeah|yep|sure|ok(ay)?|switch|please do)\b/.test(lower)) {
+      return {
+        reply: `Switched to ${other.name}.`,
+        actions: [{ type: "set_focus", focus: other.name, skill: other.slug }],
+      };
+    }
+    if (/^(no|nope|stay|not now|keep)\b/.test(lower)) {
+      return { reply: `Okay, staying on ${skill?.name ?? "this"}.`, actions: [] };
+    }
+  }
+
+  // Building a skill, all by conversation.
+  const learnNew = text.match(
+    /\b(?:i (?:want|need) you to learn(?: how to)?|learn (?:how to|to)|new skill[:,]?|create a skill (?:for|to))\s+(.+)/i,
+  );
+  if (learnNew) {
+    const name = learnNew[1].replace(/[.!?]+$/, "").trim();
+    const title = name.charAt(0).toUpperCase() + name.slice(1);
+    return {
+      reply: `Great, I'll learn ${name}. Give me an example of how you do it: say "add an example".`,
+      actions: [
+        {
+          type: "create_skill",
+          name: title,
+          task: `${title}, done the way the owner does it.`,
+          input: null,
+          output: null,
+        },
+      ],
+    };
+  }
+  if (/\b(add (?:an |another )?example|here'?s an example|give you an example)\b/.test(lower)) {
+    return {
+      reply: "Sure. Paste what you started with and your finished version.",
+      actions: [{ type: "add_example", skill: null }],
+    };
+  }
+  if (
+    /\b(train yourself|learn the rules|update your rules|train (?:the|this) skill)\b/.test(lower)
+  ) {
+    return {
+      reply: "Learning from your examples now.",
+      actions: [{ type: "train_skill", skill: null }],
+    };
+  }
+  if (/\b(test yourself|run the tests|test (?:the|this) skill)\b/.test(lower)) {
+    return {
+      reply: "Testing myself against the examples you held back.",
+      actions: [{ type: "test_skill", skill: null }],
+    };
+  }
+  if (/\bpublish\b/.test(lower)) {
+    return {
+      reply: "Here's what would go live.",
+      actions: [{ type: "publish_skill", skill: null }],
+    };
+  }
+
+  // Work that belongs to another of their skills: ask before switching.
+  if (skill && !/\b(open|show|switch|go to|take me)\b/.test(lower)) {
+    const words = tokenize(text);
+    const focusWords = new Set(tokenize(skill.name));
+    const other = state.skills.find(
+      (s) =>
+        s.name !== skill.name &&
+        tokenize(s.name).some((w) => w.length > 3 && !focusWords.has(w) && words.includes(w)),
+    );
+    if (other) {
+      return {
+        reply: `That sounds like your ${other.name} skill, not ${skill.name}. Want me to switch?`,
+        actions: [{ type: "suggest_switch", skill: other.slug, task: null }],
+      };
+    }
+  }
 
   if (state.lastAsked && skill) {
     if (/^(skip|later|not now)\b/.test(lower)) {

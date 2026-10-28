@@ -14,6 +14,7 @@ const state = (over: Partial<PersonaState> = {}): PersonaState => ({
   todos: [],
   tone: {},
   lastAsked: null,
+  pendingSwitch: null,
   ...over,
 });
 
@@ -25,6 +26,9 @@ const training = state({
     task: "Notes to minutes",
     hasRules: false,
     published: true,
+    trainExamples: 0,
+    testExamples: 0,
+    score: null,
     unanswered: [
       { key: "steps", question: "Walk through how you do this task, step by step." },
       { key: "tone", question: "What tone and voice do you write in?" },
@@ -178,5 +182,63 @@ describe("personaObserve with the offline mock", () => {
     const later = await personaObserve(client, { ...input, recentSteps: [first.step!] });
     expect(later.say).toBeNull();
     expect(later.step).not.toBe(first.step);
+  });
+});
+
+describe("building skills by conversation (offline mock)", () => {
+  const client = createMockClient();
+  const twoSkills = state({
+    focus: "the board minutes",
+    focusSkill: { ...training.focusSkill!, unanswered: [] },
+    skills: [
+      { slug: "meeting-minutes", name: "Meeting minutes", published: true },
+      { slug: "seo-briefs", name: "SEO briefs", published: false },
+    ],
+  });
+
+  it("creates a skill when asked to learn something new", async () => {
+    const reply = await personaTurn(client, state(), [], "I want you to learn writing SEO briefs");
+    expect(reply.actions[0]).toMatchObject({ type: "create_skill", name: "Writing SEO briefs" });
+  });
+
+  it("asks for an example, trains, tests and publishes on request", async () => {
+    const said = async (t: string) =>
+      (await personaTurn(client, twoSkills, [], t)).actions[0]?.type;
+    expect(await said("Here's an example")).toBe("add_example");
+    expect(await said("Train yourself")).toBe("train_skill");
+    expect(await said("Test yourself")).toBe("test_skill");
+    expect(await said("Publish it")).toBe("publish_skill");
+  });
+
+  it("offers to switch when the work belongs to another skill, and switches on yes", async () => {
+    const drift = await personaTurn(
+      client,
+      twoSkills,
+      [],
+      "Can you draft the SEO briefs for the client?",
+    );
+    expect(drift.actions).toEqual([{ type: "suggest_switch", skill: "seo-briefs", task: null }]);
+    const pending = { ...twoSkills, pendingSwitch: { slug: "seo-briefs", name: "SEO briefs" } };
+    expect((await personaTurn(client, pending, [], "yes")).actions).toEqual([
+      { type: "set_focus", focus: "SEO briefs", skill: "seo-briefs" },
+    ]);
+    expect((await personaTurn(client, pending, [], "no, stay")).actions).toEqual([]);
+  });
+
+  it("never points skill actions at someone else's skill", () => {
+    const tidy = tidyReply(
+      {
+        reply: "ok",
+        actions: [
+          { type: "publish_skill", skill: "not-mine" },
+          { type: "suggest_switch", skill: "not-mine", task: null },
+        ],
+      },
+      twoSkills,
+    );
+    expect(tidy.actions).toEqual([
+      { type: "publish_skill", skill: null },
+      { type: "suggest_switch", skill: null, task: null },
+    ]);
   });
 });

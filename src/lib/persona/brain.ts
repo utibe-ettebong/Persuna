@@ -44,6 +44,18 @@ export function tidyReply(reply: PersonaReply, state: PersonaState): PersonaRepl
   const slugs = new Set(state.skills.map((s) => s.slug));
   const unanswered = new Set(state.focusSkill?.unanswered.map((q) => q.key) ?? []);
   const actions = reply.actions.flatMap((action): PersonaAction[] => {
+    if (
+      action.type === "add_example" ||
+      action.type === "train_skill" ||
+      action.type === "test_skill" ||
+      action.type === "publish_skill"
+    ) {
+      // A named skill must be theirs; otherwise it means today's skill.
+      return [{ ...action, skill: action.skill && slugs.has(action.skill) ? action.skill : null }];
+    }
+    if (action.type === "suggest_switch") {
+      return [{ ...action, skill: action.skill && slugs.has(action.skill) ? action.skill : null }];
+    }
     if (action.type === "open_page" && action.page === "skill" && !slugs.has(action.skill ?? ""))
       return [{ ...action, page: "skills" as const, skill: null }];
     if (action.type === "run_task" || action.type === "coach")

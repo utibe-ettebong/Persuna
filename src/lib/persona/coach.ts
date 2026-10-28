@@ -106,3 +106,13 @@ export function coachSkill(s: SkillStats): Coaching {
     action: "See trust",
   };
 }
+
+/**
+ * Whether the next example should be held back for testing: the third one
+ * (once there are two to learn from), then about one in four.
+ */
+export function suggestTestSplit(train: number, test: number): boolean {
+  if (train < 2) return false;
+  if (test === 0) return true;
+  return test < Math.floor((train + test + 1) / 4);
+}
