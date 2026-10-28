@@ -62,11 +62,11 @@ export default async function PersonaPage({ searchParams }: Props) {
         }
         description={
           <>
-            Your assistant. It sits in the corner of every page. Tap it, or press ⌘⇧Space
-            (Ctrl+Shift+Space on Windows), and just talk: what you&apos;re working on, notes,
-            reminders, a task. Say &ldquo;watch my screen&rdquo; and it learns your steps. It only
-            watches when you say so. What it learns goes to your skills as changes you approve, and
-            good skills can be rented in the marketplace.
+            Your assistant. It sits in the corner of every page. Tap it, or press ⌃⌥P (Ctrl+Alt+P on
+            Windows), and just talk: what you&apos;re working on, notes, reminders, a task. Say
+            &ldquo;watch my screen&rdquo; and it learns your steps. It only watches when you say so.
+            What it learns goes to your skills as changes you approve, and good skills can be rented
+            in the marketplace.
           </>
         }
       />

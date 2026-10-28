@@ -1,6 +1,6 @@
 {
   "name": "persuna-desktop",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "description": "Persuna, your AI assistant, over your whole screen.",
   "main": "main.js",
@@ -59,8 +59,7 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "minimumSystemVersion": "12.0",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Persuna listens when you talk to it.",
-        "LSUIElement": true
+        "NSMicrophoneUsageDescription": "Persuna listens when you talk to it."
       }
     },
     "dmg": {

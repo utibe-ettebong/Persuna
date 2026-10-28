@@ -15,19 +15,46 @@ export interface Watcher {
   stop(): void;
 }
 
-export async function startWatching(handlers: {
-  onFrame: (dataUrl: string) => Promise<void> | void;
-  onEnded: () => void;
-}): Promise<Watcher> {
+/** What Persona Desktop offers: the screen or app chosen there, with no click needed. */
+type DesktopPicker = { personaDesktop?: { pickScreen?: () => Promise<string | null> } };
+
+/**
+ * The stream to watch. In Persona Desktop the app picks the screen or window
+ * (asking once, then remembering), so watching can start when you just say
+ * "watch my screen". In a browser it's the browser's own picker, which only
+ * opens from a click or key press.
+ */
+async function screenStream(): Promise<MediaStream> {
+  const pick = (window as Window & DesktopPicker).personaDesktop?.pickScreen;
+  if (pick) {
+    const source = await pick();
+    if (!source) throw new DOMException("Sharing was cancelled.", "NotAllowedError");
+    return navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        // Chromium's desktop capture, which Electron answers with the chosen source.
+        mandatory: { chromeMediaSource: "desktop", chromeMediaSourceId: source, maxFrameRate: 2 },
+      } as MediaTrackConstraints,
+    });
+  }
   if (!navigator.mediaDevices?.getDisplayMedia) {
     throw new Error(
       "This browser can't share a window. Try Chrome, Edge or Firefox on a computer.",
     );
   }
-  const stream = await navigator.mediaDevices.getDisplayMedia({
-    video: { frameRate: 2 },
-    audio: false,
-  });
+  return navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 2 }, audio: false });
+}
+
+/** True where watching can start without a click (Persona Desktop). */
+export const watchesWithoutClick = () =>
+  typeof window !== "undefined" &&
+  Boolean((window as Window & DesktopPicker).personaDesktop?.pickScreen);
+
+export async function startWatching(handlers: {
+  onFrame: (dataUrl: string) => Promise<void> | void;
+  onEnded: () => void;
+}): Promise<Watcher> {
+  const stream = await screenStream();
   const video = document.createElement("video");
   video.muted = true;
   video.playsInline = true;

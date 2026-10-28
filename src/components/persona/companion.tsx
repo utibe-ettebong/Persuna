@@ -31,7 +31,7 @@ import { Icon } from "./icons";
 import { ExampleCard } from "./example-card";
 import { JobCard } from "./job-card";
 import { PersonaOrb, type OrbState } from "./orb";
-import { MAX_LOOKS, startWatching, type Watcher } from "./screen-watch";
+import { MAX_LOOKS, startWatching, watchesWithoutClick, type Watcher } from "./screen-watch";
 import { TaskComposer } from "./task-composer";
 import {
   chime,
@@ -86,7 +86,9 @@ type DesktopWindow = Window & {
     hide(): void;
     /** The desktop app's global shortcut (or tray item) was used to call Persuna. */
     onCall?(handler: () => void): void;
-    shortcut?: string;
+    /** The desktop's call shortcut, which the user can change from the menu bar. */
+    shortcut?(): Promise<string | null>;
+    onShortcut?(handler: (label: string | null) => void): void;
   };
 };
 /** Gap between Persona and the thing it perches beside. */
@@ -107,9 +109,13 @@ const CALL_IDLE_MS = 45_000;
 
 const card = "bg-card/95 shadow-[0_10px_34px_-14px_rgba(29,22,29,0.35)] ring-1 ring-foreground/5";
 
-/** The shortcut that calls Persuna: ⌘⇧Space on a Mac, Ctrl+Shift+Space elsewhere. */
+/**
+ * The shortcut that calls Persuna on a page: ⌃⌥P on a Mac, Ctrl+Alt+P
+ * elsewhere (⌘Space and ⌘⇧Space belong to Spotlight and search tools).
+ * Persona Desktop has its own, for the whole computer, that you can change.
+ */
 function isCallKey(e: KeyboardEvent) {
-  return e.code === "Space" && e.shiftKey && (e.metaKey || e.ctrlKey) && !e.altKey;
+  return e.code === "KeyP" && e.ctrlKey && e.altKey && !e.metaKey && !e.shiftKey;
 }
 
 export const glass =
@@ -141,6 +147,7 @@ function store(key: string, value: unknown) {
 export function Companion(props: CompanionProps) {
   const [typing, setTyping] = useState(false);
   const [menu, setMenu] = useState(false);
+  const [desktopShortcut, setDesktopShortcut] = useState<string | null>(null);
   // Building a skill by conversation: the example card and the publish confirmation.
   const [example, setExample] = useState<{ slug: string; name: string } | null>(null);
   const [confirm, setConfirm] = useState<PublishConfirm | null>(null);
@@ -459,7 +466,11 @@ export function Companion(props: CompanionProps) {
     ]);
     setFocusSkill(value.focus.skill);
     if (value.task) setTask(value.task);
-    if (value.watch === "start" && !watcher.current) void startWatch();
+    // A browser only opens its share picker from a click: ask with a button there.
+    if (value.watch === "start" && !watcher.current) {
+      if (watchesWithoutClick()) void startWatch();
+      else setAskWatch(true);
+    }
     if (value.watch === "stop") watcher.current?.stop();
     if (value.example) setExample(value.example.skill);
     if (value.appConfirm) setAppConfirm(value.appConfirm);
@@ -644,7 +655,10 @@ export function Companion(props: CompanionProps) {
       }
     };
     window.addEventListener("keydown", onKey);
-    (window as DesktopWindow).personaDesktop?.onCall?.(call);
+    const desktop = (window as DesktopWindow).personaDesktop;
+    desktop?.onCall?.(call);
+    void desktop?.shortcut?.().then(setDesktopShortcut);
+    desktop?.onShortcut?.(setDesktopShortcut);
     return () => window.removeEventListener("keydown", onKey);
     // call reads live state through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1071,7 +1085,7 @@ export function Companion(props: CompanionProps) {
     () => /Mac|iPhone|iPad/.test(navigator.platform),
     () => true,
   );
-  const shortcut = isMac ? "⌘⇧Space" : "Ctrl+Shift+Space";
+  const shortcut = desktopShortcut ?? (isMac ? "⌃⌥P" : "Ctrl+Alt+P");
   const status = {
     idle: wakeOn ? `Say "Hey ${name}"` : `Tap or ${shortcut}`,
     listening: "Listening…",

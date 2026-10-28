@@ -4,8 +4,8 @@
 // /companion from your PERSUNA server, so chat, voice, notes and tasks work
 // as on the web.
 //
-// Call Persuna from anywhere with ⌘⇧Space (Ctrl+Shift+Space on Windows), or
-// from the menu bar icon: it listens, answers out loud, and goes quiet again.
+// Call Persuna from anywhere with ⌃⌥P (Ctrl+Alt+P on Windows; change it from
+// the menu bar menu), by clicking it in the Dock, or from the menu bar icon: it listens, answers out loud, and goes quiet again.
 //
 // Watching is still your choice each time. The operating system asks once
 // (macOS: Screen Recording); after that, turning watching on in Persona
@@ -36,9 +36,22 @@ const ORIGIN = new URL(APP_URL).origin;
 const ALLOWED_PERMISSIONS = new Set(["media", "display-capture", "notifications"]);
 const MAC = process.platform === "darwin";
 
-/** Tried in order: the first one no other app has taken becomes the call shortcut. */
-const CALL_SHORTCUTS = ["CommandOrControl+Shift+Space", "Alt+Shift+Space"];
+/**
+ * Shortcuts that call Persuna. The chosen one (menu bar menu → Call shortcut)
+ * is tried first, then the rest, so one another app has taken never leaves
+ * Persuna without a shortcut. ⌘Space and ⌘⇧Space belong to Spotlight and
+ * search tools, so the default is ⌃⌥P (Ctrl+Alt+P on Windows).
+ */
+const CALL_SHORTCUTS = [
+  { accelerator: "Control+Alt+P", mac: "⌃⌥P", other: "Ctrl+Alt+P" },
+  { accelerator: "Control+Alt+Space", mac: "⌃⌥Space", other: "Ctrl+Alt+Space" },
+  { accelerator: "Alt+Shift+P", mac: "⌥⇧P", other: "Alt+Shift+P" },
+];
 let callShortcut = null;
+const shortcutLabel = (accelerator) => {
+  const s = CALL_SHORTCUTS.find((c) => c.accelerator === accelerator);
+  return s ? (MAC ? s.mac : s.other) : null;
+};
 let overlay = null;
 let welcome = null;
 let tray = null;
@@ -194,6 +207,15 @@ ipcMain.on("persona:interactive", (event, on) => {
   if (!overlay || event.sender !== overlay.webContents) return;
   overlay.setIgnoreMouseEvents(!on, { forward: true });
 });
+ipcMain.handle("persona:pick-screen", async (event) => {
+  if (!overlay || event.sender !== overlay.webContents) return null;
+  if (!(await ensureScreenPermission())) return null;
+  const source = await chooseSource();
+  return source?.id ?? null;
+});
+
+ipcMain.handle("persona:shortcut", () => shortcutLabel(callShortcut));
+
 ipcMain.on("persona:hide", (event) => {
   if (overlay && event.sender === overlay.webContents) overlay.hide();
   rebuildTray();
@@ -358,6 +380,15 @@ function rebuildTray() {
         click: callPersuna,
       },
       {
+        label: "Call shortcut",
+        submenu: CALL_SHORTCUTS.map((c) => ({
+          label: MAC ? c.mac : c.other,
+          type: "radio",
+          checked: c.accelerator === callShortcut,
+          click: () => chooseShortcut(c.accelerator),
+        })),
+      },
+      {
         label: visible ? "Hide Persuna" : "Show Persuna",
         click: () => {
           if (!overlay) createOverlay();
@@ -419,7 +450,14 @@ function callPersuna() {
 }
 
 function registerCallShortcut() {
-  for (const accelerator of CALL_SHORTCUTS) {
+  if (callShortcut) globalShortcut.unregister(callShortcut);
+  callShortcut = null;
+  const chosen = readSettings().shortcut;
+  const order = [
+    ...CALL_SHORTCUTS.filter((c) => c.accelerator === chosen),
+    ...CALL_SHORTCUTS.filter((c) => c.accelerator !== chosen),
+  ];
+  for (const { accelerator } of order) {
     try {
       if (globalShortcut.register(accelerator, callPersuna)) {
         callShortcut = accelerator;
@@ -431,6 +469,27 @@ function registerCallShortcut() {
   }
 }
 
+function chooseShortcut(accelerator) {
+  writeSettings({ shortcut: accelerator });
+  registerCallShortcut();
+  rebuildTray();
+  // The page shows the shortcut beside Persuna.
+  overlay?.webContents.send("persona:shortcut", shortcutLabel(callShortcut));
+}
+
+/** Once per launch: say Persuna is on, and how to call it. */
+function sayRunning() {
+  if (!Notification.isSupported()) return;
+  const how = callShortcut ? `Press ${shortcutLabel(callShortcut)}` : "Click its icon";
+  const note = new Notification({
+    title: "Persuna is running",
+    body: `${how} to talk, any time. It's in your ${MAC ? "Dock and menu bar" : "system tray"}.`,
+    silent: true,
+  });
+  note.on("click", callPersuna);
+  note.show();
+}
+
 /* ---------- Start ---------- */
 
 if (!app.requestSingleInstanceLock()) {
@@ -440,10 +499,12 @@ if (!app.requestSingleInstanceLock()) {
     overlay?.showInactive();
     rebuildTray();
   });
+  // Clicking Persuna in the Dock calls it, like the shortcut.
+  app.on("activate", () => {
+    if (!welcome) callPersuna();
+  });
 
   app.whenReady().then(() => {
-    // Live in the menu bar / tray rather than the Dock.
-    if (MAC) app.dock?.hide();
     const ses = session.defaultSession;
     ses.setPermissionRequestHandler((_wc, permission, callback, details) => {
       callback(isOurs(details.requestingUrl) && ALLOWED_PERMISSIONS.has(permission));
@@ -464,6 +525,7 @@ if (!app.requestSingleInstanceLock()) {
     createOverlay();
     registerCallShortcut();
     createTray();
+    sayRunning();
     screen.on("display-metrics-changed", () => {
       const { x, y, width, height } = screen.getPrimaryDisplay().workArea;
       overlay?.setBounds({ x, y, width, height });
