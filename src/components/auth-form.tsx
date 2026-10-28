@@ -6,7 +6,16 @@ import { authClient } from "@/lib/auth/client";
 import { buttonClass, Field, inputClass } from "./ui";
 
 /** Sign-in and sign-up, with errors shown inline. Sends the user on to `next`. */
-export function AuthForm({ mode, next }: { mode: "sign-in" | "sign-up"; next: string }) {
+export function AuthForm({
+  mode,
+  next,
+  onSwitchMode,
+}: {
+  mode: "sign-in" | "sign-up";
+  next: string;
+  /** Switch between sign-in and sign-up in place (the desktop welcome) instead of linking. */
+  onSwitchMode?: () => void;
+}) {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   // Only same-site paths, so a crafted link can't bounce users elsewhere after sign-in.
@@ -76,22 +85,34 @@ export function AuthForm({ mode, next }: { mode: "sign-in" | "sign-up"; next: st
         {mode === "sign-up" ? (
           <>
             Already have an account?{" "}
-            <Link
-              href={`/sign-in?next=${encodeURIComponent(destination)}`}
-              className="text-accent underline"
-            >
-              Sign in
-            </Link>
+            {onSwitchMode ? (
+              <button type="button" onClick={onSwitchMode} className="text-accent underline">
+                Sign in
+              </button>
+            ) : (
+              <Link
+                href={`/sign-in?next=${encodeURIComponent(destination)}`}
+                className="text-accent underline"
+              >
+                Sign in
+              </Link>
+            )}
           </>
         ) : (
           <>
             New here?{" "}
-            <Link
-              href={`/sign-up?next=${encodeURIComponent(destination)}`}
-              className="text-accent underline"
-            >
-              Create an account
-            </Link>
+            {onSwitchMode ? (
+              <button type="button" onClick={onSwitchMode} className="text-accent underline">
+                Create an account
+              </button>
+            ) : (
+              <Link
+                href={`/sign-up?next=${encodeURIComponent(destination)}`}
+                className="text-accent underline"
+              >
+                Create an account
+              </Link>
+            )}
           </>
         )}
       </p>

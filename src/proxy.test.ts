@@ -12,6 +12,7 @@ describe("isPublicPath", () => {
       "/approvals/abc",
       "/personas/owl-ab12c",
       "/download",
+      "/welcome",
     ]) {
       expect(isPublicPath(p)).toBe(true);
     }

@@ -4,6 +4,7 @@ import { type NextRequest, NextResponse } from "next/server";
 /** Pages anyone may open. Everything else needs a signed-in account. */
 const PUBLIC = [
   /^\/download$/,
+  /^\/welcome$/,
   /^\/$/,
   /^\/sign-(in|up)$/,
   /^\/approvals\//,
