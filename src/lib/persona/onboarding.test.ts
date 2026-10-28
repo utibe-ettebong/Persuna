@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseFirstTask, parseLook, parseName } from "./onboarding";
+import { introFacts, parseFirstTask, parseLook, parseName, suggestedSkill } from "./onboarding";
 
 describe("parseName", () => {
   it("pulls the name out of how people say it", () => {
@@ -41,5 +41,21 @@ describe("parseFirstTask", () => {
         name: "Writing SEO briefs for clients",
       },
     );
+  });
+});
+
+describe("getting to know you", () => {
+  it("keeps the answers as facts in the user's words, skipping blanks", () => {
+    expect(
+      introFacts({ work: "I run   a design studio", current: "", timeSink: "Client proposals" }),
+    ).toEqual(["Work: I run a design studio", "Takes the most time: Client proposals"]);
+    expect(introFacts({ work: "x".repeat(400) })[0].length).toBeLessThanOrEqual(166);
+  });
+
+  it("suggests a first skill from what takes the most time", () => {
+    expect(suggestedSkill("Writing client proposals, honestly")).toBe("Writing client proposals");
+    expect(suggestedSkill("um, probably meeting minutes and follow-ups")).toBe("Meeting minutes");
+    expect(suggestedSkill("Emails")).toBeNull();
+    expect(suggestedSkill(undefined)).toBeNull();
   });
 });

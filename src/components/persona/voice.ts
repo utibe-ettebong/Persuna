@@ -411,9 +411,7 @@ export async function startConversation(handlers: {
   /** You started talking over Persona. */
   onBargeIn: () => void;
 }): Promise<Conversation> {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-  });
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints() });
   const ctx = new AudioContext();
   const source = ctx.createMediaStreamSource(stream);
   const analyser = ctx.createAnalyser();
@@ -497,5 +495,126 @@ export async function startConversation(handlers: {
       handlers.onLevel(0);
     },
     userSpeaking: () => Boolean(recorder),
+  };
+}
+
+/* ---------- Choosing the microphone ---------- */
+
+const MIC_KEY = "persona.mic";
+
+/** The microphone picked during setup (remembered in this browser or app), or the default. */
+export function preferredMic(): string | null {
+  try {
+    return localStorage.getItem(MIC_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setPreferredMic(deviceId: string | null) {
+  try {
+    if (deviceId) localStorage.setItem(MIC_KEY, deviceId);
+    else localStorage.removeItem(MIC_KEY);
+  } catch {
+    // Private window: the default microphone it is.
+  }
+}
+
+export function micConstraints(deviceId = preferredMic()): MediaTrackConstraints {
+  return {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+    ...(deviceId && { deviceId: { ideal: deviceId } }),
+  };
+}
+
+/**
+ * A live level from the microphone (0–1), for the setup's mic test.
+ * Returns a stop function.
+ */
+export async function meterMic(
+  deviceId: string | null,
+  onLevel: (level: number) => void,
+): Promise<() => void> {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(deviceId) });
+  const ctx = new AudioContext();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+  const data = new Float32Array(analyser.fftSize);
+  const timer = window.setInterval(() => {
+    analyser.getFloatTimeDomainData(data);
+    let sum = 0;
+    for (const v of data) sum += v * v;
+    onLevel(Math.min(1, Math.sqrt(sum / data.length) * 6));
+  }, 50);
+  return () => {
+    clearInterval(timer);
+    stream.getTracks().forEach((t) => t.stop());
+    void ctx.close();
+    onLevel(0);
+  };
+}
+
+/* ---------- Hold to talk ---------- */
+
+/** Shorter than this, or with no voice in it, a hold is ignored. */
+export const MIN_HOLD_MS = 350;
+
+export interface HoldRecording {
+  /** Let go: the recording, or null if it was too short or silent. */
+  stop(): Promise<Blob | null>;
+  cancel(): void;
+}
+
+/** Records for as long as the talk key is held. */
+export async function startHoldRecording(onLevel: (level: number) => void): Promise<HoldRecording> {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints() });
+  const ctx = new AudioContext();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+  const data = new Float32Array(analyser.fftSize);
+  const chunks: Blob[] = [];
+  const recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  recorder.start(200);
+  const startedAt = performance.now();
+  let loudest = 0;
+  const timer = window.setInterval(() => {
+    analyser.getFloatTimeDomainData(data);
+    let sum = 0;
+    for (const v of data) sum += v * v;
+    const level = Math.min(1, Math.sqrt(sum / data.length) * 6);
+    loudest = Math.max(loudest, level);
+    onLevel(level);
+  }, 33);
+  const close = () => {
+    clearInterval(timer);
+    stream.getTracks().forEach((t) => t.stop());
+    void ctx.close();
+    onLevel(0);
+  };
+  return {
+    stop: () =>
+      new Promise((resolve) => {
+        const long = performance.now() - startedAt >= MIN_HOLD_MS;
+        recorder.onstop = () => {
+          close();
+          resolve(
+            long && loudest > START_LEVEL && chunks.length
+              ? new Blob(chunks, { type: recorder.mimeType || "audio/webm" })
+              : null,
+          );
+        };
+        if (recorder.state === "inactive") recorder.onstop(new Event("stop"));
+        else recorder.stop();
+      }),
+    cancel() {
+      recorder.onstop = null;
+      if (recorder.state !== "inactive") recorder.stop();
+      close();
+    },
   };
 }

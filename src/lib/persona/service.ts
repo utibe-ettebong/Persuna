@@ -44,11 +44,13 @@ import {
   applyToneChange,
   effectiveTone,
   inferTone,
+  toneFromMessage,
   toneInstruction,
   voiceStyle,
   type Tone,
 } from "./tone";
 import { buildWrapUp } from "./wrapup";
+import { introFacts, type IntroAnswers } from "./onboarding";
 import type { PersonaReply, PersonaState } from "./types";
 
 const { personaProfiles, personaMessages, personaNotes, personaReminders, skills, jobs, listings } =
@@ -1117,6 +1119,34 @@ export async function personasByOwner(ownerIds: string[]) {
     .from(personaProfiles)
     .where(inArray(personaProfiles.userId, ownerIds));
   return new Map(rows.map((r) => [r.userId, { name: r.name, avatar: r.avatar, handle: r.handle }]));
+}
+
+/* ---------- Getting to know you (Persona Desktop's first run) ---------- */
+
+/**
+ * The four "get to know you" answers: what they do, what they're on and what
+ * takes their time go into memory (in their words); what they're on becomes
+ * today's focus if there isn't one; how they want to be spoken to sets the tone.
+ */
+export async function saveIntro(userId: string, answers: IntroAnswers) {
+  const profile = await getProfile(userId);
+  let memory = [...profile.memory];
+  for (const fact of introFacts(answers)) {
+    if (!memory.some((m) => m.toLowerCase() === fact.toLowerCase())) memory.push(fact);
+  }
+  memory = memory.slice(-MAX_MEMORY);
+  const change = answers.style ? toneFromMessage(answers.style) : null;
+  const current = answers.current?.replace(/\s+/g, " ").trim().slice(0, 200);
+  await db()
+    .update(personaProfiles)
+    .set({
+      memory,
+      ...(change && { tone: applyToneChange(profile.tone, change) }),
+      ...(current && !profile.focus && { focus: current }),
+      updatedAt: new Date(),
+    })
+    .where(eq(personaProfiles.userId, userId));
+  return { remembered: memory.length - profile.memory.length };
 }
 
 /* ---------- Tone ---------- */

@@ -21,6 +21,7 @@ import {
   chat,
   chatFromVoice,
   confirmAppFromChat,
+  saveIntro,
   completeSetup,
   deleteReminder,
   jobForChat,
@@ -369,5 +370,20 @@ export async function disconnectAppAction(provider: string) {
     const user = await requireUser();
     await disconnect(user.id, z.enum(PROVIDER_IDS).parse(provider), actorOf(user));
     revalidatePath("/persona");
+  });
+}
+
+const introForm = z.object({
+  work: z.string().trim().max(1000).optional(),
+  current: z.string().trim().max(1000).optional(),
+  timeSink: z.string().trim().max(1000).optional(),
+  style: z.string().trim().max(1000).optional(),
+});
+
+/** Persona Desktop's "get to know you" answers. */
+export async function personaIntroAction(answers: z.input<typeof introForm>) {
+  return run(async () => {
+    const user = await requireUser();
+    return saveIntro(user.id, introForm.parse(answers));
   });
 }

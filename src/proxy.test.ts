@@ -13,6 +13,8 @@ describe("isPublicPath", () => {
       "/personas/owl-ab12c",
       "/download",
       "/welcome",
+      "/desktop/setup",
+      "/api/desktop/sign-in",
     ]) {
       expect(isPublicPath(p)).toBe(true);
     }
@@ -28,6 +30,7 @@ describe("isPublicPath", () => {
       "/approvals",
       "/persona",
       "/companion",
+      "/desktop/connect",
     ]) {
       expect(isPublicPath(p)).toBe(false);
     }

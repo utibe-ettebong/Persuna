@@ -10,6 +10,9 @@ const PUBLIC = [
   /^\/approvals\//,
   /^\/personas\//,
   /^\/api\/auth\//,
+  // Persona Desktop's setup window, which starts signed out, and its sign-in hand-off.
+  /^\/desktop\/setup$/,
+  /^\/api\/desktop\/sign-in$/,
 ];
 
 export function isPublicPath(pathname: string): boolean {

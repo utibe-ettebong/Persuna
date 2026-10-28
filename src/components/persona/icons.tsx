@@ -10,6 +10,7 @@ const PATHS = {
   hide: "M5 12h14",
   keyboard: "M4 7h16v10H4zM7 10h1m3 0h1m3 0h1m3 0h0M8 14h8",
   ear: "M7 9a5 5 0 0 1 10 0c0 3-3 4-3 7a3 3 0 0 1-5.5 1.6M10 9.5a2 2 0 0 1 4 0",
+  mic: "M12 4a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V7a3 3 0 0 1 3-3zM6 11a6 6 0 0 0 12 0M12 17v3",
 } as const;
 
 const FILLED = new Set(["sound", "mute"]);

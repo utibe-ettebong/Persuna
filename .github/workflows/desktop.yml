@@ -94,6 +94,10 @@ jobs:
           # far enough to load Electron, which fails if macOS refuses its libraries.
           ELECTRON_RUN_AS_NODE=1 "dist/mac-arm64/Persuna.app/Contents/MacOS/Persuna" \
             -e 'console.log("Persuna starts: Electron", process.versions.electron)'
+          # The talk-key listener is a native module: it must load from the packaged app.
+          ELECTRON_RUN_AS_NODE=1 "dist/mac-arm64/Persuna.app/Contents/MacOS/Persuna" \
+            -e 'require(process.argv[1] + "/node_modules/uiohook-napi"); console.log("Talk key listener loads")' \
+            "$PWD/dist/mac-arm64/Persuna.app/Contents/Resources/app.asar"
           if arch -x86_64 /usr/bin/true 2>/dev/null; then
             ELECTRON_RUN_AS_NODE=1 arch -x86_64 "dist/mac/Persuna.app/Contents/MacOS/Persuna" \
               -e 'console.log("Intel build starts: Electron", process.versions.electron)'

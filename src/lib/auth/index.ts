@@ -2,6 +2,7 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
+import { oneTimeToken } from "better-auth/plugins/one-time-token";
 import { db, schema } from "@/db/client";
 import { parseList, signUpAllowed } from "./policy";
 
@@ -50,8 +51,14 @@ function createAuth() {
         },
       },
     },
-    // Must stay last: lets server actions set the session cookie.
-    plugins: [nextCookies()],
+    plugins: [
+      // Persona Desktop signs in through the browser: the signed-in browser
+      // makes a one-time token (server-side only, 3 minutes, stored hashed)
+      // and the app trades it for its own session.
+      oneTimeToken({ expiresIn: 3, disableClientRequest: true, storeToken: "hashed" }),
+      // Must stay last: lets server actions set the session cookie.
+      nextCookies(),
+    ],
   });
 }
 
