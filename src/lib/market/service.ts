@@ -12,11 +12,12 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import { env, paystackConfig } from "@/env";
 import { audit } from "@/lib/audit";
-import { createJob, draftJob, openJob } from "@/lib/jobs/service";
+import { createJob, draftJob, jobRoundsFor, openJob, reviseJob } from "@/lib/jobs/service";
 import type { ModelClient } from "@/lib/models/gateway";
 import { createPaystack } from "@/lib/payments/paystack";
 import { NotFoundError, publishedScore } from "@/lib/skill/service";
-import { listingRequirements, splitPayment } from "./rules";
+import { normalizeText } from "@/lib/text";
+import { MAX_REVISIONS, listingRequirements, revisionAllowed, splitPayment } from "./rules";
 
 const { listings, skills, jobs, transactions } = schema;
 
@@ -364,6 +365,7 @@ async function auditPayment(
 
 /** The renter's view of their order. Never exposes rules, examples or the draft. */
 export async function getOrder(jobId: string) {
+  const rounds = await jobRoundsFor(jobId);
   const [row] = await db()
     .select({ job: jobs, listing: listings, transaction: transactions })
     .from(jobs)
@@ -386,7 +388,39 @@ export async function getOrder(jobId: string) {
     premiumReview: transaction.premiumReview,
     provider: transaction.provider,
     escrow: transaction.status,
+    /** Earlier versions the renter saw, and the changes they asked for. */
+    rounds: rounds.map((r) => ({
+      round: r.round,
+      output: r.output,
+      request: r.request,
+      at: r.createdAt,
+    })),
+    revisionsLeft: Math.max(0, MAX_REVISIONS - rounds.length),
   };
+}
+
+/**
+ * The renter asks for changes to a delivered result. Persuna revises it with
+ * their request; the owner reviews it again when the trust level says so.
+ * The payment stays held until they accept.
+ */
+export async function requestChanges(client: ModelClient, jobId: string, request: string) {
+  const order = await getOrder(jobId);
+  const allowed = revisionAllowed({
+    status: order.status,
+    escrow: order.escrow,
+    rounds: order.rounds.length,
+    complaint: order.complaint,
+  });
+  if (!allowed.ok) throw new Error(allowed.reason);
+  const text = normalizeText(request).slice(0, 2000);
+  if (text.length < 5) throw new Error("Say what you'd like changed.");
+  return reviseJob(client, jobId, {
+    output: order.output ?? "",
+    request: text,
+    round: order.rounds.length + 1,
+    actor: `renter:${order.renterName}`,
+  });
 }
 
 /** The renter accepts and rates the delivered work; escrow is released to the owner. */

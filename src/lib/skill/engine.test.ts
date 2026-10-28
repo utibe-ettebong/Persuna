@@ -186,6 +186,27 @@ describe("draftGrounded", () => {
     expect(String(redraft.content)).toContain("- Spend is 99,000.");
   });
 
+  it("revises a delivered version, and accepts facts the client gave in their request", async () => {
+    const { client, calls } = fakeClient({
+      draft: ["Spend to date is 41,500. Review moved to 3pm Friday."],
+      evaluate: [
+        claims([
+          ["Spend to date is 41,500.", "spend to date is 41,500"],
+          ["Review moved to 3pm Friday.", "move the review to 3pm friday"],
+        ]),
+      ],
+    });
+    const result = await draftGrounded(client, sheet, [], input, {
+      previous: "Spend to date is 41,500.",
+      request: "Please add that we move the review to 3pm Friday.",
+    });
+    expect(result.grounding).toEqual({ checked: 2, unsupported: [], redrafts: 0 });
+    const asked = calls.find((c) => c.role === "draft")!.messages;
+    // The model sees its earlier version, then the client's request.
+    expect(asked.at(-2)).toEqual({ role: "assistant", content: "Spend to date is 41,500." });
+    expect(String(asked.at(-1)!.content)).toContain("<change_request>");
+  });
+
   it("stops after two redrafts and reports what's still unsupported", async () => {
     const { client, calls } = fakeClient({
       draft: ["Made up.", "Still made up.", "Made up again."],

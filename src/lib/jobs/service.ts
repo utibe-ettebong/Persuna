@@ -25,7 +25,7 @@ import {
   type TrustRecord,
 } from "./trust";
 
-const { jobs, skills, skillVersions } = schema;
+const { jobs, jobRounds, skills, skillVersions } = schema;
 
 export interface NewJob {
   skillId: string;
@@ -101,12 +101,20 @@ export async function draftJob(client: ModelClient, jobId: string, random = Math
 
   const train = await trainingPairs(job.skillId);
   const shots = closestPairs(job.input, train, 3);
+  // A renter asked for changes: revise the version they saw, with their request.
+  const [round] = await db()
+    .select()
+    .from(jobRounds)
+    .where(eq(jobRounds.jobId, jobId))
+    .orderBy(desc(jobRounds.round))
+    .limit(1);
   // Draft, check every statement against the input, redraft what isn't supported.
   const { draft, completion, grounding } = await draftGrounded(
     client,
     version.sheet,
     shots,
     job.input,
+    round ? { previous: round.output, request: round.request } : undefined,
   );
   const flags = mergeFlags(
     groundingFlags(grounding),
@@ -164,6 +172,55 @@ export async function draftJob(client: ModelClient, jobId: string, random = Math
     },
   });
   return row;
+}
+
+/** Earlier versions of a job and the changes asked for, oldest first. */
+export async function jobRoundsFor(jobId: string) {
+  return db().select().from(jobRounds).where(eq(jobRounds.jobId, jobId)).orderBy(jobRounds.round);
+}
+
+/**
+ * Sends a delivered job back for another round: keeps the version that was
+ * delivered and the change asked for, clears the result, and drafts again.
+ * The new draft goes through the same review gate as the first.
+ */
+export async function reviseJob(
+  client: ModelClient,
+  jobId: string,
+  input: { output: string; request: string; round: number; actor: Actor },
+) {
+  await db().transaction(async (tx) => {
+    const [job] = await tx
+      .update(jobs)
+      .set({
+        status: "review",
+        draft: "",
+        finalOutput: null,
+        editSize: null,
+        approvedBy: null,
+        reviewedAt: null,
+        flags: [],
+        grounding: null,
+      })
+      .where(and(eq(jobs.id, jobId), eq(jobs.status, "approved")))
+      .returning({ skillId: jobs.skillId });
+    if (!job) throw new Error("This order changed. Refresh and try again.");
+    await tx
+      .insert(jobRounds)
+      .values({ jobId, round: input.round, output: input.output, request: input.request });
+    await audit(
+      {
+        actor: input.actor,
+        action: "job.revision_requested",
+        entityType: "job",
+        entityId: jobId,
+        skillId: job.skillId,
+        details: { round: input.round },
+      },
+      tx,
+    );
+  });
+  return draftJob(client, jobId);
 }
 
 /** Open and draft in one step: owner jobs, and renter jobs paid with mock payments. */

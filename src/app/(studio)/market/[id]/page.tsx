@@ -82,10 +82,11 @@ export default async function ListingDetailPage({ params }: Params) {
             <Field label={skill.inputType}>
               <textarea name="inputText" rows={8} className={`${inputClass} font-mono text-xs`} />
             </Field>
-            <Field label="…or upload" hint="text, Word, PDF, a scan or a photo">
+            <Field label="…and/or upload" hint="up to 5 files: text, Word, PDF, scans or photos">
               <input
                 type="file"
                 name="inputFile"
+                multiple
                 accept={TASK_FILE_ACCEPT}
                 className="mt-1 block w-full text-sm text-muted file:mr-3 file:rounded file:border file:border-line file:bg-subtle file:px-2 file:py-1"
               />

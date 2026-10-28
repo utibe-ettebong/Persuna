@@ -3,7 +3,7 @@ import { reviewJobAction, teachFromJobAction } from "@/app/actions/jobs";
 import { ActionForm } from "@/components/action-form";
 import { Badge, buttonClass, Card, Field, inputClass, PageHeader, Prose } from "@/components/ui";
 import { WordDiff } from "@/components/word-diff";
-import { getJobWithSkill } from "@/lib/jobs/service";
+import { getJobWithSkill, jobRoundsFor } from "@/lib/jobs/service";
 import { assertJobOwner } from "@/lib/auth/access";
 import { requireUser } from "@/lib/auth/session";
 import { orNotFound } from "@/lib/load";
@@ -21,6 +21,8 @@ export default async function JobPage({ params }: Params) {
     return getJobWithSkill(id);
   }, id);
   const edited = job.status === "approved" && job.editSize !== "none";
+  const rounds = await jobRoundsFor(job.id);
+  const lastRound = rounds.at(-1);
 
   return (
     <div className="space-y-6">
@@ -109,6 +111,23 @@ export default async function JobPage({ params }: Params) {
           <p className="mt-1 text-muted">
             The renter was refunded and the skill is back to level 0.
           </p>
+        </Card>
+      )}
+
+      {lastRound && (
+        <Card className="space-y-2 p-4">
+          <h2 className="label-mono text-muted">
+            Change request {lastRound.round} from {job.requesterName}
+          </h2>
+          <p className="text-sm">&ldquo;{lastRound.request}&rdquo;</p>
+          <details>
+            <summary className="cursor-pointer text-sm text-muted">
+              The version they asked to change
+            </summary>
+            <div className="mt-2 rounded-md bg-subtle p-3">
+              <Prose>{lastRound.output}</Prose>
+            </div>
+          </details>
         </Card>
       )}
 

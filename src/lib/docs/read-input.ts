@@ -59,3 +59,24 @@ export async function readTaskInput(
   if (!pages.length) throw new Error(`No readable text in ${value.name}`);
   return pages.map((p) => `[${value.name} · page ${p.page}]\n${p.text.trim()}`).join("\n\n");
 }
+
+/** Most files one task may have. */
+export const MAX_TASK_FILES = 5;
+
+/**
+ * A task's input from several uploaded files, in the order chosen. With more
+ * than one, each starts with its file name so the work (and the statement
+ * check) can tell them apart. Returns null when no file was chosen.
+ */
+export async function readTaskInputs(
+  values: FormDataEntryValue[],
+  client: ModelClient,
+  files: FileStore | null,
+): Promise<string | null> {
+  const chosen = values.filter((v): v is File => v instanceof File && v.size > 0);
+  if (!chosen.length) return null;
+  if (chosen.length > MAX_TASK_FILES) throw new Error(`Add up to ${MAX_TASK_FILES} files.`);
+  const texts = await Promise.all(chosen.map((file) => readTaskInput(file, client, files)));
+  if (chosen.length === 1) return texts[0];
+  return texts.map((text, i) => `[${chosen[i].name}]\n${text ?? ""}`).join("\n\n");
+}

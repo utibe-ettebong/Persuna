@@ -5,7 +5,7 @@ import { z } from "zod";
 import { attempt, slugField, uuidField, type ActionState } from "@/lib/action-state";
 import { assertOrderAccess, ownedSkillBySlug } from "@/lib/auth/access";
 import { requireUser } from "@/lib/auth/session";
-import { readTaskInput } from "@/lib/docs/read-input";
+import { readTaskInputs } from "@/lib/docs/read-input";
 import { createFileStore } from "@/lib/models/files";
 import { complainAboutJob } from "@/lib/jobs/service";
 import {
@@ -13,6 +13,7 @@ import {
   decideEmployerRequest,
   rentSkill,
   saveListing,
+  requestChanges,
   setListingActive,
 } from "@/lib/market/service";
 import { createModelClient } from "@/lib/models";
@@ -69,11 +70,14 @@ export async function rentAction(_: ActionState, form: FormData): Promise<Action
       Object.fromEntries(form),
     );
     const user = await requireUser();
-    // A renter's PDF or scan is read for them (counted against their daily allowance).
-    const input =
-      (await readTaskInput(form.get("inputFile"), createModelClient(user), createFileStore())) ??
-      inputText ??
-      "";
+    // A renter's files (PDFs, scans, photos, text) are read for them, counted
+    // against their daily allowance; typed notes go after them.
+    const fromFiles = await readTaskInputs(
+      form.getAll("inputFile"),
+      createModelClient(user),
+      createFileStore(),
+    );
+    const input = [fromFiles, inputText?.trim()].filter(Boolean).join("\n\n");
     if (!input.trim()) throw new Error("Paste your notes or upload a file.");
     const { jobId, redirectUrl } = await rentSkill(
       createModelClient(await requireUser()),
@@ -137,6 +141,25 @@ export async function acceptOrderAction(_: ActionState, form: FormData): Promise
     }
     await acceptOrder(jobId, rating, comment);
     revalidatePath("/earnings");
+    return `/market/orders/${jobId}`;
+  });
+}
+
+const changesForm = z.object({
+  jobId: uuidField,
+  request: z.string().trim().min(5, "Say what you'd like changed").max(2000),
+});
+
+/** The renter asks for changes to a delivered result. */
+export async function requestChangesAction(_: ActionState, form: FormData): Promise<ActionState> {
+  return attempt(async () => {
+    const { jobId, request } = changesForm.parse(Object.fromEntries(form));
+    const user = await requireUser();
+    if (!(await assertOrderAccess(user, jobId)).requester) {
+      throw new Error("Only the renter who placed this order can ask for changes");
+    }
+    await requestChanges(createModelClient(user), jobId, request);
+    revalidatePath("/jobs");
     return `/market/orders/${jobId}`;
   });
 }

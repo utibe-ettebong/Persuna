@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { markdownToDocx } from "./docs/docx";
 import { changeRatio, classifyEdit } from "./jobs/edit-size";
-import { listingRequirements, splitPayment } from "./market/rules";
+import { MAX_REVISIONS, listingRequirements, revisionAllowed, splitPayment } from "./market/rules";
 import { checkPublish, publishCheckMessage } from "./skill/publish";
 import { redact, scanForIdentifiers } from "./skill/redact";
 
@@ -154,5 +154,19 @@ describe("readUploadedText", () => {
     await expect(readUploadedText(new File(["x"], "a.pdf"))).rejects.toThrow(
       /\.md, \.txt or \.docx/,
     );
+  });
+});
+
+describe("revisionAllowed", () => {
+  const delivered = { status: "approved", escrow: "held", rounds: 0, complaint: null };
+  it("lets a renter ask for changes to a delivered, unsettled order", () => {
+    expect(revisionAllowed(delivered)).toEqual({ ok: true });
+    expect(revisionAllowed({ ...delivered, rounds: MAX_REVISIONS - 1 })).toEqual({ ok: true });
+  });
+  it("refuses before delivery, after settling, and past the limit", () => {
+    expect(revisionAllowed({ ...delivered, status: "review" }).ok).toBe(false);
+    expect(revisionAllowed({ ...delivered, escrow: "released" }).ok).toBe(false);
+    expect(revisionAllowed({ ...delivered, complaint: "late" }).ok).toBe(false);
+    expect(revisionAllowed({ ...delivered, rounds: MAX_REVISIONS }).ok).toBe(false);
   });
 });

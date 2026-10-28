@@ -410,6 +410,31 @@ export function redraftMessages(
   ];
 }
 
+/**
+ * A renter asked for changes to a delivered result: keep everything else as
+ * it was, make exactly the changes asked for. The request is the client's
+ * words about their own work, so it may add facts the input didn't have.
+ */
+export function reviseMessages(
+  sheet: SkillSheet,
+  shots: Pair[],
+  input: string,
+  previous: string,
+  request: string,
+): ChatMessage[] {
+  return [
+    ...draftMessages(sheet, shots, input),
+    { role: "assistant", content: previous },
+    {
+      role: "user",
+      content: `The client read this version and asked for changes:\n${fence(
+        "change_request",
+        request,
+      )}\n\nRevise your version: make exactly those changes and keep everything else as it was, in the same format. Facts may come from the input or from the change request. Reply with only the finished output.`,
+    },
+  ];
+}
+
 /* ---------- Tasks in the user's connected apps ---------- */
 
 /**

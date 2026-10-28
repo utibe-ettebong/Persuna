@@ -147,6 +147,7 @@ function store(key: string, value: unknown) {
 export function Companion(props: CompanionProps) {
   const [typing, setTyping] = useState(false);
   const [menu, setMenu] = useState(false);
+  const [setupLater, setSetupLater] = useState(false);
   const [desktopShortcut, setDesktopShortcut] = useState<string | null>(null);
   // Building a skill by conversation: the example card and the publish confirmation.
   const [example, setExample] = useState<{ slug: string; name: string } | null>(null);
@@ -1059,6 +1060,7 @@ export function Companion(props: CompanionProps) {
     } else onTap();
   }
   function onTap() {
+    if (!setupDone && setupLater) return setSetupLater(false);
     // Tapping the wrap-up offer asks for it.
     if (caption === WRAP_UP_OFFER && !talkingNow.current) {
       setCaption(null);
@@ -1364,7 +1366,8 @@ export function Companion(props: CompanionProps) {
   const low = spot.y > 360;
   const side = right ? "right-[calc(100%+12px)] items-end" : "left-[calc(100%+12px)] items-start";
   const latestJob = [...messages].reverse().find((m) => m.jobId && m.jobId !== dismissedJob);
-  const showSetupInput = !setupDone && busy === "idle";
+  // The first meeting's box can be put away until they're ready (it can sit over a page's buttons).
+  const showSetupInput = !setupDone && busy === "idle" && !setupLater;
   const hasCards =
     (!setupDone && (setupStep === "look" || setupStep === "task")) ||
     (setupDone &&
@@ -1494,7 +1497,11 @@ export function Companion(props: CompanionProps) {
                 interrupt();
                 setText(e.target.value);
               }}
-              onKeyDown={(e) => e.key === "Escape" && setupDone && setTyping(false)}
+              onKeyDown={(e) => {
+                if (e.key !== "Escape") return;
+                if (setupDone) setTyping(false);
+                else setSetupLater(true);
+              }}
               onBlur={() => setupDone && !text.trim() && setTyping(false)}
               autoComplete="off"
               placeholder={setupDone ? `Type to ${name}…` : "Type, or tap me and just talk"}
@@ -1508,6 +1515,16 @@ export function Companion(props: CompanionProps) {
             >
               <Icon name="send" />
             </button>
+            {!setupDone && (
+              <button
+                type="button"
+                onClick={() => setSetupLater(true)}
+                title="Put this away; tap me when you're ready"
+                className="label-mono shrink-0 px-2 text-[10px] text-muted hover:text-foreground"
+              >
+                Later
+              </button>
+            )}
           </form>
         )}
       </div>

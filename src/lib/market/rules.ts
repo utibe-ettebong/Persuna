@@ -65,3 +65,28 @@ export function listingRequirements(input: {
 }
 
 export const formatNaira = (n: number) => `₦${n.toLocaleString("en-NG")}`;
+
+/** How many times a renter may ask for changes to one order before accepting it. */
+export const MAX_REVISIONS = 2;
+
+/**
+ * Whether a renter may ask for changes now: only to a delivered result they
+ * haven't accepted, reported or been refunded for, and only a few times.
+ */
+export function revisionAllowed(order: {
+  status: string;
+  escrow: string;
+  rounds: number;
+  complaint: string | null;
+}): { ok: true } | { ok: false; reason: string } {
+  if (order.status !== "approved")
+    return { ok: false, reason: "There's no delivered result to change yet" };
+  if (order.escrow !== "held" || order.complaint)
+    return { ok: false, reason: "This order is already settled" };
+  if (order.rounds >= MAX_REVISIONS)
+    return {
+      ok: false,
+      reason: `You've used all ${MAX_REVISIONS} rounds of changes on this order`,
+    };
+  return { ok: true };
+}
