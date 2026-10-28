@@ -18,7 +18,12 @@ export default async function CompanionPage({ searchParams }: Props) {
     <main className="h-screen">
       {/* See-through, so the desktop shows behind Persona. */}
       <style>{"html,body{background:transparent!important}"}</style>
-      <CompanionMount userId={user.id} standalone={!overlay} overlay={Boolean(overlay)} />
+      <CompanionMount
+        userId={user.id}
+        userName={user.name}
+        standalone={!overlay}
+        overlay={Boolean(overlay)}
+      />
     </main>
   );
 }

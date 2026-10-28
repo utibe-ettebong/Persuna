@@ -37,8 +37,10 @@ import {
   chime,
   speak,
   startConversation,
+  startHoldRecording,
   stopSpeaking,
   type Conversation,
+  type HoldRecording,
   type UtteranceEnd,
 } from "./voice";
 import { startWakeWord, wakeWordSupported, type WakeListener } from "./wake-listener";
@@ -72,6 +74,8 @@ export interface CompanionProps {
   overlay?: boolean;
   /** How the server hears speech (VOICE_MODE): "agent" offers ElevenLabs Agents calls. */
   voiceMode?: "listen" | "transcribe" | "agent";
+  /** The signed-in person's name, for greetings. */
+  userName?: string;
 }
 
 type Busy = "idle" | "thinking" | "hearing";
@@ -89,6 +93,11 @@ type DesktopWindow = Window & {
     /** The desktop's call shortcut, which the user can change from the menu bar. */
     shortcut?(): Promise<string | null>;
     onShortcut?(handler: (label: string | null) => void): void;
+    /** Hold-to-talk from the desktop's key listener: start, end, cancel, or "type" (double tap). */
+    onHold?(handler: (phase: "start" | "end" | "cancel" | "type") => void): void;
+    /** The hold-to-talk key's label ("right ⌥"), or null when it's off or not allowed yet. */
+    holdKey?(): Promise<string | null>;
+    onHoldKey?(handler: (label: string | null) => void): void;
   };
 };
 /** Gap between Persona and the thing it perches beside. */
@@ -98,6 +107,17 @@ const PERCH_MS = 7000;
 const WANDER_EVERY_MS = [45_000, 90_000] as const;
 const CUT_IN = "Sorry to cut in. ";
 const noSubscribe = () => () => {};
+
+/** "Good morning" and friends, by the local hour. */
+function greeting(hour = new Date().getHours()) {
+  return hour < 5
+    ? "Up late"
+    : hour < 12
+      ? "Good morning"
+      : hour < 17
+        ? "Good afternoon"
+        : "Good evening";
+}
 const WRAP_UP_OFFER = "It's getting late. Want a wrap-up of today?";
 /** After this local hour, Persona offers an end-of-day wrap-up (once a day). */
 const WRAP_UP_HOUR = 17;
@@ -147,6 +167,12 @@ function store(key: string, value: unknown) {
 export function Companion(props: CompanionProps) {
   const [typing, setTyping] = useState(false);
   const [menu, setMenu] = useState(false);
+  // Persona Desktop: the panel under the bar (type, recent, quick things), and hold-to-talk.
+  const [panel, setPanel] = useState(false);
+  const [holding, setHolding] = useState(false);
+  const [holdLabel, setHoldLabel] = useState<string | null>(null);
+  const holdRec = useRef<Promise<HoldRecording | null> | null>(null);
+  const panelInput = useRef<HTMLInputElement | null>(null);
   const [setupLater, setSetupLater] = useState(false);
   const [desktopShortcut, setDesktopShortcut] = useState<string | null>(null);
   // Building a skill by conversation: the example card and the publish confirmation.
@@ -338,7 +364,8 @@ export function Companion(props: CompanionProps) {
           : { x: window.innerWidth - ORB - 28, y: window.innerHeight - ORB - 44 },
       );
       home.current = start;
-      setSpot(start);
+      // In Persona Desktop it stays in its bar at the top of the screen.
+      setSpot(overlayRef.current ? { x: 0, y: 0 } : start);
       setVoiceOn(stored("persona.voice", true));
       setAgentVoice(stored("persona.agentVoice", true));
       setWakeOn(stored("persona.wake", false) && wakeWordSupported());
@@ -612,6 +639,46 @@ export function Companion(props: CompanionProps) {
     }
   }
 
+  /* ---------- Hold to talk (Persona Desktop's key, or the panel's mic button) ---------- */
+
+  function holdStart() {
+    if (holdRec.current) return;
+    lastInput.current = Date.now();
+    setDozing(false);
+    setMenu(false);
+    setError(null);
+    setCaption(null);
+    if (talkingNow.current) interrupt();
+    if (conversation.current || agentCall.current) endConversation();
+    setHolding(true);
+    holdRec.current = startHoldRecording(setLevel).catch(() => {
+      setError("Microphone access was blocked.");
+      return null;
+    });
+  }
+
+  async function holdEnd() {
+    const pending = holdRec.current;
+    holdRec.current = null;
+    setHolding(false);
+    const audio = await (await pending)?.stop();
+    // Too short or silent: a slip of the finger, not a question.
+    if (audio) void hear(audio);
+  }
+
+  function holdCancel() {
+    const pending = holdRec.current;
+    holdRec.current = null;
+    setHolding(false);
+    void pending?.then((rec) => rec?.cancel());
+  }
+
+  function openPanel() {
+    setPanel(true);
+    setMenu(false);
+    window.setTimeout(() => panelInput.current?.focus(), 50);
+  }
+
   /** Tap, shortcut or tray: stop Persuna talking, or start (or end) a conversation. */
   function call() {
     setMenu(false);
@@ -658,6 +725,14 @@ export function Companion(props: CompanionProps) {
     window.addEventListener("keydown", onKey);
     const desktop = (window as DesktopWindow).personaDesktop;
     desktop?.onCall?.(call);
+    desktop?.onHold?.((phase) => {
+      if (phase === "start") void holdStart();
+      else if (phase === "end") void holdEnd();
+      else if (phase === "cancel") holdCancel();
+      else openPanel();
+    });
+    void desktop?.holdKey?.().then(setHoldLabel);
+    desktop?.onHoldKey?.(setHoldLabel);
     void desktop?.shortcut?.().then(setDesktopShortcut);
     desktop?.onShortcut?.(setDesktopShortcut);
     return () => window.removeEventListener("keydown", onKey);
@@ -808,6 +883,7 @@ export function Companion(props: CompanionProps) {
 
   /** Glide somewhere; unless `stay` is -1, come home again after `stay` ms. */
   function flyTo(target: { x: number; y: number }, stay = PERCH_MS) {
+    if (overlayRef.current) return;
     const next = clampSpot(target);
     setSpot((current) => {
       if (current) setTilt(Math.max(-12, Math.min(12, (next.x - current.x) / 40)));
@@ -876,7 +952,7 @@ export function Companion(props: CompanionProps) {
 
   // Now and then, when nothing is happening, wander along the edges of the screen.
   useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (overlayRef.current || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     let timer = 0;
     const plan = () => {
       const [min, max] = WANDER_EVERY_MS;
@@ -1071,17 +1147,19 @@ export function Companion(props: CompanionProps) {
 
   /* ---------- What it looks like ---------- */
 
-  const orbState: OrbState = watching
-    ? "watching"
-    : talking
-      ? "speaking"
-      : busy !== "idle"
-        ? "thinking"
-        : conversing
-          ? "listening"
-          : dozing
-            ? "sleeping"
-            : "idle";
+  const orbState: OrbState = holding
+    ? "listening"
+    : watching
+      ? "watching"
+      : talking
+        ? "speaking"
+        : busy !== "idle"
+          ? "thinking"
+          : conversing
+            ? "listening"
+            : dozing
+              ? "sleeping"
+              : "idle";
   const isMac = useSyncExternalStore(
     noSubscribe,
     () => /Mac|iPhone|iPad/.test(navigator.platform),
@@ -1382,7 +1460,7 @@ export function Companion(props: CompanionProps) {
     Boolean(latestJob);
 
   const menuItems: { label: string; onSelect: () => void; hidden?: boolean }[] = [
-    { label: "Type instead", onSelect: () => setTyping(true) },
+    { label: "Type instead", onSelect: () => (props.overlay ? openPanel() : setTyping(true)) },
     {
       label: watching ? "Stop watching" : "Watch my screen",
       onSelect: () => (watching ? watcher.current?.stop() : setAskWatch(true)),
@@ -1420,6 +1498,255 @@ export function Companion(props: CompanionProps) {
       hidden: !props.overlay,
     },
   ];
+
+  if (props.overlay) {
+    const talkHint = holdLabel ? `Hold ${holdLabel} to talk` : `${shortcut} to talk`;
+    const barStatus =
+      orbState === "idle" || orbState === "sleeping"
+        ? setupDone
+          ? talkHint
+          : "Say hello"
+        : holding
+          ? "Listening… let go when you're done"
+          : status;
+    const recent = messages.filter((m) => m.kind === "chat").slice(-2);
+    const firstName = props.userName?.split(/\s+/)[0] ?? "";
+    return (
+      <section
+        data-persona
+        aria-label={`${name}, your assistant`}
+        className="pointer-events-none fixed inset-x-0 top-2 z-50 flex flex-col items-center gap-2"
+      >
+        {/* The bar: Persuna and what it's doing. Click for the panel, right-click for more. */}
+        <div
+          className={`pointer-events-auto flex items-center gap-3 rounded-full py-1.5 pl-1.5 pr-5 ${glass} ring-accent/15 ${
+            holding ? "ring-2 ring-accent/50" : ""
+          }`}
+        >
+          <button
+            type="button"
+            aria-label={`${name}: ${panel ? "close" : "open"} (${barStatus})`}
+            aria-expanded={panel}
+            aria-haspopup="menu"
+            onClick={() =>
+              talkingNow.current ? interrupt() : panel ? setPanel(false) : openPanel()
+            }
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenu((m) => !m);
+            }}
+            className="flex items-center gap-3 rounded-full text-left outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <PersonaOrb look={look} state={orbState} level={level} size={38} gaze={null} />
+            <span className="flex min-w-36 flex-col">
+              <span className="font-display text-sm font-medium leading-tight">{name}</span>
+              <span className="label-mono text-[10px] text-muted" role="status">
+                {barStatus}
+              </span>
+            </span>
+          </button>
+          {(holding || orbState === "listening") && (
+            <span aria-hidden className="flex h-5 items-center gap-[3px]">
+              {[0.5, 0.8, 1, 0.8, 0.5].map((w, i) => (
+                <span
+                  key={i}
+                  className="w-[3px] rounded-full bg-accent transition-[height] duration-75"
+                  style={{ height: `${Math.max(3, Math.min(20, level * 26 * w + 3))}px` }}
+                />
+              ))}
+            </span>
+          )}
+        </div>
+
+        {caption && (
+          <button
+            type="button"
+            onClick={onTap}
+            className={`persona-in pointer-events-auto max-w-[min(34rem,90vw)] rounded-[22px] px-5 py-3 text-left text-sm leading-snug ${glass}`}
+          >
+            {caption.length > 320 ? `${caption.slice(0, 320)}…` : caption}
+          </button>
+        )}
+        {error && (
+          <p className="persona-in pointer-events-auto rounded-full bg-danger/10 px-3 py-1.5 text-sm text-danger backdrop-blur">
+            {error}
+          </p>
+        )}
+
+        {panel && setupDone && (
+          <div
+            className={`persona-in pointer-events-auto w-[min(28rem,92vw)] space-y-4 rounded-[26px] p-5 ${glass}`}
+          >
+            <div>
+              <p className="label-mono text-[10px] text-muted">{greeting()}</p>
+              <h2 className="font-display text-xl font-medium tracking-[-0.02em]">
+                {firstName ? `${firstName}, what's next?` : "What's next?"}
+              </h2>
+              <p className="mt-1 text-sm text-muted">
+                {focusSkill
+                  ? `Today: ${focusSkill.name}.`
+                  : (props.focus ?? "Tell me what you're working on.")}{" "}
+                {talkHint}, or type below.
+              </p>
+            </div>
+            {recent.length > 0 && (
+              <ul className="space-y-1.5 text-sm">
+                {recent.map((m) => (
+                  <li key={m.id} className={m.role === "user" ? "text-muted" : "text-foreground"}>
+                    <span className="label-mono mr-2 text-[10px] text-faint">
+                      {m.role === "user" ? "You" : name}
+                    </span>
+                    {m.content.length > 160 ? `${m.content.slice(0, 160)}…` : m.content}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void send(text);
+              }}
+              className="flex items-center gap-1.5 rounded-full bg-card p-1.5 pl-4 ring-1 ring-line-strong focus-within:ring-accent"
+            >
+              <label className="sr-only" htmlFor="persona-panel-input">
+                Message {name}
+              </label>
+              <input
+                id="persona-panel-input"
+                ref={panelInput}
+                value={text}
+                onChange={(e) => {
+                  interrupt();
+                  setText(e.target.value);
+                }}
+                onKeyDown={(e) => e.key === "Escape" && setPanel(false)}
+                autoComplete="off"
+                placeholder={`Ask ${name} anything…`}
+                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint focus-visible:outline-none"
+              />
+              <button
+                type="button"
+                aria-label="Hold to talk"
+                title="Hold to talk"
+                onPointerDown={() => holdStart()}
+                onPointerUp={() => void holdEnd()}
+                onPointerLeave={() => holding && void holdEnd()}
+                className={`grid h-8 w-8 shrink-0 place-items-center rounded-full ${
+                  holding ? "bg-accent text-accent-ink" : "text-muted hover:text-accent"
+                }`}
+              >
+                <Icon name="mic" />
+              </button>
+              <button
+                type="submit"
+                disabled={!text.trim()}
+                aria-label="Send"
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent text-accent-ink disabled:opacity-30"
+              >
+                <Icon name="send" />
+              </button>
+            </form>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                [
+                  watching ? "Stop watching" : "Watch my screen",
+                  () => (watching ? watcher.current?.stop() : setAskWatch(true)),
+                ],
+                ["Wrap up my day", () => void send("Wrap up my day")],
+                ["My to-dos", () => void send("What's on my to-do list?")],
+              ].map(([label, act]) => (
+                <button
+                  key={label as string}
+                  type="button"
+                  onClick={act as () => void}
+                  className="label-mono rounded-full px-3 py-1.5 text-[10px] text-muted ring-1 ring-line-strong hover:text-accent hover:ring-accent/40"
+                >
+                  {label as string}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {(hasCards || showSetupInput) && (
+          <div className="pointer-events-auto flex w-[min(28rem,92vw)] flex-col gap-2">
+            {!setupDone ? setupChips : assistCards}
+            {latestJob?.jobId && (
+              <div className={`persona-in rounded-[22px] p-3 text-sm ${glass}`}>
+                <div className="flex items-center gap-2">
+                  <span className="flex-1">{latestJob.content}</span>
+                  <button
+                    type="button"
+                    onClick={() => setDismissedJob(latestJob.jobId!)}
+                    aria-label="Close"
+                    className="text-muted hover:text-foreground"
+                  >
+                    ×
+                  </button>
+                </div>
+                <JobCard jobId={latestJob.jobId} initial={latestJob.job} />
+              </div>
+            )}
+            {showSetupInput && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void send(text);
+                }}
+                className={`persona-in flex items-center gap-1.5 rounded-full p-1.5 pl-4 ${glass}`}
+              >
+                <input
+                  aria-label={`Message ${name}`}
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  onKeyDown={(e) => e.key === "Escape" && setSetupLater(true)}
+                  autoComplete="off"
+                  placeholder="Type, or hold to talk"
+                  className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint"
+                />
+                <button
+                  type="submit"
+                  disabled={!text.trim()}
+                  aria-label="Send"
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent text-accent-ink disabled:opacity-30"
+                >
+                  <Icon name="send" />
+                </button>
+              </form>
+            )}
+          </div>
+        )}
+
+        {menu && setupDone && (
+          <div
+            role="menu"
+            aria-label={`${name}'s menu`}
+            className={`persona-in pointer-events-auto flex w-60 flex-col rounded-2xl p-1.5 text-sm ${glass}`}
+          >
+            {menuItems
+              .filter((item) => !item.hidden)
+              .map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenu(false);
+                    item.onSelect();
+                  }}
+                  className="rounded-xl px-3 py-2 text-left hover:bg-accent-soft hover:text-accent"
+                >
+                  {item.label}
+                </button>
+              ))}
+            <p className="label-mono px-3 pb-1 pt-2 text-[10px] text-muted">
+              {talkHint} · double-tap to type
+            </p>
+          </div>
+        )}
+      </section>
+    );
+  }
 
   return (
     <section
@@ -1598,6 +1925,16 @@ export function Companion(props: CompanionProps) {
           </span>
         </span>
       </button>
+      {/* Talking or typing: both are always one step away. */}
+      {setupDone && !typing && (
+        <button
+          type="button"
+          onClick={() => setTyping(true)}
+          className="label-mono pointer-events-auto mx-auto mt-1 flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] text-muted hover:text-accent"
+        >
+          <Icon name="keyboard" /> Type
+        </button>
+      )}
     </section>
   );
 }

@@ -1,8 +1,21 @@
 # Persuna Desktop
 
-Persuna, your PERSUNA assistant, over your whole screen. It lives in a see-through layer above your apps, even full-screen ones: just Persuna and its words, no chat window. **Call it from anywhere with ⌃⌥P** (Ctrl+Alt+P on Windows), by clicking Persuna in the Dock, from _Talk to Persuna_ in its menu bar menu, or by tapping it. Change the shortcut under _Call shortcut_ in that menu (⌃⌥P, ⌃⌥Space or ⌥⇧P); if another app has taken one, Persuna uses the next. When it starts, a notification says it's running and how to call it. It chimes, listens, answers out loud, and goes quiet after 45 seconds of silence. Press the shortcut or tap it while it talks to stop it. Right-click it for the rest: type instead, watch my screen, mute, conversation and notes, hide. Clicks pass straight through to your apps everywhere else.
+Persuna, your PERSUNA assistant, in a small bar at the top centre of your screen, above every app (even full-screen ones). Clicks pass straight through to your apps everywhere else.
 
-The first time, a small welcome window lets you create an account or sign in; then Persuna appears and gets to know you out loud. On a Mac it shows in the Dock and the menu bar; on Windows, in the system tray.
+- **Talk:** hold **right ⌥** (right Alt on Windows) from any app, say what you need, and let go. Persuna answers out loud.
+- **Type:** tap right ⌥ twice quickly, or click the bar. The panel has a message box, your last exchange and quick actions (watch my screen, wrap up my day, to-dos).
+- **Hands-free:** ⌃⌥P (Ctrl+Alt+P) starts a conversation that listens until you go quiet.
+- **More:** right-click the bar. The menu bar menu changes the talk key (right ⌥, right ⌘, right ⌃ or off), the hands-free shortcut, open at login, and re-runs setup.
+
+**First run.** A setup window walks you through:
+
+1. Signing in, in your browser (quickest if you're already signed in there) or in the window.
+2. Three Mac permissions, each with its reason: Microphone; Accessibility (to notice the talk key from any app, and only that key); Screen Recording (optional, for watching when you ask). If Persuna isn't in a System Settings list, drag its tile in.
+3. A microphone test, with a picker.
+4. Practising hold-to-talk.
+5. Naming Persuna and choosing its look.
+6. Four quick questions about your work, which Persuna remembers.
+7. A first skill to learn, suggested from what takes you the most time.
 
 **Download:** [the latest release](https://github.com/utibe-ettebong/Persuna/releases/latest).
 

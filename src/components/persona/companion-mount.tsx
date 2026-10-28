@@ -5,10 +5,12 @@ import { Companion } from "./companion";
 /** Loads the signed-in user's Persona and renders the companion. */
 export async function CompanionMount({
   userId,
+  userName,
   standalone = false,
   overlay = false,
 }: {
   userId: string;
+  userName?: string;
   standalone?: boolean;
   overlay?: boolean;
 }) {
@@ -25,6 +27,7 @@ export async function CompanionMount({
       standalone={standalone}
       overlay={overlay}
       voiceMode={voiceMode()}
+      userName={userName}
       messages={persona.messages.map((m) => ({
         id: m.id,
         role: m.role,

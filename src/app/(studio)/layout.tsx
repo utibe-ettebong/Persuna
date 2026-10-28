@@ -57,7 +57,7 @@ export default async function StudioLayout({ children }: Readonly<{ children: Re
         </main>
         <div aria-hidden className="hatch hidden flex-1 lg:block" />
       </div>
-      <CompanionMount userId={user.id} />
+      <CompanionMount userId={user.id} userName={user.name} />
     </>
   );
 }

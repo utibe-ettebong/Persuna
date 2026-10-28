@@ -105,3 +105,50 @@ export function parseFirstTask(
   const short = name.split(/\s+/).slice(0, 8).join(" ");
   return { kind: "new", name: short.charAt(0).toUpperCase() + short.slice(1) };
 }
+
+/* ---------- Getting to know you (Persona Desktop's first run) ---------- */
+
+export const INTRO_QUESTIONS = [
+  { key: "work", ask: "First, what do you do for work?" },
+  { key: "current", ask: "What are you working on these days?" },
+  { key: "timeSink", ask: "Which part of your work takes up the most time?" },
+  { key: "style", ask: "Last one: should I keep things short, or give you more detail?" },
+] as const;
+
+export type IntroKey = (typeof INTRO_QUESTIONS)[number]["key"];
+export type IntroAnswers = Partial<Record<IntroKey, string>>;
+
+/** Short replies between questions, so it feels like a conversation. */
+export const INTRO_ACKS = ["Nice.", "Got it.", "Good to know.", "Thanks."] as const;
+
+const clip = (text: string, max: number) => {
+  const one = text.replace(/\s+/g, " ").trim();
+  return one.length > max ? `${one.slice(0, max - 1).trimEnd()}…` : one;
+};
+
+/** The answers as facts for Persona's memory, in the user's own words. */
+export function introFacts(answers: IntroAnswers): string[] {
+  const facts: string[] = [];
+  if (answers.work?.trim()) facts.push(`Work: ${clip(answers.work, 160)}`);
+  if (answers.current?.trim()) facts.push(`Working on: ${clip(answers.current, 160)}`);
+  if (answers.timeSink?.trim()) facts.push(`Takes the most time: ${clip(answers.timeSink, 160)}`);
+  return facts;
+}
+
+/**
+ * A first skill to suggest from what takes them the most time: a short name
+ * from their answer ("Writing client proposals, honestly" → "Writing client
+ * proposals"), or null when there's nothing to go on.
+ */
+export function suggestedSkill(timeSink: string | undefined): string | null {
+  const first = (timeSink ?? "")
+    .trim()
+    .replace(/^(?:(?:um+|uh+|well|so|i guess|i think|probably|mostly|honestly)[\s,]+)+/i, "")
+    .replace(/^(?:it'?s|that'?s|definitely|just)\s+/i, "")
+    .split(/[.,;!?\n]|\s(?:and|but|because|honestly|probably|mostly)\s/i)[0]
+    .trim();
+  const words = first.split(/\s+/).filter(Boolean).slice(0, 6);
+  if (words.length < 2) return null;
+  const name = words.join(" ");
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}

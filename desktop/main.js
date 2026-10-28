@@ -1,11 +1,16 @@
-// Persuna Desktop. Your Persuna lives in a see-through layer over your whole
-// screen, above every app (even full-screen ones), and clicks pass straight
-// through it except where Persona and its conversation are. It loads
-// /companion from your PERSUNA server, so chat, voice, notes and tasks work
-// as on the web.
+// Persuna Desktop. Your Persuna lives in a bar at the top of your screen, in a
+// see-through layer above every app (even full-screen ones); clicks pass
+// straight through it except on Persuna itself. It loads /companion from your
+// PERSUNA server, so chat, voice, notes and tasks work as on the web.
 //
-// Call Persuna from anywhere with ⌃⌥P (Ctrl+Alt+P on Windows; change it from
-// the menu bar menu), by clicking it in the Dock, or from the menu bar icon: it listens, answers out loud, and goes quiet again.
+// Talk: hold right ⌥ (right Alt on Windows) from any app, and let go when
+// you're done. Type: tap it twice quickly, or click Persuna. The key can be
+// changed or turned off from the menu bar menu; ⌃⌥P (Ctrl+Alt+P) still starts
+// a hands-free conversation.
+//
+// The first time, a setup window signs you in (in your browser, or there),
+// asks for the Mac's permissions one at a time, tests the microphone, and
+// gets you and Persuna acquainted.
 //
 // Watching is still your choice each time. The operating system asks once
 // (macOS: Screen Recording); after that, turning watching on in Persona
@@ -28,8 +33,10 @@ const {
   systemPreferences,
 } = require("electron");
 const { execFile } = require("node:child_process");
+const { randomBytes } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const { createHoldKey } = require("./hold-key");
 
 const APP_URL = process.env.PERSUNA_URL || "https://persuna-production.up.railway.app";
 const ORIGIN = new URL(APP_URL).origin;
@@ -52,8 +59,15 @@ const shortcutLabel = (accelerator) => {
   const s = CALL_SHORTCUTS.find((c) => c.accelerator === accelerator);
   return s ? (MAC ? s.mac : s.other) : null;
 };
+/** Keys that can be held to talk (uiohook key codes). */
+const HOLD_KEYS = [
+  { id: "right-option", code: 3640, mac: "right ⌥", other: "right Alt" },
+  { id: "right-command", code: 3676, mac: "right ⌘", other: "right Windows key" },
+  { id: "right-control", code: 3613, mac: "right ⌃", other: "right Ctrl" },
+];
+const DEFAULT_HOLD = "right-option";
 let overlay = null;
-let welcome = null;
+let setup = null;
 let tray = null;
 
 /* ---------- Settings (a small JSON file in the app's data folder) ---------- */
@@ -130,7 +144,10 @@ function createOverlay() {
   // Show the layer only once it holds Persuna. Signed out, it lands on the
   // sign-in page, which must never cover the screen (clicks pass through it).
   overlay.once("ready-to-show", () => {
-    if (/^\/companion/.test(pathOf(overlay?.webContents.getURL() ?? ""))) overlay?.showInactive();
+    // Not while setup is open: Persuna appears when it's done.
+    if (!setup && /^\/companion/.test(pathOf(overlay?.webContents.getURL() ?? ""))) {
+      overlay?.showInactive();
+    }
   });
 
   overlay.webContents.setWindowOpenHandler(({ url }) => {
@@ -140,7 +157,7 @@ function createOverlay() {
   overlay.webContents.on("will-navigate", (event, url) => {
     if (isOurs(url) && /^\/companion/.test(pathOf(url))) return;
     event.preventDefault();
-    if (isOurs(url) && /^\/(sign-(in|up)|welcome)/.test(pathOf(url))) return openWelcome();
+    if (isOurs(url) && /^\/(sign-(in|up)|welcome)/.test(pathOf(url))) return openSetup();
     if (/^https?:/.test(url)) void shell.openExternal(url);
   });
   // Signed out: the server redirects to /sign-in. Welcome them in a small window instead.
@@ -148,57 +165,70 @@ function createOverlay() {
     if (/^\/(sign-(in|up)|welcome)/.test(pathOf(url))) {
       overlay?.hide();
       overlay?.loadURL("about:blank");
-      openWelcome();
+      openSetup();
     }
   });
   overlay.on("closed", () => (overlay = null));
 }
 
-/** The first-run window: a hello, then sign in or create an account. */
-function openWelcome() {
+/**
+ * The setup window: sign in, the Mac's permissions, a mic test, practising
+ * the talk key, and getting acquainted. Opens on first run, when signed out,
+ * and from the menu bar menu.
+ */
+function openSetup() {
   overlay?.hide();
-  if (welcome) {
-    welcome.show();
-    welcome.focus();
+  if (setup) {
+    setup.show();
+    setup.focus();
     return;
   }
-  welcome = new BrowserWindow({
-    width: 420,
-    height: 660,
-    resizable: false,
+  setup = new BrowserWindow({
+    width: 600,
+    height: 760,
+    minWidth: 520,
+    minHeight: 640,
     maximizable: false,
     fullscreenable: false,
-    title: "Welcome to Persuna",
+    title: "Set up Persuna",
     titleBarStyle: MAC ? "hiddenInset" : "default",
     autoHideMenuBar: true,
     backgroundColor: "#f8f6f8",
     show: false,
-    webPreferences: { contextIsolation: true, sandbox: true },
+    webPreferences: {
+      preload: path.join(__dirname, "setup-preload.js"),
+      contextIsolation: true,
+      sandbox: true,
+      autoplayPolicy: "no-user-gesture-required",
+    },
   });
-  welcome.loadURL(`${ORIGIN}/welcome`);
-  welcome.once("ready-to-show", () => {
-    welcome?.show();
+  setup.loadURL(`${ORIGIN}/desktop/setup`);
+  setup.once("ready-to-show", () => {
+    setup?.show();
     app.focus({ steal: true });
   });
-  welcome.webContents.on("did-navigate", (_e, next) => {
-    if (/^\/companion/.test(pathOf(next))) {
-      welcome?.close();
-      void overlay?.loadURL(`${ORIGIN}/companion?overlay=1`).then(() => {
-        overlay?.showInactive();
-        rebuildTray();
-      });
-    }
-  });
-  welcome.webContents.on("will-navigate", (event, url) => {
-    if (isOurs(url) && /^\/(welcome|sign-(in|up)|companion|api\/)/.test(pathOf(url))) return;
+  setup.webContents.on("will-navigate", (event, url) => {
+    if (isOurs(url) && /^\/(desktop\/setup|sign-(in|up)|api\/)/.test(pathOf(url))) return;
     event.preventDefault();
     if (/^https?:/.test(url)) void shell.openExternal(url);
   });
-  welcome.webContents.setWindowOpenHandler(({ url: link }) => {
+  setup.webContents.setWindowOpenHandler(({ url: link }) => {
     if (/^https?:/.test(link)) void shell.openExternal(link);
     return { action: "deny" };
   });
-  welcome.on("closed", () => (welcome = null));
+  setup.on("closed", () => {
+    setup = null;
+    // Closed before finishing: Persuna still appears if you're signed in.
+    if (overlay && !overlay.isVisible()) void showOverlay();
+  });
+}
+
+/** Load Persuna's bar (fresh, so it picks up what setup saved) and show it. */
+async function showOverlay() {
+  if (!overlay) createOverlay();
+  await overlay.loadURL(`${ORIGIN}/companion?overlay=1`).catch(() => {});
+  if (/^\/companion/.test(pathOf(overlay?.webContents.getURL() ?? ""))) overlay?.showInactive();
+  rebuildTray();
 }
 
 /* ---------- Messages from the page (see preload.js) ---------- */
@@ -220,6 +250,184 @@ ipcMain.on("persona:hide", (event) => {
   if (overlay && event.sender === overlay.webContents) overlay.hide();
   rebuildTray();
 });
+
+/* ---------- Setup window (see setup-preload.js) ---------- */
+
+const fromSetup = (event) => Boolean(setup) && event.sender === setup.webContents;
+const PRIVACY = (pane) => `x-apple.systempreferences:com.apple.preference.security?Privacy_${pane}`;
+/** The app on disk (Persuna.app), which you drag into System Settings' lists. */
+const appBundle = () => (MAC ? path.resolve(process.execPath, "../../..") : process.execPath);
+
+ipcMain.handle("setup:permissions", (event) => {
+  if (!fromSetup(event)) return null;
+  if (keyboardAllowed()) startKeyListener();
+  return {
+    mic: MAC ? systemPreferences.getMediaAccessStatus("microphone") : "granted",
+    keyboard: keyboardAllowed() ? "granted" : "denied",
+    screen: MAC ? systemPreferences.getMediaAccessStatus("screen") : "granted",
+    holdKey: holdKeyLabel(),
+    mac: MAC,
+  };
+});
+ipcMain.handle("setup:ask-mic", async (event) => {
+  if (!fromSetup(event) || !MAC) return true;
+  if (systemPreferences.getMediaAccessStatus("microphone") === "denied") {
+    void shell.openExternal(PRIVACY("Microphone"));
+    return false;
+  }
+  return systemPreferences.askForMediaAccess("microphone");
+});
+ipcMain.handle("setup:ask-keyboard", (event) => {
+  if (!fromSetup(event) || !MAC) return;
+  // Adds Persuna to the list (switched off) and points the way.
+  systemPreferences.isTrustedAccessibilityClient(true);
+  void shell.openExternal(PRIVACY("Accessibility"));
+});
+ipcMain.handle("setup:ask-screen", async (event) => {
+  if (!fromSetup(event) || !MAC) return;
+  if (systemPreferences.getMediaAccessStatus("screen") === "granted") return;
+  if (readSettings().screenAskedFor !== app.getVersion()) {
+    writeSettings({ screenAskedFor: app.getVersion() });
+    if (systemPreferences.getMediaAccessStatus("screen") !== "not-determined") {
+      await forgetOldScreenPermission();
+    }
+    // Asking for a capture source is what makes macOS show its prompt.
+    await desktopCapturer
+      .getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } })
+      .catch(() => {});
+  }
+  if (systemPreferences.getMediaAccessStatus("screen") !== "granted") {
+    void shell.openExternal(PRIVACY("ScreenCapture"));
+  }
+});
+ipcMain.on("setup:drag-app", (event) => {
+  if (!fromSetup(event)) return;
+  void app.getFileIcon(appBundle(), { size: "normal" }).then((icon) => {
+    event.sender.startDrag({ file: appBundle(), icon });
+  });
+});
+ipcMain.handle("setup:app-icon", async (event) => {
+  if (!fromSetup(event)) return null;
+  const icon = await app.getFileIcon(appBundle(), { size: "normal" }).catch(() => null);
+  return icon ? icon.toDataURL() : null;
+});
+ipcMain.on("setup:restart", (event) => fromSetup(event) && restart());
+ipcMain.on("setup:sign-in-browser", (event) => {
+  if (!fromSetup(event)) return;
+  signInState = randomBytes(24).toString("base64url");
+  void shell.openExternal(`${ORIGIN}/desktop/connect?state=${signInState}`);
+});
+ipcMain.on("setup:finish", (event, options) => {
+  if (!fromSetup(event)) return;
+  app.setLoginItemSettings({ openAtLogin: Boolean(options?.openAtLogin) });
+  writeSettings({ setupDone: true });
+  const done = setup;
+  setup = null;
+  done?.removeAllListeners("closed");
+  done?.close();
+  void showOverlay();
+});
+
+/* ---------- Signing in through the browser (persuna://) ---------- */
+
+/** The sign-in this app started; a persuna:// link must bring it back. */
+let signInState = null;
+
+/** persuna://signed-in?token=…&state=… from /desktop/connect. */
+function openLink(url) {
+  let link;
+  try {
+    link = new URL(url);
+  } catch {
+    return;
+  }
+  if (link.protocol !== "persuna:" || link.hostname !== "signed-in") return;
+  const token = link.searchParams.get("token");
+  const state = link.searchParams.get("state");
+  if (!token || !signInState || state !== signInState) return;
+  signInState = null;
+  openSetup();
+  void setup?.loadURL(`${ORIGIN}/api/desktop/sign-in?token=${encodeURIComponent(token)}`);
+  app.focus({ steal: true });
+}
+
+/* ---------- Hold to talk (a system-wide key listener) ---------- */
+
+let keyListener = null;
+let keyWatch = null;
+const holdKey = createHoldKey({ emit: onHoldKey });
+
+const keyboardAllowed = () => !MAC || systemPreferences.isTrustedAccessibilityClient(false);
+const chosenHoldKey = () => {
+  const id = readSettings().holdKey ?? DEFAULT_HOLD;
+  return HOLD_KEYS.find((k) => k.id === id) ?? null;
+};
+/** "right ⌥", or null when it's off or not listening yet. */
+function holdKeyLabel() {
+  const key = chosenHoldKey();
+  return keyListener && key ? (MAC ? key.mac : key.other) : null;
+}
+
+/**
+ * Starts listening for the talk key. macOS only allows it once Persuna is
+ * switched on under Accessibility; until then it checks every few seconds,
+ * so turning it on takes effect without a restart.
+ */
+function startKeyListener() {
+  if (keyListener) return;
+  if (!keyboardAllowed()) {
+    keyWatch ??= setInterval(() => keyboardAllowed() && startKeyListener(), 2000);
+    return;
+  }
+  clearInterval(keyWatch);
+  keyWatch = null;
+  try {
+    const { uIOhook } = require("uiohook-napi");
+    uIOhook.on("keydown", (e) => holdKey.keydown(e.keycode, Date.now()));
+    uIOhook.on("keyup", (e) => holdKey.keyup(e.keycode, Date.now()));
+    uIOhook.start();
+    keyListener = uIOhook;
+  } catch (error) {
+    console.error("Persuna couldn't listen for the talk key:", error);
+    return;
+  }
+  holdKey.setKey(chosenHoldKey()?.code ?? null);
+  announceHoldKey();
+}
+
+function announceHoldKey() {
+  overlay?.webContents.send("persona:hold-key", holdKeyLabel());
+  rebuildTray();
+}
+
+function chooseHoldKey(id) {
+  writeSettings({ holdKey: id });
+  holdKey.setKey(chosenHoldKey()?.code ?? null);
+  announceHoldKey();
+}
+
+/** The talk key did something: to the setup window while it's open, else to Persuna's bar. */
+function onHoldKey(phase) {
+  if (setup?.isVisible()) {
+    setup.webContents.send("persona:hold", phase);
+    return;
+  }
+  if (!overlay) createOverlay();
+  if (!/^\/companion/.test(pathOf(overlay.webContents.getURL()))) return;
+  if (!overlay.isVisible()) {
+    overlay.showInactive();
+    rebuildTray();
+  }
+  if (phase === "type") {
+    // Typing needs the keyboard: bring Persuna forward.
+    overlay.show();
+    overlay.focus();
+    app.focus({ steal: true });
+  }
+  overlay.webContents.send("persona:hold", phase);
+}
+
+ipcMain.handle("persona:hold-key", () => holdKeyLabel());
 
 /* ---------- Watching ---------- */
 
@@ -380,7 +588,30 @@ function rebuildTray() {
         click: callPersuna,
       },
       {
-        label: "Call shortcut",
+        label: "Hold to talk",
+        submenu: [
+          ...HOLD_KEYS.map((k) => ({
+            label: MAC ? k.mac : k.other,
+            type: "radio",
+            checked: (readSettings().holdKey ?? DEFAULT_HOLD) === k.id,
+            click: () => chooseHoldKey(k.id),
+          })),
+          {
+            label: "Off",
+            type: "radio",
+            checked: readSettings().holdKey === "off",
+            click: () => chooseHoldKey("off"),
+          },
+          ...(keyListener
+            ? []
+            : [
+                { type: "separator" },
+                { label: "Needs Accessibility: set it up…", click: openSetup },
+              ]),
+        ],
+      },
+      {
+        label: "Hands-free conversation",
         submenu: CALL_SHORTCUTS.map((c) => ({
           label: MAC ? c.mac : c.other,
           type: "radio",
@@ -419,6 +650,7 @@ function rebuildTray() {
         checked: app.getLoginItemSettings().openAtLogin,
         click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }),
       },
+      { label: "Set up Persuna…", click: openSetup },
       { label: "Open PERSUNA in the browser", click: () => void shell.openExternal(ORIGIN) },
       { label: "Reload Persuna", click: () => overlay?.reload() },
       { type: "separator" },
@@ -480,7 +712,11 @@ function chooseShortcut(accelerator) {
 /** Once per launch: say Persuna is on, and how to call it. */
 function sayRunning() {
   if (!Notification.isSupported()) return;
-  const how = callShortcut ? `Press ${shortcutLabel(callShortcut)}` : "Click its icon";
+  const how = holdKeyLabel()
+    ? `Hold ${holdKeyLabel()}`
+    : callShortcut
+      ? `Press ${shortcutLabel(callShortcut)}`
+      : "Click its icon";
   const note = new Notification({
     title: "Persuna is running",
     body: `${how} to talk, any time. It's in your ${MAC ? "Dock and menu bar" : "system tray"}.`,
@@ -492,16 +728,34 @@ function sayRunning() {
 
 /* ---------- Start ---------- */
 
+// persuna:// links (signing in through the browser) come to this app.
+if (process.defaultApp && process.argv[1]) {
+  app.setAsDefaultProtocolClient("persuna", process.execPath, [path.resolve(process.argv[1])]);
+} else {
+  app.setAsDefaultProtocolClient("persuna");
+}
+// macOS hands links over as an event, which can arrive before the app is ready.
+app.on("will-finish-launching", () => {
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    if (app.isReady()) openLink(url);
+    else void app.whenReady().then(() => openLink(url));
+  });
+});
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
+  app.on("second-instance", (_event, argv) => {
+    // Windows hands links over as an argument to a second launch.
+    const link = argv.find((a) => a.startsWith("persuna://"));
+    if (link) return openLink(link);
     overlay?.showInactive();
     rebuildTray();
   });
   // Clicking Persuna in the Dock calls it, like the shortcut.
   app.on("activate", () => {
-    if (!welcome) callPersuna();
+    if (!setup) callPersuna();
   });
 
   app.whenReady().then(() => {
@@ -524,15 +778,20 @@ if (!app.requestSingleInstanceLock()) {
 
     createOverlay();
     registerCallShortcut();
+    startKeyListener();
     createTray();
-    sayRunning();
+    if (!readSettings().setupDone) openSetup();
+    else sayRunning();
     screen.on("display-metrics-changed", () => {
       const { x, y, width, height } = screen.getPrimaryDisplay().workArea;
       overlay?.setBounds({ x, y, width, height });
     });
   });
 
-  app.on("will-quit", () => globalShortcut.unregisterAll());
+  app.on("will-quit", () => {
+    globalShortcut.unregisterAll();
+    keyListener?.stop();
+  });
   // Closing every window keeps Persona in the menu bar; Quit is in its menu.
   app.on("window-all-closed", () => {});
 }

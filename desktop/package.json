@@ -1,6 +1,6 @@
 {
   "name": "persuna-desktop",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "private": true,
   "description": "Persuna, your AI assistant, over your whole screen.",
   "main": "main.js",
@@ -30,8 +30,13 @@
     "files": [
       "main.js",
       "preload.js",
+      "setup-preload.js",
+      "hold-key.js",
       "package.json",
-      "build/tray*.png"
+      "build/tray*.png",
+      "!node_modules/uiohook-napi/prebuilds/linux-*",
+      "!node_modules/uiohook-napi/src/**",
+      "!node_modules/uiohook-napi/libuiohook/**"
     ],
     "artifactName": "Persuna-${version}-${os}-${arch}.${ext}",
     "mac": {
@@ -83,6 +88,17 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Persuna"
-    }
+    },
+    "protocols": [
+      {
+        "name": "Persuna",
+        "schemes": [
+          "persuna"
+        ]
+      }
+    ]
+  },
+  "dependencies": {
+    "uiohook-napi": "1.5.5"
   }
 }
