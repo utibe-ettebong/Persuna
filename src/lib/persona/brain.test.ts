@@ -128,6 +128,10 @@ describe("personaTurn assistant actions with the offline mock", () => {
     expect(coach.actions).toEqual([{ type: "coach", skill: "meeting-minutes" }]);
     const wrap = await personaTurn(client, state(), [], "Wrap up my day");
     expect(wrap.actions).toEqual([{ type: "wrap_up" }]);
+    const watch = await personaTurn(client, state(), [], "Watch my screen while I work");
+    expect(watch.actions).toEqual([{ type: "watch_screen", on: true }]);
+    const stop = await personaTurn(client, state(), [], "Stop watching");
+    expect(stop.actions).toEqual([{ type: "watch_screen", on: false }]);
   });
 });
 

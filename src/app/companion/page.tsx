@@ -9,8 +9,7 @@ type Props = { searchParams: Promise<{ overlay?: string }> };
 
 /**
  * Persona on its own page. With ?overlay=1 (Persona Desktop) it roams a
- * see-through layer over the whole screen; otherwise it fills a narrow
- * window as a column.
+ * see-through layer over the whole screen; otherwise it hovers in this tab.
  */
 export default async function CompanionPage({ searchParams }: Props) {
   const { overlay } = await searchParams;

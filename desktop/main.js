@@ -4,6 +4,9 @@
 // /companion from your PERSUNA server, so chat, voice, notes and tasks work
 // as on the web.
 //
+// Call Persuna from anywhere with ⌘⇧Space (Ctrl+Shift+Space on Windows), or
+// from the menu bar icon: it listens, answers out loud, and goes quiet again.
+//
 // Watching is still your choice each time. The operating system asks once
 // (macOS: Screen Recording); after that, turning watching on in Persona
 // starts it without a picker, using the screen or window you chose and
@@ -15,13 +18,16 @@ const {
   Tray,
   desktopCapturer,
   dialog,
+  globalShortcut,
   ipcMain,
   nativeImage,
+  Notification,
   screen,
   session,
   shell,
   systemPreferences,
 } = require("electron");
+const { execFile } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -30,6 +36,9 @@ const ORIGIN = new URL(APP_URL).origin;
 const ALLOWED_PERMISSIONS = new Set(["media", "display-capture", "notifications"]);
 const MAC = process.platform === "darwin";
 
+/** Tried in order: the first one no other app has taken becomes the call shortcut. */
+const CALL_SHORTCUTS = ["CommandOrControl+Shift+Space", "Alt+Shift+Space"];
+let callShortcut = null;
 let overlay = null;
 let welcome = null;
 let tray = null;
@@ -209,13 +218,25 @@ async function ask(options) {
   return dialog.showMessageBox(options);
 }
 
-let permissionWatch = 0;
+/**
+ * Forget macOS's Screen Recording entry for Persuna. Builds that aren't
+ * signed with an Apple Developer ID get a new identity with every version, so
+ * an entry left by an earlier version shows Persuna as allowed while macOS
+ * refuses this one. Clearing it lets macOS ask again for this version.
+ */
+const APP_ID = "app.persuna.persona";
+function forgetOldScreenPermission() {
+  return new Promise((resolve) => {
+    execFile("/usr/bin/tccutil", ["reset", "ScreenCapture", APP_ID], () => resolve());
+  });
+}
 
 /**
- * macOS Screen Recording, asked once. The first time, macOS shows its own
- * prompt; Persuna's own questions wait until that's answered, so the two
- * never sit on top of each other. Once you turn Persuna on in System
- * Settings, it offers to restart (macOS needs that before it can see).
+ * macOS Screen Recording. The first time (and once after each update), macOS
+ * shows its own prompt; Persuna's own questions wait until that's answered,
+ * so the two never sit on top of each other. macOS only lets Persuna see the
+ * screen after a restart, so once you've turned it on, Persuna offers one
+ * (here, in a notification, and at the top of its menu bar menu).
  */
 async function ensureScreenPermission() {
   if (!MAC) return true;
@@ -223,8 +244,10 @@ async function ensureScreenPermission() {
   if (status === "granted") return true;
   stepAside(true);
   try {
-    if (status === "not-determined") {
-      // Asking for a capture source is what makes macOS show its one-time prompt.
+    if (readSettings().screenAskedFor !== app.getVersion()) {
+      writeSettings({ screenAskedFor: app.getVersion() });
+      if (status !== "not-determined") await forgetOldScreenPermission();
+      // Asking for a capture source is what makes macOS show its prompt.
       await desktopCapturer
         .getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } })
         .catch(() => {});
@@ -235,18 +258,15 @@ async function ensureScreenPermission() {
       type: "info",
       message: "Let Persuna see your screen",
       detail:
-        "1. Click Open System Settings.\n2. Under Screen & System Audio Recording, turn on Persuna (enter your password if asked).\n3. Come back and choose Restart Persuna.\n\nPersuna only watches while you have watching turned on, and keeps no screenshots.",
-      buttons: ["Open System Settings", "Restart Persuna", "Not now"],
+        "1. Click Open System Settings.\n2. Under Screen & System Audio Recording, turn Persuna on (if it's already on, turn it off and on again).\n3. Restart Persuna: macOS needs that before it can see.\n\nPersuna only watches while you've asked it to, and keeps no screenshots.",
+      buttons: ["Open System Settings", "It's on: restart Persuna", "Not now"],
       defaultId: 0,
       cancelId: 2,
     });
-    if (response === 1) {
-      app.relaunch();
-      app.exit(0);
-    }
+    if (response === 1) restart();
     if (response === 0) {
       void shell.openExternal(SCREEN_SETTINGS);
-      offerRestartWhenAllowed();
+      offerRestart();
     }
     return false;
   } finally {
@@ -254,27 +274,24 @@ async function ensureScreenPermission() {
   }
 }
 
-/** After System Settings opens, wait for Persuna to be turned on, then offer the restart. */
-function offerRestartWhenAllowed() {
-  clearInterval(permissionWatch);
-  const until = Date.now() + 5 * 60_000;
-  permissionWatch = setInterval(async () => {
-    if (Date.now() > until) return clearInterval(permissionWatch);
-    if (systemPreferences.getMediaAccessStatus("screen") !== "granted") return;
-    clearInterval(permissionWatch);
-    const { response } = await ask({
-      type: "info",
-      message: "Persuna can now see your screen",
-      detail: "Restart Persuna so macOS lets it start watching.",
-      buttons: ["Restart now", "Later"],
-      defaultId: 0,
-      cancelId: 1,
+function restart() {
+  app.relaunch();
+  app.exit(0);
+}
+
+let restartOffered = false;
+/** After System Settings opens: a notification, and a menu item, to restart once it's on. */
+function offerRestart() {
+  restartOffered = true;
+  rebuildTray();
+  if (Notification.isSupported()) {
+    const note = new Notification({
+      title: "Turned Persuna on?",
+      body: "Click here to restart Persuna so it can see your screen.",
     });
-    if (response === 0) {
-      app.relaunch();
-      app.exit(0);
-    }
-  }, 2000);
+    note.on("click", restart);
+    note.show();
+  }
 }
 
 /** The remembered screen or window, or ask once (and offer to remember). */
@@ -328,6 +345,18 @@ function rebuildTray() {
   const visible = Boolean(overlay?.isVisible());
   tray.setContextMenu(
     Menu.buildFromTemplate([
+      ...(restartOffered
+        ? [
+            { label: "Restart Persuna to finish screen access", click: restart },
+            { type: "separator" },
+          ]
+        : []),
+      {
+        label: "Talk to Persuna",
+        accelerator: callShortcut ?? undefined,
+        registerAccelerator: false,
+        click: callPersuna,
+      },
       {
         label: visible ? "Hide Persuna" : "Show Persuna",
         click: () => {
@@ -377,6 +406,31 @@ function createTray() {
   rebuildTray();
 }
 
+/* ---------- Calling Persuna ---------- */
+
+/** Bring Persuna up (if hidden) and have it listen, or stop it talking. */
+function callPersuna() {
+  if (!overlay) createOverlay();
+  if (!overlay.isVisible() && /^\/companion/.test(pathOf(overlay.webContents.getURL()))) {
+    overlay.showInactive();
+    rebuildTray();
+  }
+  overlay.webContents.send("persona:call");
+}
+
+function registerCallShortcut() {
+  for (const accelerator of CALL_SHORTCUTS) {
+    try {
+      if (globalShortcut.register(accelerator, callPersuna)) {
+        callShortcut = accelerator;
+        return;
+      }
+    } catch {
+      // Taken or not allowed: try the next one.
+    }
+  }
+}
+
 /* ---------- Start ---------- */
 
 if (!app.requestSingleInstanceLock()) {
@@ -408,6 +462,7 @@ if (!app.requestSingleInstanceLock()) {
     if (MAC) void systemPreferences.askForMediaAccess("microphone").catch(() => {});
 
     createOverlay();
+    registerCallShortcut();
     createTray();
     screen.on("display-metrics-changed", () => {
       const { x, y, width, height } = screen.getPrimaryDisplay().workArea;
@@ -415,6 +470,7 @@ if (!app.requestSingleInstanceLock()) {
     });
   });
 
+  app.on("will-quit", () => globalShortcut.unregisterAll());
   // Closing every window keeps Persona in the menu bar; Quit is in its menu.
   app.on("window-all-closed", () => {});
 }

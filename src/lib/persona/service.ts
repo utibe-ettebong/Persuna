@@ -215,6 +215,8 @@ export interface ChatResult {
   confirm: PublishConfirm | null;
   /** Persona asked whether to switch to this skill. */
   switchTo: { slug: string; name: string } | null;
+  /** Start or stop watching the screen (starting still asks the user's permission). */
+  watch: "start" | "stop" | null;
 }
 
 export interface PublishConfirm {
@@ -261,6 +263,7 @@ export async function chat(
     owned.find((s) => s.slug === slug) ?? owned.find((s) => s.id === focusSkillId) ?? null;
   let reminderSet = false;
   let navigate: string | null = null;
+  let watch: ChatResult["watch"] = null;
 
   for (const action of reply.actions) {
     if (action.type === "remember") {
@@ -422,6 +425,8 @@ export async function chat(
         playful: action.playful ?? undefined,
         note: action.note ?? undefined,
       });
+    } else if (action.type === "watch_screen") {
+      watch = action.on ? "start" : "stop";
     } else if (action.type === "wrap_up") {
       extra.push(`\n\n${await wrapUpText(userId, input.clock)}`);
       await db()
@@ -472,6 +477,7 @@ export async function chat(
     example,
     confirm,
     switchTo,
+    watch,
   };
 }
 

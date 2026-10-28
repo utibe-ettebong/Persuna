@@ -12,19 +12,17 @@ describe("speakable", () => {
 });
 
 describe("speechChunks", () => {
-  it("starts with the first sentence alone, so speech begins quickly", () => {
-    const chunks = speechChunks(["One.", "Two.", "Three."]);
-    expect(chunks[0]).toBe("One.");
-    expect(chunks.join(" ")).toBe("One. Two. Three.");
+  it("says a normal reply in one piece, so there are no gaps", () => {
+    expect(speechChunks(["One.", "Two.", "Three."])).toEqual(["One. Two. Three."]);
   });
 
-  it("covers a long reply in pieces under the limit, losing nothing", () => {
+  it("splits only very long replies, at sentence ends, losing nothing", () => {
     const sentences = Array.from(
-      { length: 30 },
-      (_, i) => `This is sentence number ${i + 1} of a long reply.`,
+      { length: 60 },
+      (_, i) => `This is sentence number ${i + 1} of a very long reply.`,
     );
     const chunks = speechChunks(sentences);
-    expect(chunks.length).toBeGreaterThan(2);
+    expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((c) => c.length <= CLOUD_CHUNK_CHARS)).toBe(true);
     expect(chunks.join(" ")).toBe(sentences.join(" "));
   });

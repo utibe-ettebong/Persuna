@@ -51,18 +51,19 @@ export function canSpeak(): boolean {
   return typeof window !== "undefined" && "speechSynthesis" in window;
 }
 
-/** Cloud requests stay under this many characters; longer replies go in pieces. */
-export const CLOUD_CHUNK_CHARS = 350;
+/** One cloud request speaks up to this much (the server's limit), so a reply is one take. */
+export const CLOUD_CHUNK_CHARS = 1500;
 
 /**
- * Groups sentences for the cloud voice: the first sentence alone, so speech
- * starts quickly, then pieces of up to {@link CLOUD_CHUNK_CHARS}.
+ * Groups sentences for the cloud voice. A normal reply is a single piece, so
+ * it's said in one breath, with no gaps or changes of tone between sentences;
+ * only very long ones are split, at sentence ends.
  */
 export function speechChunks(sentences: string[]): string[] {
   const chunks: string[] = [];
   for (const sentence of sentences) {
     const last = chunks.at(-1);
-    if (chunks.length > 1 && last && last.length + sentence.length + 1 <= CLOUD_CHUNK_CHARS) {
+    if (last && last.length + sentence.length + 1 <= CLOUD_CHUNK_CHARS) {
       chunks[chunks.length - 1] = `${last} ${sentence}`;
     } else chunks.push(sentence);
   }
@@ -122,8 +123,8 @@ export function speak(text: string, handlers: SpeakHandlers): Promise<void> {
   return done;
 }
 
-/** Fetches one piece of cloud speech; null means "use the browser voice". */
-async function fetchSpeech(text: string): Promise<Blob | null> {
+/** Starts one piece of cloud speech; null means "use the browser voice". */
+async function fetchSpeech(text: string): Promise<Response | null> {
   try {
     const res = await fetch("/api/persona/speak", {
       method: "POST",
@@ -139,7 +140,7 @@ async function fetchSpeech(text: string): Promise<Blob | null> {
       return null;
     }
     cloudFailures = 0;
-    return await res.blob();
+    return res;
   } catch {
     return null;
   }
@@ -151,12 +152,15 @@ async function speakInCloud(
   mine: number,
 ): Promise<boolean> {
   const chunks = speechChunks(sentences);
-  // Fetch the next piece while the current one plays, so there are no gaps.
+  // Ask for the next piece while the current one plays, so there are no gaps.
   let next = fetchSpeech(chunks[0]);
   for (let i = 0; i < chunks.length; i++) {
-    const blob = await next;
-    if (mine !== generation) return true;
-    if (!blob) {
+    const res = await next;
+    if (mine !== generation) {
+      void res?.body?.cancel();
+      return true;
+    }
+    if (!res) {
       // The cloud voice failed part-way: say the rest in the browser's voice.
       if (i === 0) return false;
       await speakInBrowser(chunks.slice(i), handlers, mine);
@@ -164,7 +168,7 @@ async function speakInCloud(
     }
     if (i + 1 < chunks.length) next = fetchSpeech(chunks[i + 1]);
     handlers.onSpoken?.(chunks[i]);
-    if (!(await play(blob, handlers.onLevel, mine))) {
+    if (!(await play(res, handlers.onLevel, mine))) {
       await speakInBrowser(chunks.slice(i), handlers, mine);
       return true;
     }
@@ -172,11 +176,59 @@ async function speakInCloud(
   return true;
 }
 
-/** Plays one piece of audio, driving the mouth from the real sound. */
-async function play(blob: Blob, onLevel: (l: number) => void, mine: number): Promise<boolean> {
+/**
+ * An audio element for streamed speech: it starts playing as the first bytes
+ * arrive (MediaSource), or, where that isn't available, once it's all here.
+ */
+async function audioFor(
+  res: Response,
+  mine: number,
+): Promise<{ audio: HTMLAudioElement; url: string }> {
+  const type = res.headers.get("content-type") ?? "audio/mpeg";
+  const body = res.body;
+  if (body && typeof MediaSource !== "undefined" && MediaSource.isTypeSupported(type)) {
+    const source = new MediaSource();
+    const url = URL.createObjectURL(source);
+    source.addEventListener(
+      "sourceopen",
+      () => {
+        const buffer = source.addSourceBuffer(type);
+        const appended = () =>
+          new Promise<void>((resolve) =>
+            buffer.updating
+              ? buffer.addEventListener("updateend", () => resolve(), { once: true })
+              : resolve(),
+          );
+        void (async () => {
+          const reader = body.getReader();
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done || mine !== generation || source.readyState !== "open") break;
+              buffer.appendBuffer(value);
+              await appended();
+            }
+          } catch {
+            // A dropped connection ends the speech where it got to.
+          } finally {
+            void reader.cancel().catch(() => {});
+            await appended();
+            if (source.readyState === "open") source.endOfStream();
+          }
+        })();
+      },
+      { once: true },
+    );
+    return { audio: new Audio(url), url };
+  }
+  const url = URL.createObjectURL(await res.blob());
+  return { audio: new Audio(url), url };
+}
+
+/** Plays one piece of speech, driving the mouth from the real sound. */
+async function play(res: Response, onLevel: (l: number) => void, mine: number): Promise<boolean> {
   if (mine !== generation) return true;
-  const url = URL.createObjectURL(blob);
-  const audio = new Audio(url);
+  const { audio, url } = await audioFor(res, mine);
   playing = audio;
   let meter = 0;
   try {
@@ -283,6 +335,29 @@ async function speakInBrowser(
   handlers.onLevel(0);
 }
 
+/** A soft two-note chime: Persona is listening (rising) or has stopped (falling). */
+export function chime(up = true) {
+  try {
+    audioCtx ??= new AudioContext();
+    const ctx = audioCtx;
+    const notes = up ? [660, 990] : [880, 590];
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const at = ctx.currentTime + i * 0.09;
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(0.08, at + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.16);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(at);
+      osc.stop(at + 0.18);
+    });
+  } catch {
+    // No audio output: the orb's colour still shows it's listening.
+  }
+}
+
 /** Stops speaking now and drops anything waiting to be said. */
 export function stopSpeaking() {
   generation++;
@@ -311,7 +386,7 @@ const BARGE_OVER_OWN = 1.4;
 const BARGE_WINDOW_MS = 700;
 const BARGE_SHARE = 0.6;
 /** A pause this long ends your turn; shorter ones are just you thinking. */
-const SILENCE_MS = 1700;
+const SILENCE_MS = 1000;
 const MIN_SPEECH_MS = 350;
 /** Persona cuts in after this much uninterrupted talking. */
 export const LONG_TURN_MS = 25_000;

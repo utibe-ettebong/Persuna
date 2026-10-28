@@ -263,6 +263,19 @@ function mockPersonaTurn(user: string): {
     };
   }
 
+  if (/\b(stop|quit|end) (?:watching|following)\b/.test(lower)) {
+    return {
+      reply: "Okay, I've stopped watching.",
+      actions: [{ type: "watch_screen", on: false }],
+    };
+  }
+  if (/\b(watch|follow|look at) (?:my |the )?screen\b/.test(lower)) {
+    return {
+      reply: "Sure, I'll watch while you work.",
+      actions: [{ type: "watch_screen", on: true }],
+    };
+  }
+
   if (
     /\b(wrap(?:-| )?up|end of (?:the )?day|summar(?:y|ise|ize) (?:of )?(?:my |the )?day)\b/.test(
       lower,
