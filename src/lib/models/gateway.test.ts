@@ -155,4 +155,49 @@ describe("createGateway", () => {
     expect(await pending).toMatchObject({ modelMissing: true });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
+
+  it("asks again without the reasoning setting when the fallback model refuses it", async () => {
+    const missing = () => new Response('{"error":{"code":"model_not_found"}}', { status: 404 });
+    const noMax = new Response(
+      `{"error":{"message":"reasoning_effort 'max' is not supported for model 'muse-spark-1.2'."}}`,
+      { status: 400 },
+    );
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(noMax)
+      .mockResolvedValueOnce(ok(reply));
+    const client = createGateway(
+      () => ({
+        ...config,
+        model: "muse-spark-1.3",
+        fallbackModel: "muse-spark-1.2",
+        reasoningEffort: "max" as const,
+      }),
+      fetchImpl as typeof fetch,
+    );
+    const pending = client.complete("extract", []);
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toMatchObject({ text: "hello" });
+    const sent = fetchImpl.mock.calls.map((c) => JSON.parse((c[1] as RequestInit).body as string));
+    expect(sent.map((b) => [b.model, b.reasoning_effort ?? null])).toEqual([
+      ["muse-spark-1.3", "max"],
+      ["muse-spark-1.3", "max"],
+      ["muse-spark-1.2", "max"],
+      ["muse-spark-1.2", null],
+    ]);
+  });
+
+  it("doesn't drop the setting for other 400 errors", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response('{"error":{"message":"messages is required"}}', { status: 400 }),
+    );
+    const client = createGateway(
+      () => ({ ...config, reasoningEffort: "max" as const }),
+      fetchImpl as typeof fetch,
+    );
+    await expect(client.complete("extract", [])).rejects.toBeInstanceOf(ModelError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });

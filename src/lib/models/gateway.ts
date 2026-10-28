@@ -140,19 +140,19 @@ async function postFindingModel(
   fetchImpl: typeof fetch,
 ) {
   try {
-    return await post(config, role, messages, options, maxTokens, fetchImpl);
+    return await postKeepingEffort(config, role, messages, options, maxTokens, fetchImpl);
   } catch (error) {
     if (!(error instanceof ModelError) || !error.modelMissing) throw error;
     await backoff(1);
     try {
-      return await post(config, role, messages, options, maxTokens, fetchImpl);
+      return await postKeepingEffort(config, role, messages, options, maxTokens, fetchImpl);
     } catch (again) {
       if (!(again instanceof ModelError) || !again.modelMissing || !config.fallbackModel)
         throw again;
       console.warn(
         `[models] ${config.model} was not found at ${config.baseUrl}; using ${config.fallbackModel} for this ${role} call.`,
       );
-      return post(
+      return postKeepingEffort(
         { ...config, model: config.fallbackModel },
         role,
         messages,
@@ -161,6 +161,39 @@ async function postFindingModel(
         fetchImpl,
       );
     }
+  }
+}
+
+/**
+ * Not every model takes every reasoning setting (Meta's muse-spark-1.2 has no
+ * "max"). If the provider refuses the setting, ask again without it rather
+ * than fail.
+ */
+async function postKeepingEffort(
+  config: ModelRoleConfig,
+  role: ModelRole,
+  messages: ChatMessage[],
+  options: CompleteOptions,
+  maxTokens: number,
+  fetchImpl: typeof fetch,
+) {
+  try {
+    return await post(config, role, messages, options, maxTokens, fetchImpl);
+  } catch (error) {
+    if (!(error instanceof ModelError) || !error.effortRejected || !config.reasoningEffort) {
+      throw error;
+    }
+    console.warn(
+      `[models] ${config.model} doesn't accept reasoning_effort "${config.reasoningEffort}"; asking without it.`,
+    );
+    return post(
+      { ...config, reasoningEffort: undefined },
+      role,
+      messages,
+      options,
+      maxTokens,
+      fetchImpl,
+    );
   }
 }
 
@@ -213,6 +246,7 @@ async function post(
         `HTTP ${response.status}: ${detail}`,
         response.status === 401 || response.status === 403,
         response.status === 404 && /model_not_found|model.*not.*found/i.test(detail),
+        response.status === 400 && /reasoning_effort/i.test(detail),
       );
     }
 
@@ -241,6 +275,8 @@ export class ModelError extends Error {
     readonly keyRejected = false,
     /** The provider said the model doesn't exist (404 model_not_found). */
     readonly modelMissing = false,
+    /** The provider refused the reasoning_effort value for this model (400). */
+    readonly effortRejected = false,
   ) {
     super(`[${role} model] ${message}`);
     this.name = "ModelError";

@@ -15,7 +15,7 @@ const roleSchema = z.object({
    * For "thinking" models: how hard to think before answering (sent as
    * reasoning_effort). Unset sends nothing, which every provider accepts.
    */
-  reasoningEffort: z.enum(["none", "low", "medium", "high"]).optional(),
+  reasoningEffort: z.enum(["none", "low", "medium", "high", "max"]).optional(),
   /** Another model on the same provider, used when this one is "not found" (404). */
   fallbackModel: z.string().min(1).optional(),
 });
