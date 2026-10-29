@@ -85,7 +85,17 @@ jobs:
                 security import "$RUNNER_TEMP/persuna.p12" -k "$KEYCHAIN" -P "$SELF_CERT_PASSWORD" -T /usr/bin/codesign >/dev/null
                 rm "$RUNNER_TEMP/persuna.p12"
                 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
-                { echo "PERSUNA_MAC_IDENTITY=Persuna Desktop"; echo "PERSUNA_MAC_KEYCHAIN=$KEYCHAIN"; } >> "$GITHUB_ENV"
+                # On the search list too, so codesign finds the key wherever it looks.
+                security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+                # Sign by the certificate's fingerprint (it isn't Apple-trusted, so it's
+                # listed without -v); fail here, clearly, if it didn't load.
+                IDENTITY=$(security find-identity -p codesigning "$KEYCHAIN" | awk '/"Persuna Desktop"/ {print $2; exit}')
+                if [ -z "$IDENTITY" ]; then
+                  security find-identity -p codesigning "$KEYCHAIN"
+                  echo "::error::Persuna's signing certificate didn't load into the keychain"
+                  exit 1
+                fi
+                { echo "PERSUNA_MAC_IDENTITY=$IDENTITY"; echo "PERSUNA_MAC_KEYCHAIN=$KEYCHAIN"; } >> "$GITHUB_ENV"
               fi
             else
               echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
