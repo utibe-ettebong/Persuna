@@ -316,8 +316,18 @@ ipcMain.handle("persuna:ask-permission", async (event, kind) => {
     }
     void shell.openExternal(PRIVACY("Microphone"));
   } else if (kind === "screen") {
+    // A switch left on for an earlier build doesn't count for this one, and
+    // looks like it's on: clear it, so the switch in Settings is this build's.
+    if (systemPreferences.getMediaAccessStatus("screen") !== "granted") {
+      await forgetPermission("ScreenCapture");
+      // Asking for the screen adds this build to the list (switched off).
+      await desktopCapturer
+        .getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } })
+        .catch(() => {});
+    }
     void shell.openExternal(PRIVACY("ScreenCapture"));
   } else if (kind === "keyboard") {
+    if (!keyboardAllowed()) await forgetPermission("Accessibility");
     systemPreferences.isTrustedAccessibilityClient(true);
     void shell.openExternal(PRIVACY("Accessibility"));
   }
@@ -789,10 +799,26 @@ async function ask(options) {
  * refuses this one. Clearing it lets macOS ask again for this version.
  */
 const APP_ID = "app.persuna.persuna";
-function forgetOldScreenPermission() {
+/** Before the rename (0.6.x and older) the app's ID was this; its entries no longer count. */
+const OLD_APP_ID = "app.persuna.persona";
+function forgetPermission(service, id = APP_ID) {
   return new Promise((resolve) => {
-    execFile("/usr/bin/tccutil", ["reset", "ScreenCapture", APP_ID], () => resolve());
+    execFile("/usr/bin/tccutil", ["reset", service, id], () => resolve());
   });
+}
+const forgetOldScreenPermission = () => forgetPermission("ScreenCapture");
+
+/**
+ * Once: clear the switches left in System Settings for Persuna's pre-rename
+ * ID. They show "Persuna" as allowed, but macOS doesn't apply them to this
+ * app, which makes it look like permissions are on when they aren't.
+ */
+async function forgetPreRenamePermissions() {
+  if (!MAC || readSettings().oldIdForgotten) return;
+  for (const service of ["Accessibility", "ScreenCapture", "Microphone"]) {
+    await forgetPermission(service, OLD_APP_ID);
+  }
+  writeSettings({ oldIdForgotten: true });
 }
 
 /**
@@ -1190,6 +1216,7 @@ if (!app.requestSingleInstanceLock()) {
     warmEyes();
     createTray();
     startUpdates();
+    void forgetPreRenamePermissions();
     if (!readSettings().setupDone) openSetup();
     else sayRunning();
     if (SMOKE) {

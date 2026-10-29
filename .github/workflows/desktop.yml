@@ -58,6 +58,10 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Persuna's own code-signing certificate (not an Apple one): the same
+          # for every release, so macOS keeps permissions across updates.
+          SELF_CERT: ${{ secrets.MAC_SELF_SIGN_P12_BASE64 }}
+          SELF_CERT_PASSWORD: ${{ secrets.MAC_SELF_SIGN_PASSWORD }}
         run: |
           if [ -n "$CERT" ]; then
             echo "::add-mask::$CERT_PASSWORD"
@@ -69,6 +73,20 @@ jobs:
               # without the hardened runtime: its library validation needs a Team ID, which an
               # ad hoc signature doesn't have, so the app would crash at launch.
               echo "SIGN_ARGS=-c.mac.identity=- -c.mac.hardenedRuntime=false" >> "$GITHUB_ENV"
+              # Then sign.mac.js re-signs it with Persuna's own certificate, if there is one.
+              if [ -n "$SELF_CERT" ]; then
+                echo "::add-mask::$SELF_CERT_PASSWORD"
+                KEYCHAIN="$RUNNER_TEMP/persuna-signing.keychain-db"
+                KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+                security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+                security set-keychain-settings -lut 21600 "$KEYCHAIN"
+                security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+                echo "$SELF_CERT" | base64 --decode > "$RUNNER_TEMP/persuna.p12"
+                security import "$RUNNER_TEMP/persuna.p12" -k "$KEYCHAIN" -P "$SELF_CERT_PASSWORD" -T /usr/bin/codesign >/dev/null
+                rm "$RUNNER_TEMP/persuna.p12"
+                security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+                { echo "PERSUNA_MAC_IDENTITY=Persuna Desktop"; echo "PERSUNA_MAC_KEYCHAIN=$KEYCHAIN"; } >> "$GITHUB_ENV"
+              fi
             else
               echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
             fi
@@ -93,6 +111,10 @@ jobs:
             echo "$app"
             codesign --verify --deep --strict --verbose=2 "$app"
             codesign -dv "$app" 2>&1 | grep -E "Authority|Signature|flags"
+            # Signed with Persuna's certificate: macOS must know it by that, not by this build's hash.
+            if [ -n "${PERSUNA_MAC_IDENTITY:-}" ]; then
+              codesign -dr - "$app" 2>&1 | tee /dev/stderr | grep -q "certificate leaf"
+            fi
           done
           # A valid signature isn't enough: start the Apple silicon app (this runner's chip)
           # far enough to load Electron, which fails if macOS refuses its libraries.
