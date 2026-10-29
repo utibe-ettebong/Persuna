@@ -19,6 +19,9 @@ export default async function SkillsPage() {
         title="Your skills"
         description="Each skill is one task, done your way: trained on your examples, approved by you."
       >
+        <Link href="/skills/import" className={buttonClass("secondary")}>
+          Bring your agent&apos;s skills
+        </Link>
         <Link href="/skills/new" className={buttonClass("primary")}>
           New skill
         </Link>

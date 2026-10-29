@@ -577,3 +577,80 @@ export const jobRounds = pgTable(
   (t) => [unique().on(t.jobId, t.round)],
 );
 export type JobRound = typeof jobRounds.$inferSelect;
+
+/* ---------- Agent imports: other AI agents hand Persuna what they learned ---------- */
+
+export const agentImportStatus = pgEnum("agent_import_status", [
+  "received",
+  "training",
+  "testing",
+  "verified",
+  "failed",
+]);
+
+/**
+ * A key an outside agent (Grokbot, Musebot, Dot…) uses to send skills to one
+ * person's account. Only the SHA-256 of the token is stored; the token is shown once.
+ */
+export const agentKeys = pgTable(
+  "agent_keys",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    agentName: text("agent_name").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    /** The token's last characters, so the person can tell keys apart. */
+    tokenHint: text("token_hint").notNull(),
+    createdAt: createdAt(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [index().on(t.userId)],
+);
+
+/** What Persuna found while training and testing an imported skill. Counts and scores only. */
+export interface ImportReport {
+  examples?: number;
+  train?: number;
+  test?: number;
+  methodSteps?: number;
+  /** Names and identifiers replaced with placeholders before anything was kept. */
+  redactions?: number;
+  rules?: number;
+  version?: number;
+  score?: number | null;
+  minScore?: number;
+  outcome?: "verified" | "below_minimum" | "error";
+  problems?: string[];
+}
+
+/** One skill sent by an agent (or uploaded as a file), and how training and testing went. */
+export const agentImports = pgTable(
+  "agent_imports",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    /** Null for a file the person uploaded themselves. */
+    agentKeyId: uuid("agent_key_id").references(() => agentKeys.id, { onDelete: "set null" }),
+    agentName: text("agent_name").notNull(),
+    status: agentImportStatus("status").notNull().default("received"),
+    skillId: uuid("skill_id").references(() => skills.id, { onDelete: "set null" }),
+    /**
+     * The submission as received, held only until its examples are redacted and
+     * saved to the skill (seconds), then cleared. Never shown or reported.
+     */
+    payload: jsonb("payload"),
+    report: jsonb("report").$type<ImportReport>().notNull().default({}),
+    /** Why it failed, in a sentence. */
+    error: text("error"),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.userId, t.createdAt), index().on(t.agentKeyId, t.createdAt)],
+);
+export type AgentKey = typeof agentKeys.$inferSelect;
+export type AgentImport = typeof agentImports.$inferSelect;

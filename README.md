@@ -71,6 +71,11 @@ The design follows a framed, rule-drawn system: an off-white page inside vertica
 
 **Rent it out** (skill → Listing, Marketplace, Earnings)
 
+**Bring your agent's skills** (Skills → _Bring your agent's skills_, `/skills/import`)
+
+- Other AI agents a person uses (Grokbot, Musebot, Dot…) can send Persuna what they have learned about how that person works. The person creates a key per agent (shown once; only its SHA-256 is stored; revocable) and the agent calls `POST /api/agents/skills` with `Authorization: Bearer psk_…` and a `persuna.skill-import/v1` body: `{ agent, skill: { name, task, input?, output? }, method: string | string[], examples: [{ input, output, test? }] }` (3–50 examples, size-limited, 10 imports an hour per key, 2 in flight per account). It answers `202` with an id; `GET /api/agents/skills/<id>` returns the status (`received → training → testing → verified | failed`) and a report of counts, score and problems, never the text. The same JSON can be uploaded as a file.
+- After answering, Persuna does what it does when it's taught directly: names and identifiers are found and replaced (method only), a new skill is created with the method as its interview steps, examples are split (the agent's `test` flags, or about a quarter held back), rules are extracted and tested on the held-back examples. At `LISTING_MIN_SCORE` or more it's **verified** and the person gets a message from their Persuna with the score and a one-click _Publish and list_ (price plus their ownership declaration). The submission is held only until its redacted examples are saved, then cleared. Each stage is recorded, so an interrupted import resumes, and any failure lands as `failed` with a reason. Every step is audited.
+
 **The renter workspace** (Marketplace → an order)
 
 - A renter uploads up to 5 files (text, Word, PDF, scans, photos) and/or pastes notes. Each file is read and labelled with its name, so the work and the statement check can tell them apart.

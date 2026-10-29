@@ -1451,3 +1451,16 @@ export async function publishFromChat(
     link: { href: `/skills/${skill.slug}/listing`, label: "List it in the marketplace" },
   };
 }
+
+/**
+ * Persona tells the user something on its own initiative (an agent's skill
+ * finished training, a project needs them). It appears in their conversation
+ * like any other reply. Ids, names and scores only: never job or project text.
+ */
+export async function sayToUser(userId: string, content: string, skillId?: string | null) {
+  const [message] = await db()
+    .insert(personaMessages)
+    .values({ userId, role: "assistant", kind: "notice", content, skillId: skillId ?? null })
+    .returning();
+  return message;
+}
