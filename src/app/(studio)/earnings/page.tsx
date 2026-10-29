@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Badge, Card, PageHeader } from "@/components/ui";
-import { formatNaira } from "@/lib/market/rules";
+import { formatMoney, formatUsd } from "@/lib/money";
 import { visibleSkillIds } from "@/lib/auth/access";
 import { requireUser } from "@/lib/auth/session";
 import { earnings } from "@/lib/market/service";
@@ -18,7 +18,7 @@ const STATUS = {
 
 export default async function EarningsPage() {
   const user = await requireUser();
-  const { rows, totals } = await earnings(await visibleSkillIds(user));
+  const { rows, totals, legacyNgn } = await earnings(await visibleSkillIds(user));
 
   return (
     <div className="space-y-6">
@@ -29,11 +29,19 @@ export default async function EarningsPage() {
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Earned by you" value={formatNaira(totals.released)} />
-        <Stat label="Held until renters accept" value={formatNaira(totals.held)} />
-        <Stat label="Employer share" value={formatNaira(totals.employer)} />
-        <Stat label="Platform fees" value={formatNaira(totals.platformFees)} />
+        <Stat label="Earned by you" value={formatUsd(totals.released)} />
+        <Stat label="Held until renters accept" value={formatUsd(totals.held)} />
+        <Stat label="Employer share" value={formatUsd(totals.employer)} />
+        <Stat label="Platform fees" value={formatUsd(totals.platformFees)} />
       </div>
+      {legacyNgn && (
+        <p className="text-sm text-muted">
+          Before the marketplace moved to US dollars you earned{" "}
+          {formatMoney(legacyNgn.released, "NGN")} in naira
+          {legacyNgn.held ? `, with ${formatMoney(legacyNgn.held, "NGN")} still held` : ""}. Those
+          payments are shown in naira below.
+        </p>
+      )}
 
       {rows.length === 0 ? (
         <p className="text-sm text-muted">No rented jobs yet.</p>
@@ -63,12 +71,14 @@ export default async function EarningsPage() {
                     )}
                   </td>
                   <td className="p-3">{t.renterName}</td>
-                  <td className="p-3 text-right tabular-nums">{formatNaira(t.amountNgn)}</td>
+                  <td className="p-3 text-right tabular-nums">
+                    {formatMoney(t.amountCents, t.currency)}
+                  </td>
                   <td className="p-3 text-right tabular-nums text-muted">
-                    {formatNaira(t.platformFeeNgn)}
+                    {formatMoney(t.platformFeeCents, t.currency)}
                   </td>
                   <td className="p-3 text-right font-medium tabular-nums">
-                    {formatNaira(t.ownerShareNgn)}
+                    {formatMoney(t.ownerShareCents, t.currency)}
                   </td>
                   <td className="p-3">
                     <Badge tone={STATUS[t.status].tone}>{STATUS[t.status].label}</Badge>

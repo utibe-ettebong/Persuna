@@ -6,7 +6,7 @@ import { ScoreBadge } from "@/components/score-trend";
 import { Markdown } from "@/components/markdown";
 import { Badge, Card, Field, inputClass, PageHeader } from "@/components/ui";
 import { orNotFound } from "@/lib/load";
-import { formatNaira } from "@/lib/market/rules";
+import { formatUsd } from "@/lib/money";
 import { getActiveListing } from "@/lib/market/service";
 import { env } from "@/env";
 
@@ -52,7 +52,7 @@ export default async function ListingDetailPage({ params }: Params) {
 
         <Card className="p-5">
           <h2 className="font-display text-lg font-medium tracking-[-0.02em]">
-            Rent for one task · {formatNaira(listing.priceNgn)}
+            Rent for one task · {formatUsd(listing.priceCents)}
           </h2>
           <p className="mt-1 text-sm text-muted">
             Payment is held until you accept the result.{" "}
@@ -62,7 +62,7 @@ export default async function ListingDetailPage({ params }: Params) {
           </p>
           <ActionForm
             action={rentAction}
-            label={`Submit and pay ${formatNaira(listing.priceNgn)}`}
+            label={`Submit and pay ${formatUsd(listing.priceCents)}`}
             pendingLabel="Submitting…"
             className="mt-4 space-y-4"
           >
@@ -91,12 +91,12 @@ export default async function ListingDetailPage({ params }: Params) {
                 className="mt-1 block w-full text-sm text-muted file:mr-3 file:rounded file:border file:border-line file:bg-subtle file:px-2 file:py-1"
               />
             </Field>
-            {listing.premiumReviewNgn != null && (
+            {listing.premiumReviewCents != null && (
               <label className="flex items-start gap-2 text-sm">
                 <input type="checkbox" name="premiumReview" className="mt-1" />
                 <span>
                   Guarantee the owner personally reviews my result (+
-                  {formatNaira(listing.premiumReviewNgn)})
+                  {formatUsd(listing.premiumReviewCents)})
                 </span>
               </label>
             )}

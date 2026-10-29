@@ -5,7 +5,8 @@ import { ActionForm } from "@/components/action-form";
 import { Badge, Card, Field, inputClass, PageHeader, SkillTabs } from "@/components/ui";
 import { env } from "@/env";
 import { orNotFound } from "@/lib/load";
-import { formatNaira, splitPayment } from "@/lib/market/rules";
+import { splitPayment } from "@/lib/market/rules";
+import { dollarsInput, formatUsd } from "@/lib/money";
 import { readiness } from "@/lib/market/service";
 import { getSkillBySlug, listPairs } from "@/lib/skill/service";
 
@@ -25,7 +26,7 @@ export default async function ListingPage({ params }: Params) {
   const feePercent = env().PLATFORM_FEE_PERCENT;
   const example = listing
     ? splitPayment(
-        listing.priceNgn,
+        listing.priceCents,
         feePercent,
         listing.ownerType === "employee" ? (listing.employerSharePercent ?? 0) : 0,
       )
@@ -71,14 +72,12 @@ export default async function ListingPage({ params }: Params) {
               />
             </Field>
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Price per task (₦)">
+              <Field label="Price per task (US$)" hint="e.g. 12 or 12.50">
                 <input
-                  name="priceNgn"
-                  type="number"
-                  min={100}
-                  step={100}
+                  name="price"
+                  inputMode="decimal"
                   required
-                  defaultValue={listing?.priceNgn ?? 5000}
+                  defaultValue={dollarsInput(listing?.priceCents ?? 1000)}
                   className={inputClass}
                 />
               </Field>
@@ -134,15 +133,13 @@ export default async function ListingPage({ params }: Params) {
               </Field>
             </fieldset>
             <Field
-              label="Guaranteed owner review (₦ extra)"
+              label="Guaranteed owner review (US$ extra)"
               hint="optional; leave empty to not offer it"
             >
               <input
-                name="premiumReviewNgn"
-                type="number"
-                min={0}
-                step={100}
-                defaultValue={listing?.premiumReviewNgn ?? ""}
+                name="premiumReview"
+                inputMode="decimal"
+                defaultValue={dollarsInput(listing?.premiumReviewCents)}
                 className={inputClass}
               />
             </Field>
@@ -236,15 +233,15 @@ export default async function ListingPage({ params }: Params) {
             <Card className="p-4 text-sm">
               <h2 className="font-display text-lg font-medium tracking-[-0.02em]">Per task</h2>
               <dl className="mt-2 space-y-1">
-                <Row label="Renter pays" value={formatNaira(example.amountNgn)} />
+                <Row label="Renter pays" value={formatUsd(example.amountCents)} />
                 <Row
                   label={`Platform fee (${feePercent}%)`}
-                  value={`−${formatNaira(example.platformFeeNgn)}`}
+                  value={`−${formatUsd(example.platformFeeCents)}`}
                 />
-                {example.employerShareNgn > 0 && (
-                  <Row label="Employer share" value={`−${formatNaira(example.employerShareNgn)}`} />
+                {example.employerShareCents > 0 && (
+                  <Row label="Employer share" value={`−${formatUsd(example.employerShareCents)}`} />
                 )}
-                <Row label="You receive" value={formatNaira(example.ownerShareNgn)} strong />
+                <Row label="You receive" value={formatUsd(example.ownerShareCents)} strong />
               </dl>
               <p className="mt-2 text-xs text-muted">
                 {livePayments

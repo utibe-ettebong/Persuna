@@ -1,14 +1,16 @@
 /**
  * Minimal Paystack client: start a checkout, verify it, refund it, and check
  * webhook signatures. Endpoint shapes follow Paystack's OpenAPI spec
- * (PaystackOSS/openapi). Amounts go to Paystack in kobo.
+ * (PaystackOSS/openapi). Payments are in US dollars; amounts go to and come
+ * from Paystack in cents, the currency's minor unit, so nothing is converted.
+ * (Charging in USD needs USD enabled on the Paystack account.)
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
 const API = "https://api.paystack.co";
 
-export const toKobo = (naira: number) => Math.round(naira * 100);
+export const PAYSTACK_CURRENCY = "USD";
 
 const initResponse = z.object({
   status: z.boolean(),
@@ -31,12 +33,14 @@ const refundResponse = z.object({ status: z.boolean(), message: z.string() });
 export interface PaystackClient {
   initialize(input: {
     email: string;
-    amountNgn: number;
+    /** US cents. */
+    amountCents: number;
     reference: string;
     callbackUrl: string;
     metadata?: Record<string, string>;
   }): Promise<{ authorizationUrl: string }>;
-  verify(reference: string): Promise<{ paid: boolean; amountNgn: number; currency: string }>;
+  /** The amount is in the currency's minor unit (cents for USD). */
+  verify(reference: string): Promise<{ paid: boolean; amountMinor: number; currency: string }>;
   refund(reference: string, note: string): Promise<void>;
 }
 
@@ -58,13 +62,16 @@ export function createPaystack(secretKey: string, fetchImpl: typeof fetch = fetc
   }
 
   return {
-    async initialize({ email, amountNgn, reference, callbackUrl, metadata }) {
+    async initialize({ email, amountCents, reference, callbackUrl, metadata }) {
+      if (!Number.isInteger(amountCents) || amountCents <= 0) {
+        throw new Error("Payment amount must be a whole number of cents");
+      }
       const res = await call("/transaction/initialize", initResponse, {
         method: "POST",
         body: JSON.stringify({
           email,
-          amount: toKobo(amountNgn),
-          currency: "NGN",
+          amount: amountCents,
+          currency: PAYSTACK_CURRENCY,
           reference,
           callback_url: callbackUrl,
           metadata,
@@ -79,7 +86,7 @@ export function createPaystack(secretKey: string, fetchImpl: typeof fetch = fetc
       );
       return {
         paid: res.data.status === "success",
-        amountNgn: res.data.amount / 100,
+        amountMinor: res.data.amount,
         currency: res.data.currency,
       };
     },
@@ -109,3 +116,18 @@ export const webhookEvent = z.object({
   event: z.string(),
   data: z.object({ reference: z.string(), status: z.string().optional() }).loose(),
 });
+
+/**
+ * Whether a verified Paystack payment is exactly what was asked for: paid, in
+ * US dollars, for the exact number of cents.
+ */
+export function paymentMatches(
+  result: { paid: boolean; amountMinor: number; currency: string },
+  expectedCents: number,
+): boolean {
+  return (
+    result.paid &&
+    result.currency.toUpperCase() === PAYSTACK_CURRENCY &&
+    result.amountMinor === expectedCents
+  );
+}

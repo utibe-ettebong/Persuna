@@ -3,7 +3,8 @@ import { employerDecisionAction } from "@/app/actions/market";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Card, Field, inputClass, PageHeader } from "@/components/ui";
 import { orNotFound } from "@/lib/load";
-import { formatNaira, splitPayment } from "@/lib/market/rules";
+import { splitPayment } from "@/lib/market/rules";
+import { formatUsd } from "@/lib/money";
 import { getEmployerRequest } from "@/lib/market/service";
 import { env } from "@/env";
 
@@ -19,7 +20,7 @@ type Params = { params: Promise<{ token: string }> };
 export default async function EmployerApprovalPage({ params }: Params) {
   const { token } = await params;
   const { listing, skill } = await orNotFound(() => getEmployerRequest(token));
-  const example = splitPayment(listing.priceNgn, env().PLATFORM_FEE_PERCENT);
+  const example = splitPayment(listing.priceCents, env().PLATFORM_FEE_PERCENT);
 
   return (
     <div className="max-w-2xl space-y-6">
@@ -34,8 +35,8 @@ export default async function EmployerApprovalPage({ params }: Params) {
         </p>
         <p className="text-muted">{listing.description}</p>
         <p>
-          <span className="text-muted">Price per task:</span> {formatNaira(listing.priceNgn)}. After
-          the platform fee, {formatNaira(example.ownerShareNgn)} per task is split between your
+          <span className="text-muted">Price per task:</span> {formatUsd(listing.priceCents)}. After
+          the platform fee, {formatUsd(example.ownerShareCents)} per task is split between your
           employee and you.
         </p>
         <p className="text-muted">

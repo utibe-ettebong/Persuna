@@ -31,7 +31,13 @@ export async function refundForJob(jobId: string, note: string, actor: Actor) {
     action: "payment.refunded",
     entityType: "transaction",
     entityId: txn.id,
-    details: { jobId, amountNgn: txn.amountNgn, provider: txn.provider, note: note.slice(0, 120) },
+    details: {
+      jobId,
+      amountCents: txn.amountCents,
+      currency: txn.currency,
+      provider: txn.provider,
+      note: note.slice(0, 120),
+    },
   });
   return txn;
 }

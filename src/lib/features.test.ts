@@ -11,7 +11,7 @@ import {
 } from "./jobs/trust";
 import { createMockClient } from "./models/mock";
 import { mockTranscriber, readAudio } from "./models/transcribe";
-import { createPaystack, toKobo, validWebhookSignature } from "./payments/paystack";
+import { createPaystack, paymentMatches, validWebhookSignature } from "./payments/paystack";
 import { findNames, proposeFromNotes, selfCheck } from "./skill/engine";
 import { answeredQuestions, interviewText } from "./skill/interview";
 import { redactTogether, scanText } from "./skill/redact";
@@ -189,7 +189,7 @@ describe("interview and voice", () => {
 describe("Paystack", () => {
   const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
 
-  it("initialises a checkout in kobo with the reference and callback", async () => {
+  it("initialises a USD checkout in cents with the reference and callback", async () => {
     const fetchImpl = vi.fn(async () =>
       ok({
         status: true,
@@ -203,7 +203,7 @@ describe("Paystack", () => {
     );
     const res = await createPaystack("sk_test_123456", fetchImpl as typeof fetch).initialize({
       email: "a@b.co",
-      amountNgn: 5000,
+      amountCents: 1250,
       reference: "persuna-1",
       callbackUrl: "https://app.test/cb",
     });
@@ -211,24 +211,24 @@ describe("Paystack", () => {
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://api.paystack.co/transaction/initialize");
     expect(JSON.parse(init.body as string)).toMatchObject({
-      amount: 500000,
-      currency: "NGN",
+      amount: 1250,
+      currency: "USD",
       reference: "persuna-1",
       callback_url: "https://app.test/cb",
     });
   });
 
-  it("reports verified payments in naira", async () => {
+  it("reports verified payments in cents", async () => {
     const fetchImpl = vi.fn(async () =>
       ok({
         status: true,
-        data: { status: "success", reference: "r", amount: 500000, currency: "NGN" },
+        data: { status: "success", reference: "r", amount: 1250, currency: "USD" },
       }),
     );
     expect(await createPaystack("sk_test_123456", fetchImpl as typeof fetch).verify("r")).toEqual({
       paid: true,
-      amountNgn: 5000,
-      currency: "NGN",
+      amountMinor: 1250,
+      currency: "USD",
     });
   });
 
@@ -250,8 +250,23 @@ describe("Paystack", () => {
     expect(validWebhookSignature(body, null, "sk_test_secret")).toBe(false);
   });
 
-  it("converts naira to kobo", () => {
-    expect(toKobo(5000)).toBe(500000);
+  it("accepts a payment only in USD for the exact cents", () => {
+    const paid = { paid: true, amountMinor: 1250, currency: "USD" };
+    expect(paymentMatches(paid, 1250)).toBe(true);
+    expect(paymentMatches(paid, 1251)).toBe(false);
+    expect(paymentMatches({ ...paid, currency: "NGN" }, 1250)).toBe(false);
+    expect(paymentMatches({ ...paid, paid: false }, 1250)).toBe(false);
+  });
+
+  it("refuses to start a checkout for a fraction of a cent", async () => {
+    await expect(
+      createPaystack("sk_test_123456", vi.fn() as unknown as typeof fetch).initialize({
+        email: "a@b.co",
+        amountCents: 12.5,
+        reference: "persuna-1",
+        callbackUrl: "https://app.test/cb",
+      }),
+    ).rejects.toThrow(/whole number of cents/);
   });
 });
 

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { PersonaOrb } from "@/components/persona/orb";
 import { ScoreBadge } from "@/components/score-trend";
 import { Badge, Card, PageHeader } from "@/components/ui";
-import { formatNaira } from "@/lib/market/rules";
+import { formatUsd } from "@/lib/money";
 import { listActiveListings } from "@/lib/market/service";
 import { personasByOwner } from "@/lib/persona/service";
 
@@ -53,7 +53,7 @@ export default async function MarketPage() {
                     <span>
                       <span className="label-mono block text-faint">Per task</span>
                       <span className="font-display text-2xl font-medium tabular-nums tracking-[-0.02em]">
-                        {formatNaira(listing.priceNgn)}
+                        {formatUsd(listing.priceCents)}
                       </span>
                     </span>
                     <span className="text-right">

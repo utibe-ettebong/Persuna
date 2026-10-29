@@ -315,13 +315,14 @@ export const listings = pgTable(
       .references(() => skills.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     description: text("description").notNull(),
-    priceNgn: integer("price_ngn").notNull(),
+    /** Price per task in US cents. */
+    priceCents: integer("price_cents").notNull(),
     turnaroundHours: integer("turnaround_hours").notNull(),
     sampleOutput: text("sample_output").notNull(),
     ownerType: ownerType("owner_type").notNull(),
     ownershipDeclaredAt: timestamp("ownership_declared_at", { withTimezone: true }),
-    /** Extra a renter pays for guaranteed owner review. Null: not offered. */
-    premiumReviewNgn: integer("premium_review_ngn"),
+    /** Extra a renter pays for guaranteed owner review, in US cents. Null: not offered. */
+    premiumReviewCents: integer("premium_review_cents"),
     employerName: text("employer_name"),
     employerEmail: text("employer_email"),
     /** Employer's share of the owner's earnings, set by the employer when approving. */
@@ -334,32 +335,51 @@ export const listings = pgTable(
     createdAt: createdAt(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [check("price_positive", sql`${t.priceNgn} > 0`)],
+  (t) => [
+    check("price_cents_positive", sql`${t.priceCents} > 0`),
+    check(
+      "premium_review_cents_not_negative",
+      sql`${t.premiumReviewCents} is null or ${t.premiumReviewCents} >= 0`,
+    ),
+  ],
 );
 
-/** Escrow for one rented job. Amounts are whole naira. Kept after the job is purged. */
-export const transactions = pgTable("transactions", {
-  id: id(),
-  jobId: uuid("job_id")
-    .unique()
-    .references(() => jobs.id, { onDelete: "set null" }),
-  listingId: uuid("listing_id")
-    .notNull()
-    .references(() => listings.id),
-  renterUserId: text("renter_user_id").references(() => authUsers.id, { onDelete: "set null" }),
-  renterName: text("renter_name").notNull(),
-  renterEmail: text("renter_email"),
-  amountNgn: integer("amount_ngn").notNull(),
-  platformFeeNgn: integer("platform_fee_ngn").notNull(),
-  ownerShareNgn: integer("owner_share_ngn").notNull(),
-  employerShareNgn: integer("employer_share_ngn").notNull().default(0),
-  premiumReview: boolean("premium_review").notNull().default(false),
-  provider: paymentProvider("provider").notNull().default("mock"),
-  providerReference: text("provider_reference").unique(),
-  status: escrowStatus("status").notNull().default("held"),
-  createdAt: createdAt(),
-  settledAt: timestamp("settled_at", { withTimezone: true }),
-});
+/**
+ * Escrow for one rented job. Amounts are integer minor units of `currency`:
+ * US cents for every payment since the switch to dollars, kobo for the naira
+ * payments made before it. Kept after the job is purged.
+ */
+export const transactions = pgTable(
+  "transactions",
+  {
+    id: id(),
+    jobId: uuid("job_id")
+      .unique()
+      .references(() => jobs.id, { onDelete: "set null" }),
+    listingId: uuid("listing_id")
+      .notNull()
+      .references(() => listings.id),
+    renterUserId: text("renter_user_id").references(() => authUsers.id, { onDelete: "set null" }),
+    renterName: text("renter_name").notNull(),
+    renterEmail: text("renter_email"),
+    amountCents: integer("amount_cents").notNull(),
+    platformFeeCents: integer("platform_fee_cents").notNull(),
+    ownerShareCents: integer("owner_share_cents").notNull(),
+    employerShareCents: integer("employer_share_cents").notNull().default(0),
+    /** ISO 4217 code: USD, or NGN for payments made before the switch to dollars. */
+    currency: text("currency").notNull().default("USD"),
+    premiumReview: boolean("premium_review").notNull().default(false),
+    provider: paymentProvider("provider").notNull().default("mock"),
+    providerReference: text("provider_reference").unique(),
+    status: escrowStatus("status").notNull().default("held"),
+    createdAt: createdAt(),
+    settledAt: timestamp("settled_at", { withTimezone: true }),
+  },
+  (t) => [
+    check("amount_cents_positive", sql`${t.amountCents} > 0`),
+    check("currency_known", sql`${t.currency} in ('USD', 'NGN')`),
+  ],
+);
 
 /**
  * Who did what, when. Kept independent of the rows it describes (no foreign

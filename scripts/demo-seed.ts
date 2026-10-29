@@ -55,12 +55,12 @@ async function main() {
     title: "Meeting notes into polished minutes",
     description:
       "Send raw meeting notes and get finished minutes in a consistent house format: header block, decisions in bold, and an action table with owners and due dates.",
-    priceNgn: 5000,
+    priceCents: 1200,
     turnaroundHours: 24,
     sampleOutput: sample,
     ownerType: "freelancer",
     declareOwnership: true,
-    premiumReviewNgn: 1500,
+    premiumReviewCents: 500,
   });
   const ready = await readiness(skill.id);
   if (ready.ready) {

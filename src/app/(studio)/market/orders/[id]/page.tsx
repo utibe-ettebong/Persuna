@@ -6,7 +6,7 @@ import { Badge, buttonClass, Card, Field, inputClass, PageHeader } from "@/compo
 import { assertOrderAccess } from "@/lib/auth/access";
 import { requireUser } from "@/lib/auth/session";
 import { orNotFound } from "@/lib/load";
-import { formatNaira } from "@/lib/market/rules";
+import { formatMoney } from "@/lib/money";
 import { getOrder } from "@/lib/market/service";
 
 export const dynamic = "force-dynamic";
@@ -40,7 +40,7 @@ export default async function OrderPage({ params, searchParams }: Params) {
       <PageHeader
         back={{ href: "/market", label: "Marketplace" }}
         title={order.listingTitle}
-        description={`Order for ${order.renterName} · ${formatNaira(order.amountNgn)}`}
+        description={`Order for ${order.renterName} · ${formatMoney(order.amountCents, order.currency)}`}
       />
       <div className="flex flex-wrap gap-2">
         {order.status === "awaiting_payment" && <Badge>waiting for payment</Badge>}

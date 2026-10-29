@@ -4,7 +4,7 @@ import { PersonaOrb } from "@/components/persona/orb";
 import { ScoreBadge } from "@/components/score-trend";
 import { Badge, Card, PageHeader } from "@/components/ui";
 import { orNotFound } from "@/lib/load";
-import { formatNaira } from "@/lib/market/rules";
+import { formatUsd } from "@/lib/money";
 import { publicProfile } from "@/lib/persona/service";
 
 export const dynamic = "force-dynamic";
@@ -86,7 +86,7 @@ export default async function PublicPersonaPage({ params }: Params) {
                   <div className="flex items-end justify-between border-t border-line pt-3">
                     <span>
                       <span className="label-mono block text-faint">Per task</span>
-                      <span className="font-display text-xl">{formatNaira(s.priceNgn)}</span>
+                      <span className="font-display text-xl">{formatUsd(s.priceCents)}</span>
                     </span>
                     <span className="text-right">
                       <span className="label-mono block text-faint">Score</span>

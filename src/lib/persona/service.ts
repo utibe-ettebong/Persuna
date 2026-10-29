@@ -1148,7 +1148,7 @@ export async function publicProfile(handle: string) {
         listingId: listing.id,
         title: listing.title,
         description: listing.description,
-        priceNgn: listing.priceNgn,
+        priceCents: listing.priceCents,
         turnaroundHours: listing.turnaroundHours,
         trustLevel: skill.trustLevel,
         score: await publishedScore(skill),

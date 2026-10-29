@@ -17,29 +17,38 @@ import {
   setListingActive,
 } from "@/lib/market/service";
 import { createModelClient } from "@/lib/models";
+import { dollarsField } from "@/lib/money";
 
 const listingForm = z.object({
   skillSlug: slugField,
   title: z.string().trim().min(5, "Give the listing a title").max(120),
   description: z.string().trim().min(20, "Describe what renters get (20+ characters)").max(2000),
-  priceNgn: z.coerce.number().int("Whole naira only").min(100, "Minimum ₦100").max(10_000_000),
+  /** Dollars as typed ("12.50"), parsed to cents. */
+  price: dollarsField("Price", 100, 100_000_00),
   turnaroundHours: z.coerce.number().int().min(1).max(720),
   sampleOutput: z.string().trim().min(20, "Add an anonymised sample output").max(20_000),
   ownerType: z.enum(["freelancer", "employee", "organisation"]),
   declareOwnership: z.literal("on").optional(),
-  premiumReviewNgn: z
-    .union([z.literal(""), z.coerce.number().int("Whole naira only").min(0).max(10_000_000)])
+  premiumReview: z
+    .union([z.literal("").transform(() => null), dollarsField("Owner review extra", 0, 100_000_00)])
     .optional()
-    .transform((v) => (v === "" || v === undefined ? null : v)),
+    .transform((v) => v ?? null),
   employerName: z.string().trim().max(120).optional(),
   employerEmail: z.union([z.literal(""), z.email("Enter a valid employer email")]).optional(),
 });
 
 export async function saveListingAction(_: ActionState, form: FormData): Promise<ActionState> {
   return attempt(async () => {
-    const { skillSlug, declareOwnership, ...fields } = listingForm.parse(Object.fromEntries(form));
+    const { skillSlug, declareOwnership, price, premiumReview, ...fields } = listingForm.parse(
+      Object.fromEntries(form),
+    );
     const skill = await ownedSkillBySlug(await requireUser(), skillSlug);
-    await saveListing(skill.id, { ...fields, declareOwnership: declareOwnership === "on" });
+    await saveListing(skill.id, {
+      ...fields,
+      priceCents: price,
+      premiumReviewCents: premiumReview,
+      declareOwnership: declareOwnership === "on",
+    });
     revalidatePath(`/skills/${skillSlug}/listing`);
     return `/skills/${skillSlug}/listing`;
   });

@@ -1,21 +1,21 @@
 /**
- * Splits a renter's payment. The platform fee rounds to the nearest naira; the
- * rest is the owner's share, of which an employer (for employee listings)
- * takes `employerPercent`. No naira is lost to rounding.
+ * Splits a payment in US cents. The platform fee rounds to the nearest cent;
+ * the rest is the owner's (or seller's) share, of which an employer (for
+ * employee listings) takes `employerPercent`. No cent is lost to rounding.
  */
-export function splitPayment(amountNgn: number, feePercent: number, employerPercent = 0) {
-  if (!Number.isInteger(amountNgn) || amountNgn <= 0)
-    throw new Error("Price must be a whole number of naira above zero");
+export function splitPayment(amountCents: number, feePercent: number, employerPercent = 0) {
+  if (!Number.isInteger(amountCents) || amountCents <= 0)
+    throw new Error("Price must be a whole number of cents above zero");
   if (employerPercent < 0 || employerPercent > 100)
     throw new Error("Employer share must be 0–100%");
-  const platformFeeNgn = Math.round((amountNgn * feePercent) / 100);
-  const earnings = amountNgn - platformFeeNgn;
-  const employerShareNgn = Math.round((earnings * employerPercent) / 100);
+  const platformFeeCents = Math.round((amountCents * feePercent) / 100);
+  const earnings = amountCents - platformFeeCents;
+  const employerShareCents = Math.round((earnings * employerPercent) / 100);
   return {
-    amountNgn,
-    platformFeeNgn,
-    employerShareNgn,
-    ownerShareNgn: earnings - employerShareNgn,
+    amountCents,
+    platformFeeCents,
+    employerShareCents,
+    ownerShareCents: earnings - employerShareCents,
   };
 }
 
@@ -63,8 +63,6 @@ export function listingRequirements(input: {
     },
   ];
 }
-
-export const formatNaira = (n: number) => `₦${n.toLocaleString("en-NG")}`;
 
 /** How many times a renter may ask for changes to one order before accepting it. */
 export const MAX_REVISIONS = 2;

@@ -14,7 +14,7 @@ import { env, paystackConfig } from "@/env";
 import { audit } from "@/lib/audit";
 import { createJob, draftJob, jobRoundsFor, openJob, reviseJob } from "@/lib/jobs/service";
 import type { ModelClient } from "@/lib/models/gateway";
-import { createPaystack } from "@/lib/payments/paystack";
+import { createPaystack, paymentMatches } from "@/lib/payments/paystack";
 import { NotFoundError, publishedScore } from "@/lib/skill/service";
 import { normalizeText } from "@/lib/text";
 import { MAX_REVISIONS, listingRequirements, revisionAllowed, splitPayment } from "./rules";
@@ -24,12 +24,13 @@ const { listings, skills, jobs, transactions } = schema;
 export interface ListingInput {
   title: string;
   description: string;
-  priceNgn: number;
+  /** US cents. */
+  priceCents: number;
   turnaroundHours: number;
   sampleOutput: string;
   ownerType: "freelancer" | "employee" | "organisation";
   declareOwnership: boolean;
-  premiumReviewNgn?: number | null;
+  premiumReviewCents?: number | null;
   employerName?: string;
   employerEmail?: string;
 }
@@ -84,12 +85,12 @@ export async function saveListing(skillId: string, input: ListingInput) {
   const values = {
     title: input.title,
     description: input.description,
-    priceNgn: input.priceNgn,
+    priceCents: input.priceCents,
     turnaroundHours: input.turnaroundHours,
     sampleOutput: input.sampleOutput,
     ownerType: input.ownerType,
     ownershipDeclaredAt,
-    premiumReviewNgn: input.premiumReviewNgn ?? null,
+    premiumReviewCents: input.premiumReviewCents ?? null,
     ...employer,
     updatedAt: new Date(),
   };
@@ -112,7 +113,7 @@ export async function saveListing(skillId: string, input: ListingInput) {
     entityId: row.id,
     skillId,
     details: {
-      priceNgn: row.priceNgn,
+      priceCents: row.priceCents,
       ownerType: row.ownerType,
       ownershipDeclared: Boolean(ownershipDeclaredAt),
       employerApprovalRequested:
@@ -247,8 +248,8 @@ export async function rentSkill(
   const { listing, skill } = await getActiveListing(listingId);
   const { ready } = await readiness(skill.id);
   if (!ready) throw new Error("This listing isn't available right now");
-  const premium = rent.premiumReview && listing.premiumReviewNgn != null;
-  const amount = listing.priceNgn + (premium ? (listing.premiumReviewNgn ?? 0) : 0);
+  const premium = rent.premiumReview && listing.premiumReviewCents != null;
+  const amount = listing.priceCents + (premium ? (listing.premiumReviewCents ?? 0) : 0);
   const split = splitPayment(
     amount,
     env().PLATFORM_FEE_PERCENT,
@@ -268,6 +269,7 @@ export async function rentSkill(
     renterName: rent.renterName.trim(),
     renterEmail: rent.renterEmail.trim().toLowerCase(),
     premiumReview: premium,
+    currency: "USD" as const,
     ...split,
   };
 
@@ -278,7 +280,11 @@ export async function rentSkill(
       .insert(transactions)
       .values({ ...ledger, jobId: row.id, provider: "mock", status: "held" })
       .returning();
-    await auditPayment("payment.held", txn.id, skill.id, { amountNgn: amount, provider: "mock" });
+    await auditPayment("payment.held", txn.id, skill.id, {
+      amountCents: amount,
+      currency: "USD",
+      provider: "mock",
+    });
     return { jobId: row.id, redirectUrl: null };
   }
 
@@ -296,13 +302,14 @@ export async function rentSkill(
     .returning();
   const { authorizationUrl } = await createPaystack(paystack.secretKey).initialize({
     email: ledger.renterEmail,
-    amountNgn: amount,
+    amountCents: amount,
     reference,
     callbackUrl: `${paystack.appUrl}/market/orders/${row.id}/paid`,
     metadata: { jobId: row.id, listingId },
   });
   await auditPayment("payment.started", txn.id, skill.id, {
-    amountNgn: amount,
+    amountCents: amount,
+    currency: "USD",
     provider: "paystack",
   });
   return { jobId: row.id, redirectUrl: authorizationUrl };
@@ -323,7 +330,7 @@ export async function confirmPayment(client: ModelClient, reference: string) {
 
   const result = await createPaystack(paystack.secretKey).verify(reference);
   if (!result.paid) throw new Error("The payment hasn't completed");
-  if (result.currency !== "NGN" || Math.round(result.amountNgn) !== txn.amountNgn) {
+  if (txn.currency !== "USD" || !paymentMatches(result, txn.amountCents)) {
     throw new Error("The amount paid doesn't match the order");
   }
   const [held] = await db()
@@ -333,7 +340,8 @@ export async function confirmPayment(client: ModelClient, reference: string) {
     .returning();
   if (!held) return txn; // another request confirmed it first
   await auditPayment("payment.held", txn.id, null, {
-    amountNgn: txn.amountNgn,
+    amountCents: txn.amountCents,
+    currency: txn.currency,
     provider: "paystack",
   });
 
@@ -384,7 +392,8 @@ export async function getOrder(jobId: string) {
     rating: job.rating,
     complaint: job.complaint,
     createdAt: job.createdAt,
-    amountNgn: transaction.amountNgn,
+    amountCents: transaction.amountCents,
+    currency: transaction.currency,
     premiumReview: transaction.premiumReview,
     provider: transaction.provider,
     escrow: transaction.status,
@@ -437,7 +446,11 @@ export async function acceptOrder(jobId: string, rating: number, comment: string
       .update(transactions)
       .set({ status: "released", settledAt: new Date() })
       .where(and(eq(transactions.jobId, jobId), eq(transactions.status, "held")))
-      .returning({ id: transactions.id, ownerShareNgn: transactions.ownerShareNgn });
+      .returning({
+        id: transactions.id,
+        ownerShareCents: transactions.ownerShareCents,
+        currency: transactions.currency,
+      });
     if (!txn) throw new Error("This order has already been settled");
     await audit(
       {
@@ -446,7 +459,7 @@ export async function acceptOrder(jobId: string, rating: number, comment: string
         entityType: "transaction",
         entityId: txn.id,
         skillId: job.skillId,
-        details: { rating, ownerShareNgn: txn.ownerShareNgn },
+        details: { rating, ownerShareCents: txn.ownerShareCents, currency: txn.currency },
       },
       tx,
     );
@@ -469,15 +482,24 @@ export async function earnings(skillIds: string[] | null) {
           : sql`false`,
     )
     .orderBy(desc(transactions.createdAt));
-  const sum = (status: string, key: "ownerShareNgn" | "platformFeeNgn" | "employerShareNgn") =>
-    rows.filter((r) => r.transaction.status === status).reduce((n, r) => n + r.transaction[key], 0);
+  type Key = "ownerShareCents" | "platformFeeCents" | "employerShareCents";
+  const totalsIn = (currency: string) => {
+    const sum = (status: string, key: Key) =>
+      rows
+        .filter((r) => r.transaction.status === status && r.transaction.currency === currency)
+        .reduce((n, r) => n + r.transaction[key], 0);
+    return {
+      held: sum("held", "ownerShareCents"),
+      released: sum("released", "ownerShareCents"),
+      employer: sum("released", "employerShareCents"),
+      platformFees: sum("released", "platformFeeCents"),
+    };
+  };
   return {
     rows,
-    totals: {
-      held: sum("held", "ownerShareNgn"),
-      released: sum("released", "ownerShareNgn"),
-      employer: sum("released", "employerShareNgn"),
-      platformFees: sum("released", "platformFeeNgn"),
-    },
+    /** US dollars, in cents. */
+    totals: totalsIn("USD"),
+    /** Naira payments made before the switch to dollars (kobo), or null when there are none. */
+    legacyNgn: rows.some((r) => r.transaction.currency === "NGN") ? totalsIn("NGN") : null,
   };
 }
