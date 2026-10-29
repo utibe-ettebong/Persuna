@@ -98,6 +98,9 @@ jobs:
           # far enough to load Electron, which fails if macOS refuses its libraries.
           ELECTRON_RUN_AS_NODE=1 "dist/mac-arm64/Persuna.app/Contents/MacOS/Persuna" \
             -e 'console.log("Persuna starts: Electron", process.versions.electron)'
+          # Start Persuna itself (not just Electron) and let its launch work run: a
+          # crash at startup fails the build instead of reaching people.
+          PERSUNA_SMOKE_TEST=1 "dist/mac-arm64/Persuna.app/Contents/MacOS/Persuna"
           # The screen reader is bundled and runs (it reports whether it's allowed to read).
           "dist/mac-arm64/Persuna.app/Contents/Resources/bin/persuna-eyes" trusted
           # The talk-key listener is a native module: it must load from the packaged app.
