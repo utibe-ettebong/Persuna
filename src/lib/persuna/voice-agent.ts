@@ -176,6 +176,9 @@ export async function answerAgentCall(
   }
 }
 
+/** The speech model for an English ElevenLabs agent. */
+export const AGENT_TTS_MODEL = "eleven_flash_v2";
+
 /**
  * Creates the ElevenLabs agent (or updates it when ELEVENLABS_AGENT_ID is
  * set): Persuna's brain at {appUrl}/api/persuna/llm, the cloud voice, quick
@@ -228,7 +231,9 @@ export async function setUpAgent(
           },
         },
       },
-      tts: { voice_id: input.voice, model_id: "eleven_flash_v2_5" },
+      // ElevenLabs only allows Turbo or Flash v2 for English agents (v2.5 is
+      // refused), though v2.5 is fine for Persuna's ordinary speech.
+      tts: { voice_id: input.voice, model_id: AGENT_TTS_MODEL },
       turn: { turn_eagerness: "eager", turn_timeout: 10 },
       conversation: { max_duration_seconds: 900 },
     },
