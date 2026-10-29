@@ -10,12 +10,12 @@ import {
   type ReactNode,
 } from "react";
 import {
-  personaIntroAction,
-  personaSetupAction,
-  personaTranscribeAction,
-} from "@/app/actions/persona";
+  persunaIntroAction,
+  persunaSetupAction,
+  persunaTranscribeAction,
+} from "@/app/actions/persuna";
 import { AuthForm } from "@/components/auth-form";
-import { PersonaOrb, type OrbState } from "@/components/persona/orb";
+import { PersunaOrb, type OrbState } from "@/components/persuna/orb";
 import {
   meterMic,
   preferredMic,
@@ -24,9 +24,9 @@ import {
   startHoldRecording,
   stopSpeaking,
   type HoldRecording,
-} from "@/components/persona/voice";
+} from "@/components/persuna/voice";
 import { toTranscribableWav } from "@/lib/audio/convert";
-import { LOOKS, LOOK_IDS, lookOf, type LookId } from "@/lib/persona/looks";
+import { LOOKS, LOOK_IDS, lookOf, type LookId } from "@/lib/persuna/looks";
 import {
   INTRO_ACKS,
   INTRO_QUESTIONS,
@@ -36,11 +36,11 @@ import {
   MAX_FIRST_SKILLS,
   describeSkill,
   type IntroAnswers,
-} from "@/lib/persona/onboarding";
+} from "@/lib/persuna/onboarding";
 
 type Access = "granted" | "denied" | "not-determined" | "restricted" | "unknown";
 
-/** What Persona Desktop's setup window can ask the app (desktop/setup-preload.js). */
+/** What Persuna Desktop's setup window can ask the app (desktop/setup-preload.js). */
 interface SetupBridge {
   permissions(): Promise<{
     mic: Access;
@@ -60,10 +60,12 @@ interface SetupBridge {
   onHold(handler: (phase: "start" | "end" | "cancel" | "type") => void): void;
 }
 
-const bridge = (): SetupBridge | null =>
-  typeof window === "undefined"
-    ? null
-    : ((window as Window & { personaSetup?: SetupBridge }).personaSetup ?? null);
+const bridge = (): SetupBridge | null => {
+  if (typeof window === "undefined") return null;
+  // The pre-rename name keeps setup working in Persuna Desktop before 0.7.
+  const w = window as Window & { persunaSetup?: SetupBridge; personaSetup?: SetupBridge };
+  return w.persunaSetup ?? w.personaSetup ?? null;
+};
 
 const noSubscribe = () => () => {};
 /** The bridge, for rendering: absent on the server, so the first paint matches. */
@@ -116,18 +118,18 @@ const STEPS: Record<Step, { label: string; title: string; sub: string }> = {
 
 export interface DesktopSetupProps {
   user: { name: string } | null;
-  persona: { name: string; avatar: string; setupDone: boolean } | null;
+  persuna: { name: string; avatar: string; setupDone: boolean } | null;
   skills: { slug: string; name: string }[];
   signInExpired: boolean;
 }
 
 /**
- * Persona Desktop's setup, in its own window: Persuna on a stage at the left
+ * Persuna Desktop's setup, in its own window: Persuna on a stage at the left
  * (talking you through it), the step on the right. A returning user who has
  * met Persuna before only checks permissions, the mic and the talk key.
  */
 export function DesktopSetup(props: DesktopSetupProps) {
-  const met = props.persona?.setupDone ?? false;
+  const met = props.persuna?.setupDone ?? false;
   const steps: Step[] = [
     ...(props.user ? [] : (["account"] as const)),
     "access",
@@ -141,8 +143,8 @@ export function DesktopSetup(props: DesktopSetupProps) {
   const next = () => setStep(steps[Math.min(at + 1, steps.length - 1)]);
   const back = at > 0 && step !== "ready" ? () => setStep(steps[at - 1]) : null;
 
-  const [name, setName] = useState(props.persona?.name ?? "Persuna");
-  const [look, setLook] = useState<LookId>(lookOf(props.persona?.avatar ?? "plum"));
+  const [name, setName] = useState(props.persuna?.name ?? "Persuna");
+  const [look, setLook] = useState<LookId>(lookOf(props.persuna?.avatar ?? "plum"));
   const [orb, setOrb] = useState<OrbState>("idle");
   const [level, setLevel] = useState(0);
   const [line, setLine] = useState<string | null>(null);
@@ -163,7 +165,7 @@ export function DesktopSetup(props: DesktopSetupProps) {
   return (
     <main className="grid min-h-screen grid-cols-[minmax(280px,34%)_1fr] bg-[#faf8fc] text-foreground">
       {/* The stage: Persuna, what it's saying, and where you are. */}
-      <aside className="persona-drag relative flex flex-col overflow-hidden bg-[linear-gradient(160deg,#1d1131_0%,#2c1650_55%,#43206d_100%)] px-7 pb-7 pt-14 text-white">
+      <aside className="persuna-drag relative flex flex-col overflow-hidden bg-[linear-gradient(160deg,#1d1131_0%,#2c1650_55%,#43206d_100%)] px-7 pb-7 pt-14 text-white">
         <div
           aria-hidden
           className="pointer-events-none absolute -left-24 top-10 h-72 w-72 rounded-full bg-[#8b5cf6]/25 blur-3xl"
@@ -179,12 +181,12 @@ export function DesktopSetup(props: DesktopSetupProps) {
               boxShadow: `0 0 ${30 + level * 70}px ${6 + level * 20}px rgba(167,120,255,${0.18 + level * 0.35})`,
             }}
           >
-            <PersonaOrb look={look} state={orb} level={level} size={124} />
+            <PersunaOrb look={look} state={orb} level={level} size={124} />
           </div>
           <p className="label-mono mt-5 text-[10px] text-white/50">{name}</p>
           <p
             aria-live="polite"
-            data-testid="persona-line"
+            data-testid="persuna-line"
             className="mt-2 min-h-[5.5rem] font-display text-[19px] font-medium leading-snug tracking-[-0.01em] text-white/95"
           >
             {line ?? ""}
@@ -219,7 +221,7 @@ export function DesktopSetup(props: DesktopSetupProps) {
 
       {/* The step. */}
       <section className="flex min-h-screen flex-col px-10 pb-8 pt-14">
-        <header className="persona-drag">
+        <header className="persuna-drag">
           <h1 className="font-display text-[28px] font-medium leading-tight tracking-[-0.03em]">
             {copy.title}
           </h1>
@@ -348,7 +350,7 @@ function AccountStep({ expired, say }: { expired: boolean; say: Say }) {
   );
   if (mode === "sign-in" || mode === "sign-up") {
     return (
-      <div className="persona-no-drag flex flex-1 flex-col">
+      <div className="persuna-no-drag flex flex-1 flex-col">
         <div className="max-w-sm">
           <AuthForm
             key={mode}
@@ -440,7 +442,7 @@ function AccessStep({ say, back, onDone }: { say: Say } & Nav) {
     return (
       <div className="flex flex-1 flex-col">
         <p className="max-w-md text-sm text-muted">
-          Open this from Persona Desktop to set permissions. In a browser, Persuna asks for the
+          Open this from Persuna Desktop to set permissions. In a browser, Persuna asks for the
           microphone the first time you talk.
         </p>
         <Footer back={back}>
@@ -536,13 +538,13 @@ function AccessStep({ say, back, onDone }: { say: Say } & Nav) {
                     e.preventDefault();
                     desktop.dragApp();
                   }}
-                  className="persona-no-drag flex cursor-grab items-center gap-2 rounded-lg bg-card px-2.5 py-1.5 shadow-sm ring-1 ring-line-strong active:cursor-grabbing"
+                  className="persuna-no-drag flex cursor-grab items-center gap-2 rounded-lg bg-card px-2.5 py-1.5 shadow-sm ring-1 ring-line-strong active:cursor-grabbing"
                 >
                   {icon ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={icon} alt="" width={20} height={20} />
                   ) : (
-                    <PersonaOrb look="plum" size={20} animate={false} />
+                    <PersunaOrb look="plum" size={20} animate={false} />
                   )}
                   <span className="font-medium">Persuna</span>
                 </span>
@@ -740,7 +742,7 @@ function Answer({
     try {
       const form = new FormData();
       form.append("audio", await toTranscribableWav(audio, "setup"));
-      const res = await personaTranscribeAction(form);
+      const res = await persunaTranscribeAction(form);
       if (!res.ok || !res.value.trim()) setNote("I didn't catch that. Try again?");
       else live.current.onAnswer(res.value.trim());
     } finally {
@@ -876,7 +878,7 @@ function TalkStep({
         />
       </div>
       {heard && (
-        <blockquote className="persona-in mt-4 max-w-xl rounded-2xl bg-accent-soft/60 px-5 py-4 text-[15px]">
+        <blockquote className="persuna-in mt-4 max-w-xl rounded-2xl bg-accent-soft/60 px-5 py-4 text-[15px]">
           <span className="label-mono block text-[10px] text-accent">I heard</span>“{heard}”
         </blockquote>
       )}
@@ -943,7 +945,7 @@ function MeetStep({
                 : "ring-line hover:ring-line-strong"
             }`}
           >
-            <PersonaOrb look={id} size={56} animate={look === id} />
+            <PersunaOrb look={id} size={56} animate={look === id} />
             <span className="text-sm">{LOOKS[id].label}</span>
           </button>
         ))}
@@ -988,7 +990,7 @@ function AboutStep({
       return;
     }
     setSaving(true);
-    const res = await personaIntroAction(all);
+    const res = await persunaIntroAction(all);
     setSaving(false);
     if (!res.ok) return void say(`Hmm, I couldn't save that: ${res.error}`);
     onDone(all);
@@ -1074,10 +1076,10 @@ function FirstSkillStep({
       : "Which tasks would you like me to learn to do your way? Pick as many as you like.",
   );
 
-  async function finish(task: Parameters<typeof personaSetupAction>[0]["task"]) {
+  async function finish(task: Parameters<typeof persunaSetupAction>[0]["task"]) {
     setSaving(true);
     setError(null);
-    const res = await personaSetupAction({ name, avatar: look, task });
+    const res = await persunaSetupAction({ name, avatar: look, task });
     setSaving(false);
     if (!res.ok) return setError(res.error);
     onDone();
@@ -1269,7 +1271,7 @@ function ReadyStep({ say, name }: { say: Say; name: string }) {
           onClick={() => {
             stopSpeaking();
             if (desktop) desktop.finish({ openAtLogin });
-            else router.push("/persona");
+            else router.push("/persuna");
           }}
           className={primary}
         >

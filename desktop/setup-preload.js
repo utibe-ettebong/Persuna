@@ -2,7 +2,7 @@
 // signing in through the browser, and the talk key while you practise.
 const { contextBridge, ipcRenderer } = require("electron");
 
-contextBridge.exposeInMainWorld("personaSetup", {
+const bridge = {
   permissions: () => ipcRenderer.invoke("setup:permissions"),
   askMic: () => ipcRenderer.invoke("setup:ask-mic"),
   askKeyboard: () => ipcRenderer.invoke("setup:ask-keyboard"),
@@ -14,7 +14,11 @@ contextBridge.exposeInMainWorld("personaSetup", {
   finish: (options) =>
     ipcRenderer.send("setup:finish", { openAtLogin: Boolean(options?.openAtLogin) }),
   onHold: (handler) => {
-    ipcRenderer.removeAllListeners("persona:hold");
-    ipcRenderer.on("persona:hold", (_event, phase) => handler(phase));
+    ipcRenderer.removeAllListeners("persuna:hold");
+    ipcRenderer.on("persuna:hold", (_event, phase) => handler(phase));
   },
-});
+};
+
+contextBridge.exposeInMainWorld("persunaSetup", bridge);
+// Pages served from before the rename look for this name; keep both working.
+contextBridge.exposeInMainWorld("personaSetup", bridge);
