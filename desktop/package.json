@@ -1,13 +1,14 @@
 {
   "name": "persuna-desktop",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "description": "Persuna, your AI assistant, over your whole screen.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dist:mac": "electron-builder --mac --x64 --arm64 --publish never",
-    "dist:win": "electron-builder --win --x64 --arm64 --publish never"
+    "dist:win": "electron-builder --win --x64 --arm64 --publish never",
+    "build:eyes": "mkdir -p build/bin && swiftc -O -target arm64-apple-macos12 -o build/bin/eyes-arm64 native/mac/eyes.swift && swiftc -O -target x86_64-apple-macos12 -o build/bin/eyes-x64 native/mac/eyes.swift && lipo -create -output build/bin/persuna-eyes build/bin/eyes-arm64 build/bin/eyes-x64 && rm build/bin/eyes-arm64 build/bin/eyes-x64"
   },
   "license": "MIT",
   "devDependencies": {
@@ -65,7 +66,13 @@
       "minimumSystemVersion": "12.0",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Persuna listens when you talk to it."
-      }
+      },
+      "extraResources": [
+        {
+          "from": "build/bin/persuna-eyes",
+          "to": "bin/persuna-eyes"
+        }
+      ]
     },
     "dmg": {
       "title": "Persuna ${version}"
@@ -80,7 +87,13 @@
           ]
         }
       ],
-      "icon": "build/icon.png"
+      "icon": "build/icon.png",
+      "extraResources": [
+        {
+          "from": "native/win/eyes.ps1",
+          "to": "bin/eyes.ps1"
+        }
+      ]
     },
     "nsis": {
       "oneClick": true,

@@ -103,6 +103,23 @@ function mockPersonaTurn(user: string): {
   const state = JSON.parse(blocks(user, "persona_state")[0] ?? "{}") as MockPersonaState;
   const text = blocks(user, "persona_user")[0] ?? "";
   const lower = text.toLowerCase();
+  // Persona Desktop sent the list of what's on screen: "where's X" points at the matching entry.
+  const screen = blocks(user, "persona_screen")[0];
+  const where = /\b(?:where(?:'s| is)|point (?:at|to)|show me)\s+(?:the\s+)?(.+?)[?.!]*$/i.exec(
+    text,
+  );
+  if (screen && where) {
+    const want = where[1].replace(/\s+(button|link|field)$/i, "").toLowerCase();
+    const entry = screen
+      .split("\n")
+      .find((l) => /^[et]\d+ /.test(l) && l.toLowerCase().includes(want));
+    if (entry) {
+      return {
+        reply: `There, ${where[1]}.`,
+        actions: [{ type: "point", item: entry.split(" ")[0], thing: null }],
+      };
+    }
+  }
   const skill = state.focusSkill;
   const nextQuestion = (except: string | null) =>
     skill?.unanswered.find((q) => q.key !== except) ?? null;

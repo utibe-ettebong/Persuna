@@ -18,6 +18,7 @@ import {
 import { toTranscribableWav } from "@/lib/audio/convert";
 import type { ChatJob, ChatResult, PublishConfirm } from "@/lib/persona/service";
 import type { AppConfirm } from "@/lib/connections/service";
+import type { Scene, Spot } from "@/lib/persona/scene";
 import { LOOKS, LOOK_IDS, lookOf } from "@/lib/persona/looks";
 import {
   SETUP_QUESTIONS,
@@ -97,7 +98,7 @@ type DesktopWindow = Window & {
      * A screenshot of the screen right now (Persuna itself left out), or null
      * without Screen Recording. Taken as you speak or send, so it can see what you mean.
      */
-    look?(): Promise<string | null>;
+    look?(): Promise<{ image: string; scene: Scene | null } | null>;
     /** Hold-to-talk from the desktop's key listener: start, end, cancel, or "type" (double tap). */
     onHold?(handler: (phase: "start" | "end" | "cancel" | "type") => void): void;
     /** The hold-to-talk key's label ("right ⌥"), or null when it's off or not allowed yet. */
@@ -118,6 +119,8 @@ const PERCH_MS = 7000;
 const WANDER_EVERY_MS = [45_000, 90_000] as const;
 const CUT_IN = "Sorry to cut in. ";
 const noSubscribe = () => () => {};
+/** How long a highlight stays on screen. */
+const POINT_MS = 9000;
 
 /** "Good morning" and friends, by the local hour. */
 function greeting(hour = new Date().getHours()) {
@@ -183,6 +186,9 @@ export function Companion(props: CompanionProps) {
   const [holding, setHolding] = useState(false);
   const [holdLabel, setHoldLabel] = useState<string | null>(null);
   const [seeScreen, setSeeScreen] = useState(true);
+  // Where Persuna is pointing on screen (Persona Desktop), for a few seconds.
+  const [pointAt, setPointAt] = useState<Spot | null>(null);
+  const pointTimer = useRef(0);
   // Persona Desktop's island: on the notch, or hanging from the top centre.
   const [island, setIsland] = useState({ notch: false, height: 34, notchWidth: 0 });
   const holdRec = useRef<Promise<HoldRecording | null> | null>(null);
@@ -517,6 +523,11 @@ export function Companion(props: CompanionProps) {
     if (value.watch === "stop") watcher.current?.stop();
     if (value.example) setExample(value.example.skill);
     if (value.appConfirm) setAppConfirm(value.appConfirm);
+    if (value.point) {
+      window.clearTimeout(pointTimer.current);
+      setPointAt(value.point);
+      pointTimer.current = window.setTimeout(() => setPointAt(null), POINT_MS);
+    }
     if (value.confirm) {
       setConfirm(value.confirm);
       setConfirmLower(false);
@@ -558,8 +569,9 @@ export function Companion(props: CompanionProps) {
         }
         // Heard and answered in one go: no separate transcription.
         stopSpeaking();
-        const screen = await screenNow();
-        if (screen) form.append("screen", screen);
+        const sight = await screenNow();
+        if (sight?.image) form.append("screen", sight.image);
+        if (sight?.scene) form.append("scene", JSON.stringify(sight.scene));
         const res = await personaVoiceAction(form, clock());
         setBusy("idle");
         if (!res.ok) return setError(res.error);
@@ -701,12 +713,13 @@ export function Companion(props: CompanionProps) {
    * speak or send (unless you've said not to look); on the web, the window it's
    * watching, if any.
    */
-  async function screenNow(): Promise<string | null> {
+  async function screenNow(): Promise<{ image: string | null; scene: Scene | null } | null> {
     const desktop = (window as DesktopWindow).personaDesktop;
     if (desktop?.look && stored("persona.seeScreen", true)) {
       return desktop.look().catch(() => null);
     }
-    return watcher.current?.latest() ?? null;
+    const image = watcher.current?.latest() ?? null;
+    return image ? { image, scene: null } : null;
   }
 
   /** Tap, shortcut or tray: stop Persuna talking, or start (or end) a conversation. */
@@ -1557,6 +1570,29 @@ export function Companion(props: CompanionProps) {
         aria-label={`${name}, your assistant`}
         className="pointer-events-none fixed inset-x-0 top-0 z-50 flex flex-col items-center gap-2"
       >
+        {/* What Persuna is pointing at: a glowing outline around it, with its name. */}
+        {pointAt && (
+          <div
+            aria-hidden
+            className="persona-in pointer-events-none fixed"
+            style={{
+              left: pointAt.x - 6,
+              top: pointAt.y - 6,
+              width: pointAt.w + 12,
+              height: pointAt.h + 12,
+            }}
+          >
+            <span className="absolute inset-0 animate-pulse rounded-xl ring-[3px] ring-[#a77bff] shadow-[0_0_0_6px_rgba(167,123,255,0.18),0_0_28px_6px_rgba(167,123,255,0.45)]" />
+            <span
+              className={`label-mono absolute left-0 whitespace-nowrap rounded-full bg-[#0c0a12] px-2.5 py-1 text-[10px] text-white shadow-lg ${
+                pointAt.y > 60 ? "-top-8" : "-bottom-8"
+              }`}
+            >
+              {pointAt.label.length > 40 ? `${pointAt.label.slice(0, 40)}…` : pointAt.label}
+            </span>
+          </div>
+        )}
+
         {/* The island: on the notch (or hanging from the top centre). Persuna's orb on
             one side, what it's doing on the other. Click for the panel, right-click for more. */}
         <button

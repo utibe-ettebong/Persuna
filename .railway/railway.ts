@@ -36,6 +36,7 @@ export default defineRailway(() => {
       LISTEN_BASE_URL: preserve(),
       LISTEN_API_KEY: preserve(),
       LISTEN_MODEL: preserve(),
+      SAM_MODEL: preserve(),
       LISTEN_REASONING_EFFORT: preserve(),
       JOB_RETENTION_DAYS: preserve(),
       PLATFORM_FEE_PERCENT: preserve(),

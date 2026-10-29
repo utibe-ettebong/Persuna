@@ -9,6 +9,7 @@ import { createFileStore } from "@/lib/models/files";
 import { actorOf, requireUser } from "@/lib/auth/session";
 import { createModelClient, createTranscriber } from "@/lib/models";
 import { ModelError } from "@/lib/models/gateway";
+import { sceneSchema } from "@/lib/persona/scene";
 import { readAudio } from "@/lib/models/transcribe";
 import { takeTurns } from "@/lib/persona/voice-agent";
 import { PROVIDER_IDS } from "@/lib/connections/providers";
@@ -79,10 +80,18 @@ const screenField = z
   .max(MAX_FRAME_CHARS)
   .nullish();
 
+/** What Persona may see with a message (Persona Desktop): a screenshot and the list of the screen. */
+const sightField = z
+  .object({ image: screenField, scene: sceneSchema.nullish() })
+  .nullish()
+  .transform((s) =>
+    s && (s.image || s.scene) ? { image: s.image ?? null, scene: s.scene ?? null } : null,
+  );
+
 export async function personaChatAction(
   text: string,
   clock: z.input<typeof clockField>,
-  screen?: string | null,
+  sight?: z.input<typeof sightField>,
 ) {
   return run(async () => {
     const user = await requireUser();
@@ -91,7 +100,7 @@ export async function personaChatAction(
       text: message,
       clock: clockField.parse(clock),
       actor: actorOf(user),
-      screen: screenField.parse(screen),
+      sight: sightField.parse(sight),
     });
   });
 }
@@ -239,12 +248,16 @@ export async function personaVoiceAction(form: FormData, clock: z.input<typeof c
     const user = await requireUser();
     const audio = readAudio(form.get("audio"));
     if (!audio) throw new Error("Nothing was recorded");
-    const screen = form.get("screen");
+    const image = form.get("screen");
+    const scene = form.get("scene");
     return chatFromVoice(createModelClient(user), createTranscriber(user), user.id, {
       audio,
       clock: clockField.parse(clock),
       actor: actorOf(user),
-      screen: screenField.parse(typeof screen === "string" ? screen : null),
+      sight: sightField.parse({
+        image: typeof image === "string" ? image : null,
+        scene: typeof scene === "string" ? JSON.parse(scene) : null,
+      }),
     });
   });
 }
