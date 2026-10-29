@@ -50,6 +50,8 @@ export default async function ImportPage() {
   }
   const base = env().APP_URL?.replace(/\/+$/, "") ?? "https://your-persuna-address";
   const minScore = env().LISTING_MIN_SCORE;
+  /** The deployed MCP Worker (Persuna as an MCP server), when configured. */
+  const mcpUrl = env().MCP_SERVER_URL?.replace(/\/+$/, "") ?? null;
   const example = JSON.stringify(
     {
       schema: SKILL_IMPORT_SCHEMA,
@@ -164,16 +166,82 @@ curl ${base}/api/agents/skills/<id> -H "Authorization: Bearer $PERSUNA_AGENT_KEY
           <code>{`{ "skill": "<slug>", "input": "…" }`}</code> runs one, and{" "}
           <code>GET /api/agents/runs/&lt;jobId&gt;</code> polls it. Output is returned only when
           your trust level approves the run; until then it waits under Jobs like any other run.
-          Prefer MCP? Point Claude, Cursor or ChatGPT at the Persuna MCP server (see{" "}
-          <code>cloudflare/mcp-worker</code> in the Persuna repo) with this key as the Bearer
-          [REDACTED] — each published skill becomes a tool, and its code-mode <code>execute</code>{" "}
-          tool can chain them in one call.
+          Prefer MCP? Each published skill also becomes a tool on the Persuna MCP server — see{" "}
+          <em>Run your skills from other AI apps (MCP)</em> below for per-platform setup.
         </p>
         <pre className="overflow-x-auto rounded-md bg-subtle p-3 text-xs">{curl}</pre>
         <details>
           <summary className="cursor-pointer text-sm font-medium">skill.json</summary>
           <pre className="mt-2 overflow-x-auto rounded-md bg-subtle p-3 text-xs">{example}</pre>
         </details>
+      </Card>
+
+      <Card className="space-y-3 p-5">
+        <h2 className="font-display text-lg font-medium tracking-[-0.02em]">
+          Run your skills from other AI apps (MCP)
+        </h2>
+        {mcpUrl ? (
+          <>
+            <p className="text-sm text-muted">
+              Your Persuna MCP server is at <code>{mcpUrl}</code>. Each published skill becomes a
+              tool there; the code-mode <code>execute</code> tool can chain several in one call
+              (needs the <code>CODE_LOADER</code> sandbox binding on the Worker). Use one of your
+              agent keys above as the Bearer [REDACTED] wherever a platform asks for it — replace{" "}
+              <code>psk_…</code> below with your key.
+            </p>
+            <div className="space-y-4 text-sm">
+              <div>
+                <p className="mb-1 font-medium">Claude Code</p>
+                <pre className="overflow-x-auto rounded-md bg-subtle p-3 text-xs">{`claude mcp add persuna --transport http ${mcpUrl} --header "Authorization: Bearer [REDACTED]"`}</pre>
+              </div>
+              <div>
+                <p className="mb-1 font-medium">Cursor</p>
+                <p className="mb-1 text-muted">
+                  Settings → MCP → Add new server, or add to <code>.cursor/mcp.json</code>:
+                </p>
+                <pre className="overflow-x-auto rounded-md bg-subtle p-3 text-xs">{`{
+  "mcpServers": {
+    "persuna": {
+      "url": "${mcpUrl}",
+      "headers": { "Authorization": "Bearer [REDACTED]" }
+    }
+  }
+}`}</pre>
+              </div>
+              <div>
+                <p className="mb-1 font-medium">Claude Desktop</p>
+                <p className="mb-1 text-muted">
+                  Add to <code>claude_desktop_config.json</code> (the bridge forwards your key as
+                  the header):
+                </p>
+                <pre className="overflow-x-auto rounded-md bg-subtle p-3 text-xs">{`{
+  "mcpServers": {
+    "persuna": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "${mcpUrl}", "--header", "Authorization: Bearer [REDACTED]"]
+    }
+  }
+}`}</pre>
+              </div>
+              <div>
+                <p className="mb-1 font-medium">Any other MCP host</p>
+                <p className="text-muted">
+                  Use a remote/streamable-HTTP server with URL <code>{mcpUrl}</code> and header{" "}
+                  <code>Authorization: Bearer [REDACTED]</code>. ChatGPT&apos;s custom connectors
+                  don&apos;t accept API-key headers yet (they expect OAuth), so ChatGPT can&apos;t
+                  connect for now — Claude and Cursor can.
+                </p>
+              </div>
+            </div>
+          </>
+        ) : (
+          <p className="text-sm text-muted">
+            Deploy the Worker in <code>cloudflare/mcp-worker</code> (
+            <code>npx wrangler deploy</code> there), set <code>MCP_SERVER_URL</code> to its{" "}
+            <code>/mcp</code> address on this app, and this section fills in copy-ready setup
+            instructions for Claude Code, Claude Desktop and Cursor.
+          </p>
+        )}
       </Card>
 
       <section className="space-y-3">

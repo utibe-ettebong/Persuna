@@ -71,6 +71,12 @@ const envSchema = z.object({
   PAYSTACK_SECRET_KEY: z.string().min(10).optional(),
   /** Public base URL, used for payment callbacks and employer approval links. */
   APP_URL: z.url().optional(),
+  /**
+   * Public URL of the Persuna MCP Worker (cloudflare/mcp-worker), e.g.
+   * https://persuna-mcp.<account>.workers.dev/mcp. When set, Skills → Import
+   * shows per-platform MCP connect instructions with this address filled in.
+   */
+  MCP_SERVER_URL: z.url().optional(),
 });
 
 type Env = z.infer<typeof envSchema>;
