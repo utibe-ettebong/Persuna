@@ -25,6 +25,7 @@ export function createMockClient(): ModelClient {
       else if (user.includes("<unsupported>")) text = mockRedraft(messages, user);
       else if (user.includes("<persona_user>")) text = JSON.stringify(mockPersona(user));
       else if (user.includes("<persona_observe>")) text = JSON.stringify(mockObserve(user));
+      else if (user.includes("<work_trail>")) text = JSON.stringify(mockWork(user, system));
       else if (user.includes("<task>")) text = JSON.stringify(mockAppStep(user));
       else if (role === "draft") text = mockDraft(user, system);
       else if (user.includes("<screen_walkthrough>"))
@@ -119,6 +120,71 @@ function mockPersonaTurn(user: string): {
         actions: [{ type: "point", item: entry.split(" ")[0], thing: null }],
       };
     }
+  }
+  // Copying, pasting, drawing and making files.
+  const copy = /^(copy|paste)\s+(?:this|that|it)?[:\s]*(.*)$/i.exec(text.trim());
+  if (copy) {
+    const selected = /Selected text: "([^"]*)"/.exec(screen ?? "")?.[1];
+    const what = copy[2].trim() || selected || "Persuna";
+    const op = copy[1].toLowerCase() as "copy" | "paste";
+    return {
+      reply: op === "copy" ? "Copied." : "Pasted it in.",
+      actions: [{ type: "clipboard", op, text: what }],
+    };
+  }
+  if (/\b(draw|diagram|flow ?chart|show me how)\b/.test(lower)) {
+    const marks =
+      screen
+        ?.split("\n")
+        .filter((l) => /^e\d+ /.test(l))
+        .slice(0, 3)
+        .map((l, i) => ({
+          item: l.split(" ")[0],
+          note: `${i + 1}. ${l.split('"')[1] ?? "Here"}`,
+        })) ?? [];
+    return {
+      reply: "Here's how it fits together.",
+      actions: [
+        {
+          type: "draw",
+          title: "How it works",
+          marks,
+          flow: {
+            direction: "down",
+            nodes: [
+              { id: "a", label: "Your notes" },
+              { id: "b", label: "Persuna learns your method" },
+              { id: "c", label: "Draft in your style" },
+            ],
+            edges: [
+              { from: "a", to: "b", label: null },
+              { from: "b", to: "c", label: "each task" },
+            ],
+          },
+        },
+      ],
+    };
+  }
+  const make =
+    /\b(?:make|write|create)\s+(?:me\s+)?an?\s+(document|doc|pdf|table|spreadsheet|csv)\b/.exec(
+      lower,
+    );
+  if (make) {
+    const table = /table|spreadsheet|csv/.test(make[1]);
+    return {
+      reply: table ? "Here's the table." : "Here's the document.",
+      actions: [
+        {
+          type: "make_file",
+          kind: table ? "table" : "document",
+          title: table ? "Tasks" : "Plan",
+          body: table
+            ? "Task,Owner,Due\nDraft the brief,You,Friday\nReview,Persuna,Monday"
+            : "# Plan\n\n## Goals\n\n- Ship the first version\n- Ask for feedback\n\n## Next steps\n\n1. Draft\n2. Review",
+          flow: null,
+        },
+      ],
+    };
   }
   const skill = state.focusSkill;
   const nextQuestion = (except: string | null) =>
@@ -413,6 +479,33 @@ function mockPersonaTurn(user: string): {
       ? `I'm here. We're on ${state.focus}. Ask me to take a note, remember something, or say "teach me".`
       : "I'm here. What are we working on today?",
     actions: [],
+  };
+}
+
+/**
+ * Stand-in for Work mode: a search field on screen and the same app in the
+ * trail looks like searching (guide); otherwise it follows quietly.
+ */
+function mockWork(user: string, system: string) {
+  const screen = blocks(user, "persona_screen")[0] ?? "";
+  const trail = (blocks(user, "work_trail")[0] ?? "").split("\n");
+  const search = screen.split("\n").find((l) => /^e\d+ search /.test(l));
+  const interrupt = !system.includes("don't interrupt again now");
+  if (interrupt && search && trail.length >= 2) {
+    return {
+      mode: "guide",
+      say: "Looking for something? Try the search here with fewer words.",
+      point: search.split(" ")[0],
+      offer: null,
+      step: null,
+    };
+  }
+  return {
+    mode: "follow",
+    say: null,
+    point: null,
+    offer: null,
+    step: "Works through the page top to bottom. (mock)",
   };
 }
 

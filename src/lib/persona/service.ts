@@ -36,7 +36,13 @@ import {
 import { normalizeText } from "@/lib/text";
 import { env, modelProvider, voiceMode } from "@/env";
 import { createJob, getJob, reviewJob } from "@/lib/jobs/service";
-import { personaObserve, personaTurn, HISTORY_TURNS } from "./brain";
+import {
+  personaObserve,
+  personaTurn,
+  personaWorkLook,
+  HISTORY_TURNS,
+  type PersonaFile,
+} from "./brain";
 import { coachSkill, suggestTestSplit, type SkillStats } from "./coach";
 import { localToUtc, startOfLocalDay, utcToLocal, type OffsetMinutes } from "./when";
 import { notices, unseen } from "./notices";
@@ -51,7 +57,7 @@ import {
 } from "./tone";
 import { buildWrapUp } from "./wrapup";
 import { introFacts, type IntroAnswers } from "./onboarding";
-import type { PersonaReply, PersonaState } from "./types";
+import type { Flow, PersonaReply, PersonaState } from "./types";
 import { createLocator } from "@/lib/models/sam";
 import { samSpot, sceneIsThin, spotOf, wantsPicture, type Scene, type Spot } from "./scene";
 
@@ -59,6 +65,8 @@ import { samSpot, sceneIsThin, spotOf, wantsPicture, type Scene, type Spot } fro
 export interface Sight {
   scene: Scene | null;
   image: string | null;
+  /** The user circled part of the screen: the scene and picture are cropped to it. */
+  circled?: boolean;
 }
 
 const { personaProfiles, personaMessages, personaNotes, personaReminders, skills, jobs, listings } =
@@ -234,6 +242,25 @@ export interface ChatResult {
   appConfirm: AppConfirm | null;
   /** Where on screen to show the user something (Persona Desktop draws it). */
   point: Spot | null;
+  /** Text to copy, or to paste where the user's cursor is. */
+  clipboard: { op: "copy" | "paste"; text: string } | null;
+  /** Something to draw over the screen: numbered notes on things, and/or a diagram. */
+  drawing: Drawing | null;
+  /** A file Persona made, to preview, copy and save. */
+  file: MadeFile | null;
+}
+
+export interface Drawing {
+  title: string | null;
+  marks: { n: number; note: string; spot: Spot }[];
+  flow: Flow | null;
+}
+
+export interface MadeFile {
+  kind: "document" | "table" | "flow";
+  title: string;
+  body: string;
+  flow: Flow | null;
 }
 
 export interface PublishConfirm {
@@ -301,6 +328,8 @@ export async function chat(
      * of it read on their computer (desktop) and/or a screenshot.
      */
     sight?: Sight | null;
+    /** A file handed over with the message. Its contents are read for this turn only. */
+    file?: PersonaFile | null;
   },
 ): Promise<ChatResult> {
   const spoken = "audio" in input;
@@ -316,8 +345,10 @@ export async function chat(
   // exact about where things are: send the picture only when the list is thin
   // (a photo, a canvas) or the question is about how something looks.
   const picture = Boolean(
-    sight?.image && (!sight.scene || sceneIsThin(sight.scene) || (!spoken && wantsPicture(typed))),
+    sight?.image &&
+    (sight.circled || !sight.scene || sceneIsThin(sight.scene) || (!spoken && wantsPicture(typed))),
   );
+  const file = input.file ?? null;
   const message = spoken ? { audio: input.audio } : typed;
   let reply: PersonaReply;
   try {
@@ -326,11 +357,12 @@ export async function chat(
       state,
       history,
       message,
-      sight && { scene: sight.scene, image: picture ? sight.image : null },
+      sight && { scene: sight.scene, image: picture ? sight.image : null, circled: sight.circled },
+      file,
     );
     // It needed the picture after all: once more, with it.
     if (sight?.image && !picture && reply.actions.some((a) => a.type === "look_closer")) {
-      reply = await personaTurn(client, state, history, message, sight);
+      reply = await personaTurn(client, state, history, message, sight, file);
     }
   } catch (error) {
     if (spoken && !(error instanceof UsageLimitError)) throw new NotHeardError(error);
@@ -362,6 +394,9 @@ export async function chat(
   let watch: ChatResult["watch"] = null;
   let appConfirm: ChatResult["appConfirm"] = null;
   let point: ChatResult["point"] = null;
+  let clipboard: ChatResult["clipboard"] = null;
+  let drawing: ChatResult["drawing"] = null;
+  let made: ChatResult["file"] = null;
 
   for (const action of reply.actions) {
     if (action.type === "remember") {
@@ -543,6 +578,36 @@ export async function chat(
           .catch(() => null);
         if (box) point = samSpot(box, sight.scene, action.thing);
       }
+    } else if (action.type === "clipboard") {
+      clipboard = { op: action.op, text: action.text };
+    } else if (action.type === "draw") {
+      const marks = (action.marks ?? []).flatMap((m, i) => {
+        const spot = sight?.scene ? spotOf(sight.scene, m.item) : null;
+        return spot ? [{ n: i + 1, note: m.note, spot }] : [];
+      });
+      if (marks.length || action.flow) {
+        drawing = { title: action.title ?? null, marks, flow: action.flow ?? null };
+      }
+    } else if (action.type === "make_file") {
+      made = {
+        kind: action.kind,
+        title: action.title,
+        body: action.body,
+        flow: action.flow ?? null,
+      };
+      // Documents are also kept with their notes, so nothing is lost when the card closes.
+      if (action.kind === "document") {
+        await db()
+          .insert(personaNotes)
+          .values({
+            userId,
+            title: action.title,
+            body: action.body.slice(0, 20_000),
+            source: "chat",
+            skillId: focusSkillId,
+          });
+        link = { href: "/persona", label: "Open your notes" };
+      }
     } else if (action.type === "watch_screen") {
       watch = action.on ? "start" : "stop";
     } else if (action.type === "wrap_up") {
@@ -571,7 +636,13 @@ export async function chat(
   const saved = await db()
     .insert(personaMessages)
     .values([
-      { userId, role: "user", content: text, skillId: focusSkill?.id ?? null },
+      {
+        userId,
+        role: "user",
+        // The file's name only: its contents were for this turn.
+        content: file ? `${text}\n\n(${file.name})` : text,
+        skillId: focusSkill?.id ?? null,
+      },
       {
         userId,
         role: "assistant",
@@ -598,6 +669,9 @@ export async function chat(
     watch,
     appConfirm,
     point,
+    clipboard,
+    drawing,
+    file: made,
   };
 }
 
@@ -695,6 +769,81 @@ export async function observe(
       .returning();
   }
   return { say: seen.say ?? null, step, noteId, message, offFocus: seen.offFocus ?? null };
+}
+
+/** Work mode notes collect the steps Persona learns while you work, one note per day. */
+const WORK_NOTE = "Work mode";
+
+/**
+ * Work mode: one look at what the user is doing (read on their computer) and
+ * whether to step in. Learned steps go into a "Work mode" note, names and
+ * figures removed; the screen itself is never stored. What Persona says is
+ * kept in the conversation as an observation.
+ */
+export async function workLook(
+  client: ModelClient,
+  userId: string,
+  input: {
+    clock: Clock;
+    scene: Scene;
+    image: string | null;
+    trail: string[];
+    mayInterrupt: boolean;
+  },
+): Promise<{
+  mode: "quiet" | "follow" | "guide" | "lead";
+  message: PersonaMessage | null;
+  point: Spot | null;
+  offer: string | null;
+  noteId: string | null;
+}> {
+  const state = await stateFor(userId, input.clock);
+  const title = `${WORK_NOTE}: ${input.clock.day}`;
+  const note = await db().query.personaNotes.findFirst({
+    where: and(eq(personaNotes.userId, userId), eq(personaNotes.title, title)),
+  });
+  const recentSteps = note ? note.body.split("\n").filter(Boolean) : [];
+  const seen = await personaWorkLook(client, {
+    state,
+    scene: input.scene,
+    image: input.scene && !sceneIsThin(input.scene) ? null : input.image,
+    trail: input.trail,
+    recentSteps,
+    mayInterrupt: input.mayInterrupt,
+  });
+
+  let noteId = note?.id ?? null;
+  const step = seen.step ? redact(seen.step) : null;
+  if (step && !recentSteps.includes(step)) {
+    if (note) {
+      await db()
+        .update(personaNotes)
+        .set({ body: [...recentSteps, step].join("\n") })
+        .where(eq(personaNotes.id, note.id));
+    } else {
+      const profile = await getProfile(userId);
+      const [created] = await db()
+        .insert(personaNotes)
+        .values({ userId, title, body: step, source: "screen", skillId: profile.focusSkillId })
+        .returning();
+      noteId = created.id;
+    }
+  }
+
+  let message: PersonaMessage | null = null;
+  if (seen.say && (seen.mode === "guide" || seen.mode === "lead")) {
+    [message] = await db()
+      .insert(personaMessages)
+      .values({ userId, role: "assistant", kind: "observation", content: seen.say })
+      .returning();
+  }
+  return {
+    mode: seen.mode,
+    message,
+    point: seen.point ? spotOf(input.scene, seen.point) : null,
+    offer: seen.offer ?? null,
+    noteId,
+  };
 }
 
 /** Teaches the steps from a watched (or any) note to the focus skill. */

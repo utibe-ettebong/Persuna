@@ -14,11 +14,13 @@ import {
   personaVoiceAction,
   personaAgentTurnsAction,
   personaAppConfirmAction,
+  personaFileAction,
+  personaWorkAction,
 } from "@/app/actions/persona";
 import { toTranscribableWav } from "@/lib/audio/convert";
-import type { ChatJob, ChatResult, PublishConfirm } from "@/lib/persona/service";
+import type { ChatJob, ChatResult, Drawing, MadeFile, PublishConfirm } from "@/lib/persona/service";
 import type { AppConfirm } from "@/lib/connections/service";
-import type { Scene, Spot } from "@/lib/persona/scene";
+import { sceneIsThin, sceneWithin, type Scene, type Spot } from "@/lib/persona/scene";
 import { LOOKS, LOOK_IDS, lookOf } from "@/lib/persona/looks";
 import {
   SETUP_QUESTIONS,
@@ -34,6 +36,15 @@ import { JobCard } from "./job-card";
 import { PersonaOrb, type OrbState } from "./orb";
 import { MAX_LOOKS, startWatching, watchesWithoutClick, type Watcher } from "./screen-watch";
 import { TaskComposer } from "./task-composer";
+import { MadeFileCard } from "./made-file";
+import { CircleLayer, DrawingLayer, cropPicture, type Area } from "./screen-drawing";
+import {
+  WORK_EVERY_MS,
+  WORK_QUIET_MS,
+  extendTrail,
+  sceneDigest,
+  trailLine,
+} from "@/lib/persona/work";
 import {
   chime,
   speak,
@@ -107,6 +118,10 @@ type DesktopWindow = Window & {
     /** Tell the app watching started or stopped. */
     watching?(on: boolean): void;
     island?(): Promise<{ notch: boolean; height: number; notchWidth: number }>;
+    copy?(text: string): void;
+    paste?(text: string): Promise<boolean>;
+    saveFile?(file: { name: string; ext: string; data: string }): Promise<string | null>;
+    savePdf?(doc: { name: string; html: string }): Promise<string | null>;
     onIsland?(
       handler: (shape: { notch: boolean; height: number; notchWidth: number }) => void,
     ): void;
@@ -141,7 +156,12 @@ const DOZE_MS = 5 * 60_000;
 /** A call ends by itself after this long with nobody talking. */
 const CALL_IDLE_MS = 45_000;
 
-const card = "bg-card/95 shadow-[0_10px_34px_-14px_rgba(29,22,29,0.35)] ring-1 ring-foreground/5";
+const CARD = "bg-card/95 shadow-[0_10px_34px_-14px_rgba(29,22,29,0.35)] ring-1 ring-foreground/5";
+/** Everything that comes out of the island is solid black, like the notch it grows from. */
+const ISLAND_CARD =
+  "bg-black text-white shadow-[0_14px_40px_-16px_rgba(0,0,0,0.75)] ring-1 ring-white/10";
+const CHIP =
+  "label-mono rounded-full bg-white/10 px-3 py-1.5 text-[10px] text-white/85 hover:bg-white/20 disabled:opacity-40";
 
 /**
  * The shortcut that calls Persuna on a page: ⌃⌥P on a Mac, Ctrl+Alt+P
@@ -236,6 +256,24 @@ export function Companion(props: CompanionProps) {
   const agentCall = useRef<AgentCall | null>(null);
   // With ElevenLabs Agents set up, use it unless the user picked Meta's listening.
   const [agentVoice, setAgentVoice] = useState(true);
+  // What Persuna drew over the screen, and a file it made.
+  const [drawing, setDrawing] = useState<Drawing | null>(null);
+  const [made, setMade] = useState<MadeFile | null>(null);
+  // Circle something to ask about it: picking, then the area picked (until the next message).
+  const [circling, setCircling] = useState(false);
+  const [circled, setCircled] = useState<Area | null>(null);
+  const circledRef = useRef<Area | null>(null);
+  // A file handed to Persuna, waiting for what to do with it.
+  const [attached, setAttached] = useState<File | null>(null);
+  const fileInput = useRef<HTMLInputElement | null>(null);
+  // Typing in the island (it opens on Persuna, not on a text box).
+  const [islandTyping, setIslandTyping] = useState(false);
+  // Work mode: Persuna keeps an eye on your work and steps in when it can help.
+  const [workMode, setWorkMode] = useState(false);
+  const [askWork, setAskWork] = useState(false);
+  const [offer, setOffer] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef(0);
   const wake = useRef<WakeListener | null>(null);
   const drag = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean }>(null);
   const home = useRef<{ x: number; y: number } | null>(null);
@@ -389,6 +427,7 @@ export function Companion(props: CompanionProps) {
       setVoiceOn(stored("persona.voice", true));
       setAgentVoice(stored("persona.agentVoice", true));
       setSeeScreen(stored("persona.seeScreen", true));
+      setWorkMode(stored("persona.workMode", false));
       setWakeOn(stored("persona.wake", false) && wakeWordSupported());
     });
     void personaCheckInAction(clock().day).then((res) => {
@@ -523,11 +562,12 @@ export function Companion(props: CompanionProps) {
     if (value.watch === "stop") watcher.current?.stop();
     if (value.example) setExample(value.example.skill);
     if (value.appConfirm) setAppConfirm(value.appConfirm);
-    if (value.point) {
-      window.clearTimeout(pointTimer.current);
-      setPointAt(value.point);
-      pointTimer.current = window.setTimeout(() => setPointAt(null), POINT_MS);
-    }
+    // Showing something on screen: the island folds up so it doesn't cover it.
+    if (value.point || value.drawing) setPanel(false);
+    if (value.point) showPoint(value.point);
+    if (value.clipboard) void doClipboard(value.clipboard);
+    if (value.drawing) setDrawing(value.drawing);
+    if (value.file) setMade(value.file);
     if (value.confirm) {
       setConfirm(value.confirm);
       setConfirmLower(false);
@@ -547,6 +587,70 @@ export function Companion(props: CompanionProps) {
       void Notification.requestPermission();
     }
     if (!spoken) express(reply.content, lead);
+  }
+
+  function showPoint(spot: Spot) {
+    window.clearTimeout(pointTimer.current);
+    setPointAt(spot);
+    pointTimer.current = window.setTimeout(() => setPointAt(null), POINT_MS);
+  }
+
+  function flash(line: string) {
+    window.clearTimeout(toastTimer.current);
+    setToast(line);
+    toastTimer.current = window.setTimeout(() => setToast(null), 3500);
+  }
+
+  /** Copies text, or pastes it where your cursor is (Persona Desktop presses ⌘V for you). */
+  async function doClipboard({ op, text }: { op: "copy" | "paste"; text: string }) {
+    const desktop = (window as DesktopWindow).personaDesktop;
+    const pasteKey = /Mac/.test(navigator.platform) ? "⌘V" : "Ctrl+V";
+    if (op === "paste" && desktop?.paste) {
+      const pasted = await desktop.paste(text).catch(() => false);
+      return flash(pasted ? "Pasted" : `Copied. Press ${pasteKey} to paste it`);
+    }
+    if (desktop?.copy) desktop.copy(text);
+    else {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        // The browser wants a click first: show it with a Copy button.
+        return setMade({ kind: "document", title: "To copy", body: text, flow: null });
+      }
+    }
+    flash(op === "paste" ? `Copied. Press ${pasteKey} where you want it` : "Copied");
+  }
+
+  /** A file handed to Persuna, with what to do with it. */
+  async function sendFile(file: File, said: string) {
+    setAttached(null);
+    setError(null);
+    setCaption(null);
+    stopSpeaking();
+    setBusy("thinking");
+    const form = new FormData();
+    form.append("file", file);
+    form.append("text", said.trim());
+    const res = await personaFileAction(form, clock());
+    setBusy("idle");
+    if (!res.ok) return setError(res.error);
+    setText("");
+    answered(res.value);
+  }
+
+  function pickFile(file: File | null | undefined) {
+    if (!file) return;
+    setAttached(file);
+    setPanel(true);
+    setIslandTyping(false);
+  }
+
+  function setWork(on: boolean) {
+    setAskWork(false);
+    setWorkMode(on);
+    store("persona.workMode", on);
+    if (!on) setOffer(null);
+    flash(on ? "Work mode is on" : "Work mode is off");
   }
 
   const hear = useCallback(
@@ -572,6 +676,7 @@ export function Companion(props: CompanionProps) {
         const sight = await screenNow();
         if (sight?.image) form.append("screen", sight.image);
         if (sight?.scene) form.append("scene", JSON.stringify(sight.scene));
+        if (sight?.circled) form.append("circled", "1");
         const res = await personaVoiceAction(form, clock());
         setBusy("idle");
         if (!res.ok) return setError(res.error);
@@ -702,10 +807,12 @@ export function Companion(props: CompanionProps) {
     void pending?.then((rec) => rec?.cancel());
   }
 
-  function openPanel() {
+  /** The island opens on Persuna; typing opens only when asked (the Type chip, or a double tap). */
+  function openPanel(typing = false) {
     setPanel(true);
     setMenu(false);
-    window.setTimeout(() => panelInput.current?.focus(), 50);
+    setIslandTyping(typing);
+    if (typing) window.setTimeout(() => panelInput.current?.focus(), 50);
   }
 
   /**
@@ -713,10 +820,26 @@ export function Companion(props: CompanionProps) {
    * speak or send (unless you've said not to look); on the web, the window it's
    * watching, if any.
    */
-  async function screenNow(): Promise<{ image: string | null; scene: Scene | null } | null> {
+  async function screenNow(): Promise<{
+    image: string | null;
+    scene: Scene | null;
+    circled?: boolean;
+  } | null> {
     const desktop = (window as DesktopWindow).personaDesktop;
-    if (desktop?.look && stored("persona.seeScreen", true)) {
-      return desktop.look().catch(() => null);
+    const area = circledRef.current;
+    if (desktop?.look && (area || stored("persona.seeScreen", true))) {
+      const sight = await desktop.look().catch(() => null);
+      if (!sight || !area) return sight;
+      // You circled something: only that part goes with this message.
+      circledRef.current = null;
+      setCircled(null);
+      const width = sight.scene?.screen.w ?? window.innerWidth;
+      return {
+        image:
+          sight.image && (await cropPicture(sight.image, area, width).catch(() => sight.image)),
+        scene: sight.scene && sceneWithin(sight.scene, area),
+        circled: true,
+      };
     }
     const image = watcher.current?.latest() ?? null;
     return image ? { image, scene: null } : null;
@@ -772,7 +895,7 @@ export function Companion(props: CompanionProps) {
       if (phase === "start") void holdStart();
       else if (phase === "end") void holdEnd();
       else if (phase === "cancel") holdCancel();
-      else openPanel();
+      else openPanel(true);
     });
     void desktop?.holdKey?.().then(setHoldLabel);
     void desktop?.island?.().then((shape) => shape && setIsland(shape));
@@ -784,6 +907,62 @@ export function Companion(props: CompanionProps) {
     // call reads live state through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* ---------- Work mode ---------- */
+
+  useEffect(() => {
+    const desktop = (window as DesktopWindow).personaDesktop;
+    if (!workMode || !setupDone || !props.overlay || !desktop?.look) return;
+    let stopped = false;
+    let running = false;
+    let last = "";
+    let trail: string[] = [];
+    let spokeAt = 0;
+    const tick = async () => {
+      // Not while you're talking to Persuna, or it's busy, speaking or you're circling.
+      if (running || stopped || live.current.busy !== "idle" || talkingNow.current) return;
+      if (holdRec.current || circledRef.current) return;
+      running = true;
+      try {
+        const sight = await desktop.look!().catch(() => null);
+        if (!sight?.scene || stopped) return;
+        const digest = sceneDigest(sight.scene);
+        if (digest === last) return;
+        last = digest;
+        const before = trail;
+        trail = extendTrail(trail, trailLine(sight.scene));
+        const quietSince = Math.max(spokeAt, lastInput.current);
+        const res = await personaWorkAction(
+          {
+            scene: sight.scene,
+            // The picture only when the list can't say enough (a canvas, a photo).
+            image: sceneIsThin(sight.scene) ? sight.image : null,
+            trail: before,
+            mayInterrupt: Date.now() - quietSince > WORK_QUIET_MS,
+          },
+          clock(),
+        );
+        if (!res.ok || stopped) return;
+        const { message, point, offer: next } = res.value;
+        if (message) {
+          spokeAt = Date.now();
+          setMessages((all) => [...all, { ...message, role: "assistant" }]);
+          express(message.content);
+        }
+        if (point) showPoint(point);
+        if (next) setOffer(next);
+      } finally {
+        running = false;
+      }
+    };
+    const timer = window.setInterval(() => void tick(), WORK_EVERY_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+    // express, showPoint and the refs read live state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workMode, setupDone, props.overlay]);
 
   /* ---------- Wake word ---------- */
 
@@ -1221,6 +1400,9 @@ export function Companion(props: CompanionProps) {
   const canWake = useSyncExternalStore(noSubscribe, wakeWordSupported, () => false);
   const published = props.skills.filter((s) => s.published);
 
+  // Over the screen, cards are black like the island; on a page, they're cards.
+  const card = props.overlay ? ISLAND_CARD : CARD;
+
   // Quick choices during the first meeting: looks and first tasks.
   const setupChips = (
     <>
@@ -1499,12 +1681,24 @@ export function Companion(props: CompanionProps) {
         Boolean(example) ||
         Boolean(confirm) ||
         Boolean(appConfirm) ||
+        Boolean(made && !props.overlay) ||
         Boolean(switchOffer && busy === "idle") ||
         Boolean(watchNote && !watching))) ||
     Boolean(latestJob);
 
   const menuItems: { label: string; onSelect: () => void; hidden?: boolean }[] = [
-    { label: "Type instead", onSelect: () => (props.overlay ? openPanel() : setTyping(true)) },
+    { label: "Type instead", onSelect: () => (props.overlay ? openPanel(true) : setTyping(true)) },
+    { label: "Give me a file", onSelect: () => fileInput.current?.click() },
+    {
+      label: "Circle something to ask about it",
+      onSelect: () => setCircling(true),
+      hidden: !props.overlay,
+    },
+    {
+      label: workMode ? "Turn off Work mode" : "Work mode…",
+      onSelect: () => (workMode ? setWork(false) : setAskWork(true)),
+      hidden: !props.overlay,
+    },
     {
       label: watching ? "Stop watching" : "Watch my screen",
       onSelect: () => (watching ? watcher.current?.stop() : setAskWatch(true)),
@@ -1553,23 +1747,103 @@ export function Companion(props: CompanionProps) {
 
   if (props.overlay) {
     const talkHint = holdLabel ? `Hold ${holdLabel} to talk` : `${shortcut} to talk`;
-    const barStatus =
-      orbState === "idle" || orbState === "sleeping"
+    const barStatus = holding
+      ? "Listening…"
+      : orbState === "idle" || orbState === "sleeping"
         ? setupDone
-          ? talkHint
+          ? circled
+            ? "Ask me about what you circled"
+            : talkHint
           : "Say hello"
-        : holding
-          ? "Listening… let go when you're done"
-          : status;
+        : status;
     const recent = messages.filter((m) => m.kind === "chat").slice(-2);
-    const active = holding || orbState !== "idle";
+    const active = holding || orbState !== "idle" || Boolean(circled);
     const firstName = props.userName?.split(/\s+/)[0] ?? "";
+    const desktop = (window as DesktopWindow).personaDesktop ?? null;
+    // The island grows from the notch: wider while it's doing something, and
+    // down into a card for a reply, an error or Persuna itself.
+    const grown = (panel && setupDone) || Boolean(caption) || Boolean(error);
+    const wide = Math.min(480, Math.round(window.innerWidth * 0.94));
+    const width = grown
+      ? wide
+      : island.notch
+        ? island.notchWidth + 2 * (active ? 92 : 44)
+        : active
+          ? 300
+          : 236;
+    const indicator =
+      holding || orbState === "listening" ? (
+        [0.5, 0.8, 1, 0.8, 0.5].map((w, i) => (
+          <span
+            key={i}
+            className="w-[3px] rounded-full bg-[#b794ff] transition-[height] duration-75"
+            style={{ height: `${Math.max(3, Math.min(16, level * 22 * w + 3))}px` }}
+          />
+        ))
+      ) : orbState === "thinking" ? (
+        [0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#b794ff]"
+            style={{ animationDelay: `${i * 160}ms` }}
+          />
+        ))
+      ) : orbState === "speaking" ? (
+        [0.6, 1, 0.7].map((w, i) => (
+          <span
+            key={i}
+            className="w-[3px] rounded-full bg-[#ffd27a] transition-[height] duration-75"
+            style={{ height: `${Math.max(4, Math.min(16, level * 26 * w + 4))}px` }}
+          />
+        ))
+      ) : orbState === "watching" ? (
+        <span className="h-2 w-2 rounded-full bg-[#ff6b6b]" title="Watching" />
+      ) : workMode ? (
+        <span className="h-2 w-2 rounded-full bg-[#5cc98f]" title="Work mode is on" />
+      ) : (
+        <span className="h-1.5 w-1.5 rounded-full bg-white/25" />
+      );
+    const chips: { label: string; act: () => void; hidden?: boolean }[] = [
+      { label: "Type", act: () => openPanel(true) },
+      {
+        label: "Circle something",
+        act: () => {
+          setPanel(false);
+          setCircling(true);
+        },
+        hidden: !desktop?.look,
+      },
+      { label: "Add a file", act: () => fileInput.current?.click() },
+      {
+        label: workMode ? "Work mode: on" : "Work mode",
+        act: () => (workMode ? setWork(false) : setAskWork(true)),
+        hidden: !desktop?.look,
+      },
+      {
+        label: watching ? "Stop watching" : "Watch my screen",
+        act: () => (watching ? watcher.current?.stop() : setAskWatch(true)),
+      },
+      { label: "Wrap up my day", act: () => void send("Wrap up my day") },
+    ];
+    const islandCards =
+      hasCards || showSetupInput || made || offer || askWork || (attached && !panel);
     return (
       <section
         data-persona
         aria-label={`${name}, your assistant`}
-        className="pointer-events-none fixed inset-x-0 top-0 z-50 flex flex-col items-center gap-2"
+        className="island-ink pointer-events-none fixed inset-x-0 top-0 z-50 flex flex-col items-center gap-2"
       >
+        <input
+          ref={fileInput}
+          type="file"
+          className="hidden"
+          accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.docx,.md,.markdown,.txt"
+          onChange={(e) => {
+            pickFile(e.target.files?.[0]);
+            e.target.value = "";
+          }}
+        />
+
         {/* What Persuna is pointing at: a glowing outline around it, with its name. */}
         {pointAt && (
           <div
@@ -1584,7 +1858,7 @@ export function Companion(props: CompanionProps) {
           >
             <span className="absolute inset-0 animate-pulse rounded-xl ring-[3px] ring-[#a77bff] shadow-[0_0_0_6px_rgba(167,123,255,0.18),0_0_28px_6px_rgba(167,123,255,0.45)]" />
             <span
-              className={`label-mono absolute left-0 whitespace-nowrap rounded-full bg-[#0c0a12] px-2.5 py-1 text-[10px] text-white shadow-lg ${
+              className={`label-mono absolute left-0 whitespace-nowrap rounded-full bg-black px-2.5 py-1 text-[10px] text-white shadow-lg ${
                 pointAt.y > 60 ? "-top-8" : "-bottom-8"
               }`}
             >
@@ -1592,212 +1866,331 @@ export function Companion(props: CompanionProps) {
             </span>
           </div>
         )}
-
-        {/* The island: on the notch (or hanging from the top centre). Persuna's orb on
-            one side, what it's doing on the other. Click for the panel, right-click for more. */}
-        <button
-          type="button"
-          aria-label={`${name}: ${panel ? "close" : "open"} (${barStatus})`}
-          aria-expanded={panel}
-          aria-haspopup="menu"
-          onClick={() => (talkingNow.current ? interrupt() : panel ? setPanel(false) : openPanel())}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            setMenu((m) => !m);
-          }}
-          style={{
-            height: island.height,
-            width: island.notch ? island.notchWidth + 2 * (active ? 84 : 44) : undefined,
-          }}
-          className={`pointer-events-auto flex items-center justify-between gap-3 rounded-b-[20px] bg-[#0c0a12] px-2.5 text-white shadow-[0_8px_30px_-10px_rgba(80,40,140,0.55)] outline-none transition-[width,box-shadow] duration-300 ease-out focus-visible:ring-2 focus-visible:ring-accent ${
-            holding ? "shadow-[0_6px_28px_-4px_rgba(139,92,246,0.85)]" : ""
-          } ${island.notch ? "" : "min-w-56 pr-4"}`}
-        >
-          <span className="flex shrink-0 items-center">
-            <PersonaOrb
-              look={look}
-              state={orbState}
-              level={level}
-              size={Math.min(26, island.height - 8)}
-              gaze={null}
-              animate={orbState !== "sleeping"}
-            />
-          </span>
-          {!island.notch && (
-            <span
-              className="label-mono flex-1 truncate text-left text-[10px] text-white/70"
-              role="status"
-            >
-              {barStatus}
-            </span>
-          )}
-          {island.notch && (
-            <span className="sr-only" role="status">
-              {barStatus}
-            </span>
-          )}
-          <span aria-hidden className="flex h-4 shrink-0 items-center justify-end gap-[3px]">
-            {holding || orbState === "listening" ? (
-              [0.5, 0.8, 1, 0.8, 0.5].map((w, i) => (
-                <span
-                  key={i}
-                  className="w-[3px] rounded-full bg-[#b794ff] transition-[height] duration-75"
-                  style={{ height: `${Math.max(3, Math.min(16, level * 22 * w + 3))}px` }}
-                />
-              ))
-            ) : orbState === "thinking" ? (
-              [0, 1, 2].map((i) => (
-                <span
-                  key={i}
-                  className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#b794ff]"
-                  style={{ animationDelay: `${i * 160}ms` }}
-                />
-              ))
-            ) : orbState === "speaking" ? (
-              [0.6, 1, 0.7].map((w, i) => (
-                <span
-                  key={i}
-                  className="w-[3px] rounded-full bg-[#ffd27a] transition-[height] duration-75"
-                  style={{ height: `${Math.max(4, Math.min(16, level * 26 * w + 4))}px` }}
-                />
-              ))
-            ) : orbState === "watching" ? (
-              <span className="h-2 w-2 rounded-full bg-[#ff6b6b]" title="Watching" />
-            ) : (
-              <span className="h-1.5 w-1.5 rounded-full bg-white/25" />
-            )}
-          </span>
-        </button>
-
-        {/* On the notch the island has no room for words: say what's happening just below it. */}
-        {island.notch && active && !caption && (
-          <p className="persona-in label-mono rounded-full bg-card/90 px-3 py-1 text-[10px] text-muted shadow-sm backdrop-blur">
-            {barStatus}
-          </p>
+        {drawing && <DrawingLayer drawing={drawing} onDone={() => setDrawing(null)} />}
+        {circling && (
+          <CircleLayer
+            onCancel={() => setCircling(false)}
+            onPick={(area) => {
+              setCircling(false);
+              circledRef.current = area;
+              setCircled(area);
+            }}
+          />
+        )}
+        {circled && !circling && (
+          <span
+            aria-hidden
+            className="pointer-events-none fixed rounded-2xl border-2 border-dashed border-[#b794ff] bg-[#b794ff]/5"
+            style={{ left: circled.x, top: circled.y, width: circled.w, height: circled.h }}
+          />
         )}
 
-        {caption && (
+        {/* The island: on the notch (or hanging from the top centre), solid black.
+            Click it for Persuna, right-click for more, drop a file on it. */}
+        <div
+          style={{ width }}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            pickFile(e.dataTransfer.files?.[0]);
+          }}
+          className={`pointer-events-auto overflow-hidden rounded-b-[26px] bg-black text-white transition-[width] duration-300 ease-out ${
+            holding
+              ? "shadow-[0_8px_30px_-6px_rgba(139,92,246,0.8)]"
+              : "shadow-[0_10px_30px_-12px_rgba(0,0,0,0.7)]"
+          }`}
+        >
           <button
             type="button"
-            onClick={onTap}
-            className={`persona-in pointer-events-auto max-w-[min(34rem,90vw)] rounded-[22px] px-5 py-3 text-left text-sm leading-snug ${glass}`}
+            aria-label={`${name}: ${panel ? "close" : "open"} (${barStatus})`}
+            aria-expanded={panel}
+            aria-haspopup="menu"
+            onClick={() =>
+              talkingNow.current ? interrupt() : panel ? setPanel(false) : openPanel()
+            }
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenu((m) => !m);
+            }}
+            style={{ height: island.height }}
+            className="flex w-full items-center justify-between gap-3 px-3 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#b794ff]"
           >
-            {caption.length > 320 ? `${caption.slice(0, 320)}…` : caption}
+            <span className="flex shrink-0 items-center">
+              <PersonaOrb
+                look={look}
+                state={orbState}
+                level={level}
+                size={Math.min(24, island.height - 10)}
+                gaze={null}
+                animate={orbState !== "sleeping"}
+              />
+            </span>
+            {/* Beside a notch there's no room for words: they go in the row below. */}
+            {island.notch ? (
+              <span className="sr-only" role="status">
+                {barStatus}
+              </span>
+            ) : (
+              <span
+                className="label-mono flex-1 truncate text-left text-[10px] text-white/75"
+                role="status"
+              >
+                {barStatus}
+              </span>
+            )}
+            <span aria-hidden className="flex h-4 shrink-0 items-center justify-end gap-[3px]">
+              {indicator}
+            </span>
           </button>
-        )}
-        {error && (
-          <p className="persona-in pointer-events-auto rounded-full bg-danger/10 px-3 py-1.5 text-sm text-danger backdrop-blur">
-            {error}
+
+          {island.notch && (active || grown) && !(panel && setupDone) && (
+            <p
+              aria-hidden
+              className="label-mono flex h-7 items-center justify-center px-4 text-[10px] text-white/80"
+            >
+              {barStatus}
+            </p>
+          )}
+
+          {caption && !(panel && setupDone) && (
+            <button
+              type="button"
+              onClick={onTap}
+              className="block w-full px-5 pb-4 pt-1 text-left text-[13px] leading-snug text-white/95"
+            >
+              {caption.length > 420 ? `${caption.slice(0, 420)}…` : caption}
+            </button>
+          )}
+          {error && (
+            <p className="px-5 pb-3 pt-1 text-[12px] leading-snug text-[#ff8f87]">{error}</p>
+          )}
+
+          {/* Persuna itself: who it is, what it's on, the last words, and what it can do. */}
+          {panel && setupDone && (
+            <div className="space-y-3 px-5 pb-5 pt-1">
+              <div className="flex items-center gap-3.5">
+                <PersonaOrb look={look} state={orbState} level={level} size={52} gaze={null} />
+                <div className="min-w-0">
+                  <p className="label-mono text-[10px] text-white/45">
+                    {greeting()} · {barStatus}
+                  </p>
+                  <h2 className="font-display text-lg font-medium leading-tight tracking-[-0.02em]">
+                    {firstName ? `${firstName}, what's next?` : "What's next?"}
+                  </h2>
+                  <p className="truncate text-[12px] text-white/55">
+                    {focusSkill
+                      ? `Today: ${focusSkill.name}`
+                      : (props.focus ?? "Tell me what you're working on")}
+                  </p>
+                </div>
+              </div>
+              {caption && (
+                <p className="text-[13px] leading-snug text-white/90">
+                  {caption.length > 420 ? `${caption.slice(0, 420)}…` : caption}
+                </p>
+              )}
+              {!caption && recent.length > 0 && (
+                <ul className="space-y-1 text-[13px] leading-snug">
+                  {recent.map((m) => (
+                    <li
+                      key={m.id}
+                      className={m.role === "user" ? "text-white/50" : "text-white/90"}
+                    >
+                      <span className="label-mono mr-2 text-[9px] text-white/35">
+                        {m.role === "user" ? "You" : name}
+                      </span>
+                      {m.content.length > 160 ? `${m.content.slice(0, 160)}…` : m.content}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {attached && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void sendFile(attached, text);
+                  }}
+                  className="space-y-2 rounded-2xl bg-white/[0.06] p-3"
+                >
+                  <div className="flex items-center gap-2 text-[12px]">
+                    <span className="label-mono rounded-full bg-white/10 px-2 py-0.5 text-[9px]">
+                      File
+                    </span>
+                    <span className="flex-1 truncate">{attached.name}</span>
+                    <button
+                      type="button"
+                      aria-label="Remove the file"
+                      onClick={() => setAttached(null)}
+                      className="text-white/50 hover:text-white"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <input
+                    aria-label="What should I do with it?"
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    autoFocus
+                    placeholder="What should I do with it?"
+                    className="w-full rounded-full bg-white/10 px-3 py-1.5 text-[13px] outline-none placeholder:text-white/35"
+                  />
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      "Summarise it",
+                      "Make a table",
+                      "Draw it as a flow",
+                      "What needs my attention?",
+                    ].map((ask) => (
+                      <button
+                        key={ask}
+                        type="button"
+                        disabled={busy !== "idle"}
+                        onClick={() => void sendFile(attached, ask)}
+                        className={CHIP}
+                      >
+                        {ask}
+                      </button>
+                    ))}
+                    <button
+                      type="submit"
+                      disabled={busy !== "idle"}
+                      className="label-mono rounded-full bg-white px-3 py-1.5 text-[10px] text-black disabled:opacity-40"
+                    >
+                      Send
+                    </button>
+                  </div>
+                </form>
+              )}
+              {islandTyping && !attached && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void send(text);
+                  }}
+                  className="flex items-center gap-1.5 rounded-full bg-white/10 p-1 pl-4"
+                >
+                  <label className="sr-only" htmlFor="persona-panel-input">
+                    Message {name}
+                  </label>
+                  <input
+                    id="persona-panel-input"
+                    ref={panelInput}
+                    value={text}
+                    onChange={(e) => {
+                      interrupt();
+                      setText(e.target.value);
+                    }}
+                    onKeyDown={(e) => e.key === "Escape" && setIslandTyping(false)}
+                    autoComplete="off"
+                    placeholder={`Ask ${name} anything…`}
+                    className="min-w-0 flex-1 bg-transparent text-[13px] text-white outline-none placeholder:text-white/35 focus-visible:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!text.trim()}
+                    aria-label="Send"
+                    className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-white text-black disabled:opacity-30"
+                  >
+                    <Icon name="send" />
+                  </button>
+                </form>
+              )}
+              <div className="flex flex-wrap gap-1.5">
+                {chips
+                  .filter((c) => !c.hidden && !(c.label === "Type" && islandTyping))
+                  .map((c) => (
+                    <button key={c.label} type="button" onClick={c.act} className={CHIP}>
+                      {c.label}
+                    </button>
+                  ))}
+              </div>
+              <p className="label-mono text-[9px] text-white/35">
+                {talkHint} · double-tap to type · right-click for more
+              </p>
+            </div>
+          )}
+        </div>
+
+        {toast && (
+          <p className="persona-in label-mono rounded-full bg-black px-3 py-1.5 text-[10px] text-white ring-1 ring-white/10">
+            {toast}
           </p>
         )}
 
-        {panel && setupDone && (
-          <div
-            className={`persona-in pointer-events-auto w-[min(28rem,92vw)] space-y-4 rounded-[26px] p-5 ${glass}`}
-          >
-            <div>
-              <p className="label-mono text-[10px] text-muted">{greeting()}</p>
-              <h2 className="font-display text-xl font-medium tracking-[-0.02em]">
-                {firstName ? `${firstName}, what's next?` : "What's next?"}
-              </h2>
-              <p className="mt-1 text-sm text-muted">
-                {focusSkill
-                  ? `Today: ${focusSkill.name}.`
-                  : (props.focus ?? "Tell me what you're working on.")}{" "}
-                {talkHint}, or type below.
-              </p>
-            </div>
-            {recent.length > 0 && (
-              <ul className="space-y-1.5 text-sm">
-                {recent.map((m) => (
-                  <li key={m.id} className={m.role === "user" ? "text-muted" : "text-foreground"}>
-                    <span className="label-mono mr-2 text-[10px] text-faint">
-                      {m.role === "user" ? "You" : name}
-                    </span>
-                    {m.content.length > 160 ? `${m.content.slice(0, 160)}…` : m.content}
-                  </li>
-                ))}
-              </ul>
-            )}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void send(text);
-              }}
-              className="flex items-center gap-1.5 rounded-full bg-card p-1.5 pl-4 ring-1 ring-line-strong focus-within:ring-accent"
-            >
-              <label className="sr-only" htmlFor="persona-panel-input">
-                Message {name}
-              </label>
-              <input
-                id="persona-panel-input"
-                ref={panelInput}
-                value={text}
-                onChange={(e) => {
-                  interrupt();
-                  setText(e.target.value);
-                }}
-                onKeyDown={(e) => e.key === "Escape" && setPanel(false)}
-                autoComplete="off"
-                placeholder={`Ask ${name} anything…`}
-                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint focus-visible:outline-none"
-              />
-              <button
-                type="button"
-                aria-label="Hold to talk"
-                title="Hold to talk"
-                onPointerDown={() => holdStart()}
-                onPointerUp={() => void holdEnd()}
-                onPointerLeave={() => holding && void holdEnd()}
-                className={`grid h-8 w-8 shrink-0 place-items-center rounded-full ${
-                  holding ? "bg-accent text-accent-ink" : "text-muted hover:text-accent"
-                }`}
-              >
-                <Icon name="mic" />
-              </button>
-              <button
-                type="submit"
-                disabled={!text.trim()}
-                aria-label="Send"
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent text-accent-ink disabled:opacity-30"
-              >
-                <Icon name="send" />
-              </button>
-            </form>
-            <div className="flex flex-wrap gap-1.5">
-              {[
-                [
-                  watching ? "Stop watching" : "Watch my screen",
-                  () => (watching ? watcher.current?.stop() : setAskWatch(true)),
-                ],
-                ["Wrap up my day", () => void send("Wrap up my day")],
-                ["My to-dos", () => void send("What's on my to-do list?")],
-              ].map(([label, act]) => (
-                <button
-                  key={label as string}
-                  type="button"
-                  onClick={act as () => void}
-                  className="label-mono rounded-full px-3 py-1.5 text-[10px] text-muted ring-1 ring-line-strong hover:text-accent hover:ring-accent/40"
-                >
-                  {label as string}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {(hasCards || showSetupInput) && (
-          <div className="pointer-events-auto flex w-[min(28rem,92vw)] flex-col gap-2">
+        {islandCards && (
+          <div className="pointer-events-auto flex w-[min(30rem,94vw)] flex-col gap-2">
             {!setupDone ? setupChips : assistCards}
+            {offer && (
+              <div
+                className={`persona-in flex items-center gap-2 rounded-[22px] p-2 pl-4 text-sm ${ISLAND_CARD}`}
+              >
+                <span className="flex-1 text-[13px]">{offer}?</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const ask = offer;
+                    setOffer(null);
+                    void send(ask);
+                  }}
+                  className="rounded-full bg-white px-3 py-1.5 text-xs font-medium text-black"
+                >
+                  Do it
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOffer(null)}
+                  className="rounded-full px-3 py-1.5 text-xs text-white/60 hover:text-white"
+                >
+                  Not now
+                </button>
+              </div>
+            )}
+            {askWork && (
+              <div
+                className={`persona-in space-y-2 rounded-[22px] p-4 text-[13px] leading-snug ${ISLAND_CARD}`}
+              >
+                <p>
+                  <strong>Work mode.</strong> While you work, I keep an eye on what you&apos;re
+                  doing (read on this computer, every few seconds when something changes). I learn
+                  your steps quietly, give you a pointer when you seem stuck or are hunting for
+                  something, and offer to take over the parts I can do, your way. I keep only the
+                  steps, never what&apos;s on screen. Turn it off any time.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setWork(true)}
+                    className="rounded-full bg-white px-4 py-1.5 text-xs font-medium text-black"
+                  >
+                    Turn on Work mode
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAskWork(false)}
+                    className="rounded-full px-3 py-1.5 text-xs text-white/60 hover:text-white"
+                  >
+                    Not now
+                  </button>
+                </div>
+              </div>
+            )}
+            {made && (
+              <MadeFileCard
+                file={made}
+                desktop={desktop}
+                onClose={() => setMade(null)}
+                onCopy={(t) => void doClipboard({ op: "copy", text: t })}
+              />
+            )}
             {latestJob?.jobId && (
-              <div className={`persona-in rounded-[22px] p-3 text-sm ${glass}`}>
+              <div className={`persona-in rounded-[22px] p-3 text-sm ${ISLAND_CARD}`}>
                 <div className="flex items-center gap-2">
                   <span className="flex-1">{latestJob.content}</span>
                   <button
                     type="button"
                     onClick={() => setDismissedJob(latestJob.jobId!)}
                     aria-label="Close"
-                    className="text-muted hover:text-foreground"
+                    className="text-white/60 hover:text-white"
                   >
                     ×
                   </button>
@@ -1811,7 +2204,7 @@ export function Companion(props: CompanionProps) {
                   e.preventDefault();
                   void send(text);
                 }}
-                className={`persona-in flex items-center gap-1.5 rounded-full p-1.5 pl-4 ${glass}`}
+                className={`persona-in flex items-center gap-1.5 rounded-full p-1.5 pl-4 ${ISLAND_CARD}`}
               >
                 <input
                   aria-label={`Message ${name}`}
@@ -1820,13 +2213,13 @@ export function Companion(props: CompanionProps) {
                   onKeyDown={(e) => e.key === "Escape" && setSetupLater(true)}
                   autoComplete="off"
                   placeholder="Type, or hold to talk"
-                  className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/35"
                 />
                 <button
                   type="submit"
                   disabled={!text.trim()}
                   aria-label="Send"
-                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent text-accent-ink disabled:opacity-30"
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white text-black disabled:opacity-30"
                 >
                   <Icon name="send" />
                 </button>
@@ -1839,7 +2232,7 @@ export function Companion(props: CompanionProps) {
           <div
             role="menu"
             aria-label={`${name}'s menu`}
-            className={`persona-in pointer-events-auto flex w-60 flex-col rounded-2xl p-1.5 text-sm ${glass}`}
+            className={`persona-in pointer-events-auto flex w-64 flex-col rounded-2xl p-1.5 text-sm ${ISLAND_CARD}`}
           >
             {menuItems
               .filter((item) => !item.hidden)
@@ -1852,12 +2245,12 @@ export function Companion(props: CompanionProps) {
                     setMenu(false);
                     item.onSelect();
                   }}
-                  className="rounded-xl px-3 py-2 text-left hover:bg-accent-soft hover:text-accent"
+                  className="rounded-xl px-3 py-2 text-left text-white/90 hover:bg-white/10"
                 >
                   {item.label}
                 </button>
               ))}
-            <p className="label-mono px-3 pb-1 pt-2 text-[10px] text-muted">
+            <p className="label-mono px-3 pb-1 pt-2 text-[10px] text-white/45">
               {talkHint} · double-tap to type
             </p>
           </div>
@@ -1880,6 +2273,26 @@ export function Companion(props: CompanionProps) {
           : "none",
       }}
     >
+      <input
+        ref={fileInput}
+        type="file"
+        className="hidden"
+        accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.docx,.md,.markdown,.txt"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) {
+            setAttached(file);
+            setTyping(true);
+          }
+        }}
+      />
+      {drawing && <DrawingLayer drawing={drawing} onDone={() => setDrawing(null)} />}
+      {toast && (
+        <p className="persona-in label-mono pointer-events-none fixed bottom-6 left-1/2 -translate-x-1/2 rounded-full bg-black px-3 py-1.5 text-[10px] text-white">
+          {toast}
+        </p>
+      )}
       {/* Beside Persuna: what it's saying, and a card when it needs a decision. */}
       <div
         className={`absolute flex w-max max-w-80 flex-col gap-2 ${side} ${low ? "bottom-6" : "top-2"}`}
@@ -1888,6 +2301,14 @@ export function Companion(props: CompanionProps) {
         {hasCards && (
           <div className="pointer-events-auto flex w-80 flex-col gap-2">
             {!setupDone ? setupChips : assistCards}
+            {made && (
+              <MadeFileCard
+                file={made}
+                desktop={null}
+                onClose={() => setMade(null)}
+                onCopy={(t) => void doClipboard({ op: "copy", text: t })}
+              />
+            )}
             {latestJob?.jobId && (
               <div className={`persona-in rounded-[22px] p-3 text-sm ${glass}`}>
                 <div className="flex items-center gap-2">
@@ -1926,7 +2347,8 @@ export function Companion(props: CompanionProps) {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              void send(text);
+              if (attached) void sendFile(attached, text);
+              else void send(text);
               if (setupDone) setTyping(false);
             }}
             className={`persona-in pointer-events-auto flex w-80 items-center gap-1.5 rounded-full p-1.5 pl-4 ${glass}`}
@@ -1949,12 +2371,18 @@ export function Companion(props: CompanionProps) {
               }}
               onBlur={() => setupDone && !text.trim() && setTyping(false)}
               autoComplete="off"
-              placeholder={setupDone ? `Type to ${name}…` : "Type, or tap me and just talk"}
+              placeholder={
+                attached
+                  ? `${attached.name}: what should I do with it?`
+                  : setupDone
+                    ? `Type to ${name}…`
+                    : "Type, or tap me and just talk"
+              }
               className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint"
             />
             <button
               type="submit"
-              disabled={!text.trim()}
+              disabled={!text.trim() && !attached}
               aria-label="Send"
               className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ink text-ink-foreground disabled:opacity-30"
             >
