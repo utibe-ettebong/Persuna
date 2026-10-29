@@ -2,8 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { actorOf, getUser } from "@/lib/auth/session";
 import { PROVIDERS, isProvider } from "@/lib/connections/providers";
-import { finishConnecting } from "@/lib/connections/service";
-import { NONCE_COOKIE } from "../route";
+import { NONCE_COOKIE, finishConnecting } from "@/lib/connections/service";
 
 /** The provider sends the browser back here with a code: store the connection. */
 export async function GET(request: Request, { params }: { params: Promise<{ provider: string }> }) {

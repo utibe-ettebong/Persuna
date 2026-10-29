@@ -142,11 +142,11 @@ With no `EXTRACT_API_KEY` set, the app runs **offline mock models**, and a banne
 | Tests               | Vitest                                                                         |
 | Hosting             | Railway (web service plus Postgres), configured in `.railway/railway.ts`       |
 
-| Role       | Used for                                               | Intended model              |
-| ---------- | ------------------------------------------------------ | --------------------------- |
-| `extract`  | Rule extraction; turning corrections into rule changes | Muse Spark (Meta Model API) |
-| `draft`    | Drafting outputs                                       | Muse Spark Open on Baseten  |
-| `evaluate` | Scoring drafts against held-back examples              | Muse Spark Open on Modal    |
+| Role       | Used for                                               | Intended model                      |
+| ---------- | ------------------------------------------------------ | ----------------------------------- |
+| `extract`  | Rule extraction; turning corrections into rule changes | Muse Spark (Meta Model API)         |
+| `draft`    | Drafting outputs                                       | Muse Spark Open on Baseten          |
+| `evaluate` | Scoring drafts against held-back examples              | Muse Spark Open on Modal or Baseten |
 
 > Before you rely on these roles, check the provider docs: confirm the exact model IDs and that each endpoint accepts OpenAI-style `POST {base}/chat/completions` requests. If one doesn't, add an adapter in `src/lib/models/gateway.ts`. Nothing else needs to change.
 
@@ -250,7 +250,7 @@ CI runs the same checks on every push and pull request (`.github/workflows/ci.ym
 
 Email verification and password reset (they need an email provider). Sign-in with Google. Automatic payouts by Paystack transfer, plus Flutterwave and Stripe. Sending the employer link by email (you copy it from the Listing tab). WhatsApp and email delivery. Isolated job sandboxes. See the concept document for the full design.
 
-**Voice:** the browser converts every recording and upload to 16 kHz mono WAV. With a base URL on `api.meta.ai`, transcription uses Muse Voice Transcribe's native API (`/v1/asr/transcribe`); anything else uses OpenAI-style `/audio/transcriptions`. Override with `TRANSCRIBE_API=meta|openai`. Recordings are capped at 5 minutes.
+**Voice:** the browser converts every recording and upload to 16 kHz mono WAV. With a base URL on `api.meta.ai`, transcription uses Muse Voice Transcribe's native API (`/v1/asr/transcribe`); anything else uses OpenAI-style `/audio/transcriptions`. Override with `TRANSCRIBE_API=meta|openai`. Recordings are capped at about 6 minutes.
 
 **To verify before relying on it:** the webhook check uses Paystack's documented scheme (HMAC-SHA512 of the raw body with your secret key, in `x-paystack-signature`), but it couldn't be checked against Paystack's docs page during the build. Test it with a test-mode key.
 

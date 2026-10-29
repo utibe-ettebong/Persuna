@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import { getUser } from "@/lib/auth/session";
 import { isProvider } from "@/lib/connections/providers";
-import { startConnecting } from "@/lib/connections/service";
-
-export const NONCE_COOKIE = "persuna_connect";
+import { NONCE_COOKIE, startConnecting } from "@/lib/connections/service";
 
 /** Starts connecting an app: off to the provider's sign-in page. */
 export async function GET(request: Request, { params }: { params: Promise<{ provider: string }> }) {

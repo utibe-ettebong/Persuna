@@ -76,6 +76,9 @@ export async function connectedProviders(userId: string): Promise<Provider[]> {
 
 const STATE_TTL_MS = 10 * 60_000;
 
+/** The cookie holding the OAuth nonce between the start and callback routes. */
+export const NONCE_COOKIE = "persuna_connect";
+
 /**
  * Where to send the browser to connect an app: the provider's sign-in page,
  * with a signed state (who, which app, and a nonce that must match a cookie
