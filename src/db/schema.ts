@@ -17,6 +17,7 @@ import {
 import type { GroundingReport } from "@/lib/jobs/grounding";
 import type { JobFlag } from "@/lib/jobs/self-check";
 import type { Tone } from "@/lib/persona/tone";
+import type { FitReport, MilestoneCheck, ProjectPlan } from "@/lib/projects/types";
 import type { InterviewAnswers } from "@/lib/skill/interview";
 import type { RuleOp, ScoreBreakdown, SkillSheet } from "@/lib/skill/types";
 
@@ -48,6 +49,8 @@ export const ownerType = pgEnum("owner_type", ["freelancer", "employee", "organi
 export const employerDecision = pgEnum("employer_decision", ["pending", "approved", "declined"]);
 export const escrowStatus = pgEnum("escrow_status", ["pending", "held", "released", "refunded"]);
 export const paymentProvider = pgEnum("payment_provider", ["mock", "paystack"]);
+/** public: in the marketplace and on the owner's profile. unlisted: only people with the link. */
+export const listingVisibility = pgEnum("listing_visibility", ["public", "unlisted"]);
 
 /* ---------- Accounts (Better Auth). Columns follow Better Auth's core schema. ---------- */
 
@@ -315,13 +318,14 @@ export const listings = pgTable(
       .references(() => skills.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     description: text("description").notNull(),
-    priceNgn: integer("price_ngn").notNull(),
+    /** Price per task in US cents. */
+    priceCents: integer("price_cents").notNull(),
     turnaroundHours: integer("turnaround_hours").notNull(),
     sampleOutput: text("sample_output").notNull(),
     ownerType: ownerType("owner_type").notNull(),
     ownershipDeclaredAt: timestamp("ownership_declared_at", { withTimezone: true }),
-    /** Extra a renter pays for guaranteed owner review. Null: not offered. */
-    premiumReviewNgn: integer("premium_review_ngn"),
+    /** Extra a renter pays for guaranteed owner review, in US cents. Null: not offered. */
+    premiumReviewCents: integer("premium_review_cents"),
     employerName: text("employer_name"),
     employerEmail: text("employer_email"),
     /** Employer's share of the owner's earnings, set by the employer when approving. */
@@ -331,35 +335,65 @@ export const listings = pgTable(
     employerDecision: employerDecision("employer_decision"),
     employerDecidedAt: timestamp("employer_decided_at", { withTimezone: true }),
     active: boolean("active").notNull().default(false),
+    visibility: listingVisibility("visibility").notNull().default("public"),
+    /** Set when Persuna took the listing down by itself (e.g. its score fell below the minimum). */
+    pausedAt: timestamp("paused_at", { withTimezone: true }),
+    pausedReason: text("paused_reason"),
     createdAt: createdAt(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [check("price_positive", sql`${t.priceNgn} > 0`)],
+  (t) => [
+    check("price_cents_positive", sql`${t.priceCents} > 0`),
+    check(
+      "premium_review_cents_not_negative",
+      sql`${t.premiumReviewCents} is null or ${t.premiumReviewCents} >= 0`,
+    ),
+  ],
 );
 
-/** Escrow for one rented job. Amounts are whole naira. Kept after the job is purged. */
-export const transactions = pgTable("transactions", {
-  id: id(),
-  jobId: uuid("job_id")
-    .unique()
-    .references(() => jobs.id, { onDelete: "set null" }),
-  listingId: uuid("listing_id")
-    .notNull()
-    .references(() => listings.id),
-  renterUserId: text("renter_user_id").references(() => authUsers.id, { onDelete: "set null" }),
-  renterName: text("renter_name").notNull(),
-  renterEmail: text("renter_email"),
-  amountNgn: integer("amount_ngn").notNull(),
-  platformFeeNgn: integer("platform_fee_ngn").notNull(),
-  ownerShareNgn: integer("owner_share_ngn").notNull(),
-  employerShareNgn: integer("employer_share_ngn").notNull().default(0),
-  premiumReview: boolean("premium_review").notNull().default(false),
-  provider: paymentProvider("provider").notNull().default("mock"),
-  providerReference: text("provider_reference").unique(),
-  status: escrowStatus("status").notNull().default("held"),
-  createdAt: createdAt(),
-  settledAt: timestamp("settled_at", { withTimezone: true }),
-});
+/**
+ * Escrow for one rented job. Amounts are integer minor units of `currency`:
+ * US cents for every payment since the switch to dollars, kobo for the naira
+ * payments made before it. Kept after the job is purged.
+ */
+export const transactions = pgTable(
+  "transactions",
+  {
+    id: id(),
+    jobId: uuid("job_id")
+      .unique()
+      .references(() => jobs.id, { onDelete: "set null" }),
+    listingId: uuid("listing_id")
+      .notNull()
+      .references(() => listings.id),
+    renterUserId: text("renter_user_id").references(() => authUsers.id, { onDelete: "set null" }),
+    renterName: text("renter_name").notNull(),
+    renterEmail: text("renter_email"),
+    amountCents: integer("amount_cents").notNull(),
+    platformFeeCents: integer("platform_fee_cents").notNull(),
+    ownerShareCents: integer("owner_share_cents").notNull(),
+    employerShareCents: integer("employer_share_cents").notNull().default(0),
+    /** ISO 4217 code: USD, or NGN for payments made before the switch to dollars. */
+    currency: text("currency").notNull().default("USD"),
+    premiumReview: boolean("premium_review").notNull().default(false),
+    provider: paymentProvider("provider").notNull().default("mock"),
+    providerReference: text("provider_reference").unique(),
+    status: escrowStatus("status").notNull().default("held"),
+    createdAt: createdAt(),
+    settledAt: timestamp("settled_at", { withTimezone: true }),
+    /**
+     * The renter's rating when they accepted, copied from the job so the
+     * listing's reviews outlive the job's retention period.
+     */
+    rating: integer("rating"),
+    ratingComment: text("rating_comment"),
+  },
+  (t) => [
+    check("amount_cents_positive", sql`${t.amountCents} > 0`),
+    check("txn_rating_range", sql`${t.rating} is null or ${t.rating} between 1 and 5`),
+    check("currency_known", sql`${t.currency} in ('USD', 'NGN')`),
+  ],
+);
 
 /**
  * Who did what, when. Kept independent of the rows it describes (no foreign
@@ -544,3 +578,244 @@ export const jobRounds = pgTable(
   (t) => [unique().on(t.jobId, t.round)],
 );
 export type JobRound = typeof jobRounds.$inferSelect;
+
+/* ---------- Agent imports: other AI agents hand Persuna what they learned ---------- */
+
+export const agentImportStatus = pgEnum("agent_import_status", [
+  "received",
+  "training",
+  "testing",
+  "verified",
+  "failed",
+]);
+
+/**
+ * A key an outside agent (Grokbot, Musebot, Dot…) uses to send skills to one
+ * person's account. Only the SHA-256 of the token is stored; the token is shown once.
+ */
+export const agentKeys = pgTable(
+  "agent_keys",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    agentName: text("agent_name").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    /** The token's last characters, so the person can tell keys apart. */
+    tokenHint: text("token_hint").notNull(),
+    createdAt: createdAt(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [index().on(t.userId)],
+);
+
+/** What Persuna found while training and testing an imported skill. Counts and scores only. */
+export interface ImportReport {
+  examples?: number;
+  train?: number;
+  test?: number;
+  methodSteps?: number;
+  /** Names and identifiers replaced with placeholders before anything was kept. */
+  redactions?: number;
+  rules?: number;
+  version?: number;
+  score?: number | null;
+  minScore?: number;
+  outcome?: "verified" | "below_minimum" | "error";
+  problems?: string[];
+}
+
+/** One skill sent by an agent (or uploaded as a file), and how training and testing went. */
+export const agentImports = pgTable(
+  "agent_imports",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    /** Null for a file the person uploaded themselves. */
+    agentKeyId: uuid("agent_key_id").references(() => agentKeys.id, { onDelete: "set null" }),
+    agentName: text("agent_name").notNull(),
+    status: agentImportStatus("status").notNull().default("received"),
+    skillId: uuid("skill_id").references(() => skills.id, { onDelete: "set null" }),
+    /**
+     * The submission as received, held only until its examples are redacted and
+     * saved to the skill (seconds), then cleared. Never shown or reported.
+     */
+    payload: jsonb("payload"),
+    report: jsonb("report").$type<ImportReport>().notNull().default({}),
+    /** Why it failed, in a sentence. */
+    error: text("error"),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.userId, t.createdAt), index().on(t.agentKeyId, t.createdAt)],
+);
+export type AgentKey = typeof agentKeys.$inferSelect;
+export type AgentImport = typeof agentImports.$inferSelect;
+
+/* ---------- Projects: posted work, with Persuna checking every stage ---------- */
+
+export const projectStatus = pgEnum("project_status", [
+  "draft",
+  "open",
+  "in_progress",
+  "completed",
+  "cancelled",
+  "disputed",
+]);
+export const milestoneStatus = pgEnum("milestone_status", [
+  "pending",
+  "funded",
+  "submitted",
+  "changes_requested",
+  "approved",
+  "released",
+  "refunded",
+]);
+export const proposalStatus = pgEnum("proposal_status", [
+  "pending",
+  "accepted",
+  "declined",
+  "withdrawn",
+]);
+export const updateAuthor = pgEnum("project_update_author", ["persona", "poster", "seller"]);
+
+/**
+ * A piece of work someone posts. The brief is material: it stays here and is
+ * blanked after the retention period, never copied into a skill.
+ */
+export const projects = pgTable(
+  "projects",
+  {
+    id: id(),
+    posterId: text("poster_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    brief: text("brief").notNull(),
+    budgetCents: integer("budget_cents").notNull(),
+    deadline: timestamp("deadline", { withTimezone: true }).notNull(),
+    status: projectStatus("status").notNull().default("draft"),
+    chosenProposalId: uuid("chosen_proposal_id").references(
+      (): AnyPgColumn => projectProposals.id,
+      { onDelete: "set null" },
+    ),
+    /** Persuna's plan (scope, criteria, milestones, flags), as the poster confirmed it. */
+    plan: jsonb("plan").$type<ProjectPlan>(),
+    posterRating: integer("poster_rating"),
+    posterReview: text("poster_review"),
+    sellerRating: integer("seller_rating"),
+    sellerReview: text("seller_review"),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    /** Set when the project ends; the material is blanked after this. */
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    purgedAt: timestamp("purged_at", { withTimezone: true }),
+  },
+  (t) => [
+    index().on(t.status, t.createdAt),
+    index().on(t.posterId),
+    index().on(t.expiresAt),
+    check("budget_cents_positive", sql`${t.budgetCents} > 0`),
+    check(
+      "project_ratings_range",
+      sql`(${t.posterRating} is null or ${t.posterRating} between 1 and 5) and (${t.sellerRating} is null or ${t.sellerRating} between 1 and 5)`,
+    ),
+  ],
+);
+
+/** One deliverable with its acceptance criteria and its own escrow. Amounts in US cents. */
+export const projectMilestones = pgTable(
+  "project_milestones",
+  {
+    id: id(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    title: text("title").notNull(),
+    criteria: text("criteria")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    amountCents: integer("amount_cents").notNull(),
+    status: milestoneStatus("status").notNull().default("pending"),
+    /** The seller's latest delivery. Material: blanked after retention. */
+    delivery: text("delivery"),
+    /** Persuna's check of the latest delivery against the criteria. */
+    check: jsonb("check").$type<MilestoneCheck>(),
+    /** Times the poster asked for changes. */
+    rounds: integer("rounds").notNull().default(0),
+    provider: paymentProvider("provider"),
+    paymentReference: text("payment_reference").unique(),
+    platformFeeCents: integer("platform_fee_cents"),
+    sellerShareCents: integer("seller_share_cents"),
+    fundedAt: timestamp("funded_at", { withTimezone: true }),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    settledAt: timestamp("settled_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique().on(t.projectId, t.position),
+    check("milestone_amount_positive", sql`${t.amountCents} > 0`),
+  ],
+);
+
+/** A seller's offer to do the project, with Persuna's fit report for the poster. */
+export const projectProposals = pgTable(
+  "project_proposals",
+  {
+    id: id(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    sellerId: text("seller_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    /** A listing of theirs the work would draw on, if any. */
+    listingId: uuid("listing_id").references(() => listings.id, { onDelete: "set null" }),
+    message: text("message").notNull(),
+    priceCents: integer("price_cents").notNull(),
+    days: integer("days").notNull(),
+    fit: jsonb("fit").$type<FitReport>(),
+    status: proposalStatus("status").notNull().default("pending"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique().on(t.projectId, t.sellerId),
+    check("proposal_price_positive", sql`${t.priceCents} > 0`),
+  ],
+);
+
+/** The project's timeline: every step, and every Persuna check, in order. */
+export const projectUpdates = pgTable(
+  "project_updates",
+  {
+    id: id(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    author: updateAuthor("author").notNull(),
+    /** plan, opened, proposal, fit, accepted, funded, delivery, check, changes, approved, dispute, assessment, wrapup, rating, cancelled, resolved. */
+    kind: text("kind").notNull(),
+    body: text("body").notNull(),
+    milestoneId: uuid("milestone_id").references(() => projectMilestones.id, {
+      onDelete: "set null",
+    }),
+    /** Set on updates about one proposal: only the poster and that seller see them. */
+    proposalId: uuid("proposal_id").references(() => projectProposals.id, {
+      onDelete: "set null",
+    }),
+    createdAt: createdAt(),
+  },
+  (t) => [index().on(t.projectId, t.createdAt)],
+);
+
+export type Project = typeof projects.$inferSelect;
+export type ProjectMilestone = typeof projectMilestones.$inferSelect;
+export type ProjectProposal = typeof projectProposals.$inferSelect;
+export type ProjectUpdate = typeof projectUpdates.$inferSelect;

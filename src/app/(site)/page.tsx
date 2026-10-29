@@ -321,8 +321,8 @@ export default function LandingPage() {
               <p className="label-mono text-muted">One rented task</p>
               <dl className="mt-4 space-y-2.5 text-sm">
                 {[
-                  ["Renter pays", "₦5,000", ""],
-                  ["Platform fee (20%)", "−₦1,000", "text-muted"],
+                  ["Renter pays", "$25", ""],
+                  ["Platform fee (20%)", "−$5", "text-muted"],
                   ["Employer share (if any)", "agreed %", "text-muted"],
                 ].map(([k, v, c]) => (
                   <div key={k} className={`flex justify-between ${c}`}>
@@ -332,7 +332,7 @@ export default function LandingPage() {
                 ))}
                 <div className="flex justify-between border-t border-line pt-3 font-medium">
                   <dt>You receive</dt>
-                  <dd className="tabular-nums text-accent">₦4,000</dd>
+                  <dd className="tabular-nums text-accent">$20</dd>
                 </div>
               </dl>
               <ol className="mt-6 flex items-center gap-2 text-[0.7rem]">

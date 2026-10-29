@@ -1,21 +1,21 @@
 /**
- * Splits a renter's payment. The platform fee rounds to the nearest naira; the
- * rest is the owner's share, of which an employer (for employee listings)
- * takes `employerPercent`. No naira is lost to rounding.
+ * Splits a payment in US cents. The platform fee rounds to the nearest cent;
+ * the rest is the owner's (or seller's) share, of which an employer (for
+ * employee listings) takes `employerPercent`. No cent is lost to rounding.
  */
-export function splitPayment(amountNgn: number, feePercent: number, employerPercent = 0) {
-  if (!Number.isInteger(amountNgn) || amountNgn <= 0)
-    throw new Error("Price must be a whole number of naira above zero");
+export function splitPayment(amountCents: number, feePercent: number, employerPercent = 0) {
+  if (!Number.isInteger(amountCents) || amountCents <= 0)
+    throw new Error("Price must be a whole number of cents above zero");
   if (employerPercent < 0 || employerPercent > 100)
     throw new Error("Employer share must be 0–100%");
-  const platformFeeNgn = Math.round((amountNgn * feePercent) / 100);
-  const earnings = amountNgn - platformFeeNgn;
-  const employerShareNgn = Math.round((earnings * employerPercent) / 100);
+  const platformFeeCents = Math.round((amountCents * feePercent) / 100);
+  const earnings = amountCents - platformFeeCents;
+  const employerShareCents = Math.round((earnings * employerPercent) / 100);
   return {
-    amountNgn,
-    platformFeeNgn,
-    employerShareNgn,
-    ownerShareNgn: earnings - employerShareNgn,
+    amountCents,
+    platformFeeCents,
+    employerShareCents,
+    ownerShareCents: earnings - employerShareCents,
   };
 }
 
@@ -64,8 +64,6 @@ export function listingRequirements(input: {
   ];
 }
 
-export const formatNaira = (n: number) => `₦${n.toLocaleString("en-NG")}`;
-
 /** How many times a renter may ask for changes to one order before accepting it. */
 export const MAX_REVISIONS = 2;
 
@@ -89,4 +87,43 @@ export function revisionAllowed(order: {
       reason: `You've used all ${MAX_REVISIONS} rounds of changes on this order`,
     };
   return { ok: true };
+}
+
+/* ---------- Persuna Verified ---------- */
+
+/** What Persuna checked: the published version's latest test run on held-back examples. */
+export interface Verification {
+  score: number;
+  /** Held-back examples the score was measured on. */
+  examples: number;
+  verifiedAt: Date;
+  version: number;
+}
+
+/** "Persuna Verified": tested on at least one held-back example and scoring at least the minimum. */
+export function isVerified(v: Verification | null, minScore: number): v is Verification {
+  return v !== null && v.examples > 0 && v.score >= minScore;
+}
+
+/**
+ * A live listing is paused when its published version no longer meets the
+ * listing minimum (a lower-scoring version was published, or a re-test scored lower).
+ */
+export function shouldPauseListing(active: boolean, score: number | null, minScore: number) {
+  return active && (score === null || score < minScore);
+}
+
+/* ---------- Ratings ---------- */
+
+export function ratingSummary(ratings: number[]) {
+  const valid = ratings.filter((r) => Number.isInteger(r) && r >= 1 && r <= 5);
+  const stars = [1, 2, 3, 4, 5].map((n) => valid.filter((r) => r === n).length);
+  return {
+    count: valid.length,
+    average: valid.length
+      ? Math.round((valid.reduce((a, b) => a + b, 0) / valid.length) * 10) / 10
+      : null,
+    /** How many ratings gave 1, 2, 3, 4 and 5 stars. */
+    stars,
+  };
 }

@@ -3,7 +3,7 @@ import { isPublicPath } from "./proxy";
 import { matchesList, parseList, signUpAllowed } from "./lib/auth/policy";
 
 describe("isPublicPath", () => {
-  it("opens the landing page, auth pages, auth API and employer links and public persona profiles", () => {
+  it("opens the landing page, auth pages, auth API, employer links, public persona profiles, the marketplace and the projects board", () => {
     for (const p of [
       "/",
       "/sign-in",
@@ -15,6 +15,10 @@ describe("isPublicPath", () => {
       "/welcome",
       "/desktop/setup",
       "/api/desktop/sign-in",
+      "/market",
+      "/market/0b9d1a2e-6c1f-4f7e-9a51-1f2d3c4b5a69",
+      "/projects",
+      "/projects/0b9d1a2e-6c1f-4f7e-9a51-1f2d3c4b5a69",
     ]) {
       expect(isPublicPath(p)).toBe(true);
     }
@@ -24,7 +28,10 @@ describe("isPublicPath", () => {
     for (const p of [
       "/skills",
       "/jobs/1",
-      "/market",
+      "/market/orders/0b9d1a2e-6c1f-4f7e-9a51-1f2d3c4b5a69",
+      "/market/orders/0b9d1a2e-6c1f-4f7e-9a51-1f2d3c4b5a69/paid",
+      "/projects/new",
+      "/projects/0b9d1a2e-6c1f-4f7e-9a51-1f2d3c4b5a69/edit",
       "/settings",
       "/sign-in-x",
       "/approvals",

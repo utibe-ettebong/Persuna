@@ -71,17 +71,39 @@ The design follows a framed, rule-drawn system: an off-white page inside vertica
 
 **Rent it out** (skill → Listing, Marketplace, Earnings)
 
+**Bring your agent's skills** (Skills → _Bring your agent's skills_, `/skills/import`)
+
+- Other AI agents a person uses (Grokbot, Musebot, Dot…) can send Persuna what they have learned about how that person works. The person creates a key per agent (shown once; only its SHA-256 is stored; revocable) and the agent calls `POST /api/agents/skills` with `Authorization: Bearer psk_…` and a `persuna.skill-import/v1` body: `{ agent, skill: { name, task, input?, output? }, method: string | string[], examples: [{ input, output, test? }] }` (3–50 examples, size-limited, 10 imports an hour per key, 2 in flight per account). It answers `202` with an id; `GET /api/agents/skills/<id>` returns the status (`received → training → testing → verified | failed`) and a report of counts, score and problems, never the text. The same JSON can be uploaded as a file.
+- After answering, Persuna does what it does when it's taught directly: names and identifiers are found and replaced (method only), a new skill is created with the method as its interview steps, examples are split (the agent's `test` flags, or about a quarter held back), rules are extracted and tested on the held-back examples. At `LISTING_MIN_SCORE` or more it's **verified** and the person gets a message from their Persuna with the score and a one-click _Publish and list_ (price plus their ownership declaration). The submission is held only until its redacted examples are saved, then cleared. Each stage is recorded, so an interrupted import resumes, and any failure lands as `failed` with a reason. Every step is audited.
+
+**Projects** (`/projects`, public to browse; posting and proposing need an account)
+
+For work bigger than one task. Persuna is involved at every stage, and every check it makes is posted to the project's timeline:
+
+1. **Posting:** the poster writes a title, brief, budget (US$) and deadline. Persuna turns the brief into a scope, acceptance criteria and 1–5 milestones whose amounts add up exactly to the budget, and flags vague requirements and unfair terms (a budget that doesn't fit the scope, an impossible deadline, one-sided terms), partly by model and partly by fixed rules (`src/lib/projects/rules.ts`). The poster edits everything before opening it.
+2. **Proposals:** sellers propose a price, days and a message (optionally pointing at one of their listings). Persuna writes the poster a **fit report** (the seller's Persuna Verified skills and scores, price against budget, strengths, risks, a recommendation). The seller sees their own report too. Accepting a proposal rescales the milestone amounts to the agreed price, to the cent.
+3. **Escrow per milestone:** the poster funds each milestone through the payment provider (mock, or Paystack in USD, verified server-side exactly like rentals; references are `persuna-ms-…` and the webhook routes them).
+4. **Delivery checks:** each delivery is checked against that milestone's criteria: met, not met or can't tell, each with a reason, plus a fairness note for each side. Both see it. The poster approves (escrow released to the seller minus `PLATFORM_FEE_PERCENT`) or asks for changes, up to `MAX_CHANGE_ROUNDS` (3) per milestone.
+5. **Disputes:** either side can raise one; Persuna records a neutral assessment and the project is marked disputed. Held money stays in escrow; an admin (`ADMIN_EMAILS`) settles each held milestone (release or refund) or resumes the project. Everything is audited.
+6. **Completion:** when every milestone is paid, Persuna writes a short wrap-up and each side rates the other.
+
+Anyone can see an open project's title, scope, budget and milestones; signed-in people also see the brief; proposals, deliveries, checks and the timeline are only for the people on it. The poster can cancel until work is delivered (funded milestones are refunded). Briefs, deliveries, proposal messages and timeline text are material: they stay in the project tables and are blanked `JOB_RETENTION_DAYS` after the project ends, and they never go into a skill. Seller payouts from milestones appear on the Earnings page.
+
 **The renter workspace** (Marketplace → an order)
 
 - A renter uploads up to 5 files (text, Word, PDF, scans, photos) and/or pastes notes. Each file is read and labelled with its name, so the work and the statement check can tell them apart.
 - When the result arrives they can **ask for changes** in plain words ("put the action items in a table", "fix the date in item 3"), up to 2 rounds (`MAX_REVISIONS`). Persuna revises the version they saw, keeping the rest, and checks every statement against the input and their request. The new version goes through the same review gate (the owner sees the request and the earlier version), and the payment stays held until the renter accepts.
 - Earlier versions and the requests made against them stay on the order for both sides, and are deleted with the job after the retention period.
 
+- **The marketplace is public.** Anyone can browse `/market` and open a listing; renting needs an account (signed-out visitors are sent to sign in and come back to the listing). Search, filter (output type, price range, minimum score, turnaround) and sort (best score, most rented, top rated, price, newest) live in the URL, so results can be shared. Listing pages carry Open Graph metadata. Owners choose **public** (in the marketplace and on their profile) or **unlisted** (link only, not indexed).
+- **Persuna Verified:** each card and listing shows the published version's score on held-back examples, how many examples, and when it was last verified. It is re-checked on every publish and every re-test of the published version, and a live listing whose score drops below `LISTING_MIN_SCORE` is **paused automatically** (audited as `listing.paused`); the owner puts it live again once a qualifying version is published.
+- Listing pages also show a **fair-deal guarantee** (escrow, review, revisions, refunds) and a **ratings summary** with recent reviews. Ratings are copied onto the payment record when a renter accepts, so they outlive the job's retention period.
+- **Prices are in US dollars**, held as integer cents everywhere (`src/lib/money.ts`). Payments made in naira before the switch keep their naira amounts and are shown in naira on the Earnings page.
 - A listing has a price, turnaround, sample output, owner type and an ownership declaration. It can only go live with a published version that scores at least `LISTING_MIN_SCORE` (80 by default) and with ownership declared.
 - **Employer approval:** an employee listing names their employer and gets a private approval link (`/approvals/<token>`, open without the app password). The employer approves and sets their share of earnings, or declines. The listing can't go live until approved, and changing the employer starts the approval again.
 - Owners can offer **guaranteed owner review** for an extra fee. Those jobs always come to the owner, whatever the trust level.
 - Renters submit a task with their email. The listing shows the trust level ("owner-reviewed" or "auto-approved"). The owner reviews the draft like any other job, unless trust allows auto-approval. The renter sees only the approved result (rendered, plus .docx), then accepts and rates it, which releases the payment minus `PLATFORM_FEE_PERCENT` (20% by default) and any employer share. If the owner rejects the job, or the renter reports a problem, the renter is refunded and a complaint resets trust to 0.
-- **Payments:** `PAYMENTS_PROVIDER=mock` (the default) records payments without moving money. `PAYMENTS_PROVIDER=paystack` with `PAYSTACK_SECRET_KEY` and `APP_URL` sends renters to Paystack checkout. Payments are verified with Paystack's API (from the return redirect and from the signed webhook at `/api/webhooks/paystack`) before any work starts, and refunds go back through Paystack. Payouts to owners and employers are recorded on the Earnings page and settled from the Paystack dashboard; automatic transfers are not built.
+- **Payments:** `PAYMENTS_PROVIDER=mock` (the default) records payments without moving money. `PAYMENTS_PROVIDER=paystack` with `PAYSTACK_SECRET_KEY` and `APP_URL` sends renters to Paystack checkout in USD (the Paystack account must have USD enabled). Payments are verified, including that the currency is USD and the amount is exactly the order's cents, with Paystack's API (from the return redirect and from the signed webhook at `/api/webhooks/paystack`) before any work starts, and refunds go back through Paystack. Payouts to owners and employers are recorded on the Earnings page and settled from the Paystack dashboard; automatic transfers are not built.
 - **Audit log** (_Audit log_ in the nav, and each skill's _Activity_ tab): every skill change, proposal, publish, trust change, job decision, listing change, employer decision and payment event, with who and when. It never stores job text.
 
 ### Demo setup
@@ -128,12 +150,16 @@ src/lib/persona/                 the assistant: brain (no storage), service, typ
 src/components/persona/          the on-screen companion, setup, task runner, screen watcher, My Persuna page pieces
 desktop/                         Persuna Desktop: Electron shell around /companion
 src/lib/jobs/                    real jobs: draft, review, edit size, retention
-src/lib/market/                  listings, rent, mock escrow, payouts
+src/lib/market/                  listings, rent, escrow, payouts, browse filters, Persuna Verified
+src/lib/money.ts                 US cents: parsing and formatting
+src/lib/agents/                  agent keys and skill imports (rules, service)
+src/lib/projects/                projects: rules, Persuna's checks (no storage), service
 src/lib/docs/                    .docx export and .md/.txt/.docx upload reading
 src/lib/models/gateway.ts        live model client: retries, timeouts, usage tracking
 src/lib/models/mock.ts           offline mock models
 src/app/actions/                 server actions (skills, jobs, market)
-src/app/(site)/                  public pages: landing, employer approvals
+src/app/(site)/                  public pages: landing, employer approvals, persona profiles
+src/app/(open)/                  open to everyone, framed as studio when signed in: marketplace, projects board
 src/app/(studio)/                studio pages: skills, examples, rules, runs, corrections, jobs, market, earnings, audit
 src/lib/auth/                    accounts (Better Auth), sessions, ownership checks
 src/proxy.ts                     sends signed-out visitors to /sign-in

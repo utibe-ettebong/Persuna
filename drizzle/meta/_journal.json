@@ -92,6 +92,55 @@
       "when": 1793187811530,
       "tag": "0012_renter-revisions",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793270541388,
+      "tag": "0013_usd-columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1793270547506,
+      "tag": "0014_usd-prices",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1793270573227,
+      "tag": "0015_usd-only",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1793270843416,
+      "tag": "0016_public-market",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1793270845145,
+      "tag": "0017_keep-ratings",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1793271307045,
+      "tag": "0018_agent-imports",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1793271917366,
+      "tag": "0019_projects",
+      "breakpoints": true
     }
   ]
 }

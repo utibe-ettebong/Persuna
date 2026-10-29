@@ -1260,7 +1260,13 @@ export async function publicProfile(handle: string) {
     .select({ skill: skills, listing: listings })
     .from(listings)
     .innerJoin(skills, eq(listings.skillId, skills.id))
-    .where(and(eq(skills.ownerId, profile.userId), eq(listings.active, true)));
+    .where(
+      and(
+        eq(skills.ownerId, profile.userId),
+        eq(listings.active, true),
+        eq(listings.visibility, "public"),
+      ),
+    );
   const skillIds = listed.map((l) => l.skill.id);
   const since = new Date(Date.now() - 30 * 86_400_000);
   const renterJobs = skillIds.length
@@ -1297,7 +1303,7 @@ export async function publicProfile(handle: string) {
         listingId: listing.id,
         title: listing.title,
         description: listing.description,
-        priceNgn: listing.priceNgn,
+        priceCents: listing.priceCents,
         turnaroundHours: listing.turnaroundHours,
         trustLevel: skill.trustLevel,
         score: await publishedScore(skill),
@@ -1593,4 +1599,17 @@ export async function publishFromChat(
     message,
     link: { href: `/skills/${skill.slug}/listing`, label: "List it in the marketplace" },
   };
+}
+
+/**
+ * Persona tells the user something on its own initiative (an agent's skill
+ * finished training, a project needs them). It appears in their conversation
+ * like any other reply. Ids, names and scores only: never job or project text.
+ */
+export async function sayToUser(userId: string, content: string, skillId?: string | null) {
+  const [message] = await db()
+    .insert(personaMessages)
+    .values({ userId, role: "assistant", kind: "notice", content, skillId: skillId ?? null })
+    .returning();
+  return message;
 }

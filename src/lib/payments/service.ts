@@ -17,11 +17,7 @@ export async function refundForJob(jobId: string, note: string, actor: Actor) {
   });
   if (!txn) return null;
 
-  if (txn.provider === "paystack" && txn.status === "held" && txn.providerReference) {
-    const config = paystackConfig();
-    if (!config) throw new Error("This payment was made with Paystack, which is not configured");
-    await createPaystack(config.secretKey).refund(txn.providerReference, note);
-  }
+  if (txn.status === "held") await refundProviderPayment(txn.provider, txn.providerReference, note);
   await db()
     .update(transactions)
     .set({ status: "refunded", settledAt: new Date() })
@@ -31,7 +27,29 @@ export async function refundForJob(jobId: string, note: string, actor: Actor) {
     action: "payment.refunded",
     entityType: "transaction",
     entityId: txn.id,
-    details: { jobId, amountNgn: txn.amountNgn, provider: txn.provider, note: note.slice(0, 120) },
+    details: {
+      jobId,
+      amountCents: txn.amountCents,
+      currency: txn.currency,
+      provider: txn.provider,
+      note: note.slice(0, 120),
+    },
   });
   return txn;
+}
+
+/**
+ * Sends a captured payment back through the provider that took it. Mock
+ * payments moved no money, so only the ledger changes (done by the caller).
+ * Used for rentals and for project milestones.
+ */
+export async function refundProviderPayment(
+  provider: "mock" | "paystack" | null,
+  reference: string | null,
+  note: string,
+) {
+  if (provider !== "paystack" || !reference) return;
+  const config = paystackConfig();
+  if (!config) throw new Error("This payment was made with Paystack, which is not configured");
+  await createPaystack(config.secretKey).refund(reference, note);
 }

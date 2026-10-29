@@ -4,13 +4,26 @@ import { db, schema } from "@/db/client";
 const { auditEvents } = schema;
 
 /** Who acted: a signed-in user ("user:email"), a renter by name, the employer, or the system. */
-export type Actor = "owner" | "system" | "employer" | `renter:${string}` | `user:${string}`;
+export type Actor =
+  "owner" | "system" | "employer" | `renter:${string}` | `user:${string}` | `agent:${string}`;
 
 export interface AuditInput {
   actor: Actor;
   action: string;
   entityType:
-    "skill" | "pair" | "version" | "correction" | "job" | "listing" | "transaction" | "connection";
+    | "skill"
+    | "pair"
+    | "version"
+    | "correction"
+    | "job"
+    | "listing"
+    | "transaction"
+    | "connection"
+    | "agent_key"
+    | "agent_import"
+    | "project"
+    | "milestone"
+    | "proposal";
   entityId?: string | null;
   skillId?: string | null;
   /** Small facts only (ids, scores, statuses). Never job text or pair content. */

@@ -1,6 +1,7 @@
 import { paystackConfig } from "@/env";
 import { confirmPayment } from "@/lib/market/service";
 import { createModelClient } from "@/lib/models";
+import { confirmMilestonePayment } from "@/lib/projects/service";
 import { validWebhookSignature, webhookEvent } from "@/lib/payments/paystack";
 
 export const dynamic = "force-dynamic";
@@ -21,9 +22,12 @@ export async function POST(request: Request) {
   const parsed = webhookEvent.safeParse(JSON.parse(raw));
   if (!parsed.success) return new Response("Ignored", { status: 200 });
 
-  if (parsed.data.event === "charge.success" && parsed.data.data.reference.startsWith("persuna-")) {
+  const reference = parsed.data.data.reference;
+  if (parsed.data.event === "charge.success" && reference.startsWith("persuna-")) {
     try {
-      await confirmPayment(createModelClient(), parsed.data.data.reference);
+      // persuna-ms-… is a project milestone; persuna-<job id> is a rental.
+      if (reference.startsWith("persuna-ms-")) await confirmMilestonePayment(reference);
+      else await confirmPayment(createModelClient(), reference);
     } catch (error) {
       console.error("Webhook confirmation failed:", error);
       // 500 makes Paystack retry later.

@@ -76,28 +76,28 @@ describe("checkPublish", () => {
 describe("splitPayment", () => {
   it("takes the platform fee and gives the owner the rest", () => {
     expect(splitPayment(5000, 20)).toEqual({
-      amountNgn: 5000,
-      platformFeeNgn: 1000,
-      employerShareNgn: 0,
-      ownerShareNgn: 4000,
+      amountCents: 5000,
+      platformFeeCents: 1000,
+      employerShareCents: 0,
+      ownerShareCents: 4000,
     });
   });
 
   it("gives an approving employer their share of the owner's earnings", () => {
     expect(splitPayment(5000, 20, 25)).toEqual({
-      amountNgn: 5000,
-      platformFeeNgn: 1000,
-      employerShareNgn: 1000,
-      ownerShareNgn: 3000,
+      amountCents: 5000,
+      platformFeeCents: 1000,
+      employerShareCents: 1000,
+      ownerShareCents: 3000,
     });
     const s = splitPayment(997, 15, 33);
-    expect(s.platformFeeNgn + s.employerShareNgn + s.ownerShareNgn).toBe(997);
+    expect(s.platformFeeCents + s.employerShareCents + s.ownerShareCents).toBe(997);
     expect(() => splitPayment(1000, 20, 101)).toThrow();
   });
 
-  it("rounds the fee to whole naira without losing any", () => {
+  it("rounds the fee to whole cents without losing any", () => {
     const s = splitPayment(999, 15);
-    expect(s.platformFeeNgn + s.ownerShareNgn).toBe(999);
+    expect(s.platformFeeCents + s.ownerShareCents).toBe(999);
   });
 
   it("rejects fractional or non-positive prices", () => {
