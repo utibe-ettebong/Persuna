@@ -8,7 +8,7 @@ const PUBLIC = [
   /^\/$/,
   /^\/sign-(in|up)$/,
   /^\/approvals\//,
-  /^\/personas\//,
+  /^\/persunas\//,
   // The marketplace and the projects board are open to browse. Renting,
   // posting and proposing need an account (the pages and actions check).
   /^\/market$/,
@@ -16,7 +16,7 @@ const PUBLIC = [
   /^\/projects$/,
   /^\/projects\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
   /^\/api\/auth\//,
-  // Persona Desktop's setup window, which starts signed out, and its sign-in hand-off.
+  // Persuna Desktop's setup window, which starts signed out, and its sign-in hand-off.
   /^\/desktop\/setup$/,
   /^\/api\/desktop\/sign-in$/,
 ];
@@ -44,6 +44,6 @@ export const config = {
   // agent's brain (checked by shared secret and signed session), the agent
   // import API (checked by agent key) and static assets.
   matcher: [
-    "/((?!api/health|api/webhooks/paystack|api/persona/llm|api/agents/|_next/static|_next/image|favicon.ico).*)",
+    "/((?!api/health|api/webhooks/paystack|api/persuna/llm|api/persona/llm|api/agents/|_next/static|_next/image|favicon.ico).*)",
   ],
 };

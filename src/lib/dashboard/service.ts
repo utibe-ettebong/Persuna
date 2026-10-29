@@ -8,7 +8,7 @@ import { db, schema } from "@/db/client";
 import { env } from "@/env";
 import { earnings } from "@/lib/market/service";
 import { splitPayment } from "@/lib/market/rules";
-import { getProfile, openReminders } from "@/lib/persona/service";
+import { getProfile, openReminders } from "@/lib/persuna/service";
 import { projectEarnings, projectsFor } from "@/lib/projects/service";
 import { listSkills, publishedScore } from "@/lib/skill/service";
 import { projectNextStep, weeklyTotals, type NextStep, type ProjectRole } from "./rules";
@@ -187,11 +187,11 @@ export async function dashboard(userId: string, now = new Date()) {
   }
   const due = todos.filter((t) => t.dueAt && t.dueAt <= new Date(now.getTime() + 86_400_000));
   for (const t of due.slice(0, 3)) {
-    attention.push({ label: t.text, href: "/persona#todos", tone: "neutral" });
+    attention.push({ label: t.text, href: "/persuna#todos", tone: "neutral" });
   }
 
   return {
-    persona: {
+    persuna: {
       name: profile.name,
       avatar: profile.avatar,
       focus: profile.focus,

@@ -1,9 +1,9 @@
-// Creates (or updates) Persona's ElevenLabs agent for VOICE_MODE=agent.
+// Creates (or updates) Persuna's ElevenLabs agent for VOICE_MODE=agent.
 // Needs SPEECH_API=elevenlabs with SPEECH_API_KEY and SPEECH_VOICE, APP_URL
 // (where ElevenLabs can reach this app) and ELEVENLABS_LLM_SECRET. Prints the
 // agent id to set as ELEVENLABS_AGENT_ID.
 import { setting, speechConfig } from "@/env";
-import { setUpAgent } from "@/lib/persona/voice-agent";
+import { setUpAgent } from "@/lib/persuna/voice-agent";
 
 const speech = speechConfig();
 const appUrl = setting("APP_URL");

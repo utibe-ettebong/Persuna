@@ -1,6 +1,6 @@
 import type { ChatMessage, ContentPart } from "@/lib/models/gateway";
-import { toneInstruction } from "@/lib/persona/tone";
-import type { PersonaState, PersonaTurn } from "@/lib/persona/types";
+import { toneInstruction } from "@/lib/persuna/tone";
+import type { PersunaState, PersunaTurn } from "@/lib/persuna/types";
 import { INTERVIEW_QUESTIONS } from "./interview";
 import { renderSheet } from "./sheet";
 import { CRITERIA, RULE_CATEGORIES, type Pair, type SkillSheet } from "./types";
@@ -233,18 +233,18 @@ Describe the method, not the material. Never copy names of people or organisatio
   ];
 }
 
-/* ---------- Persona, the on-screen assistant ---------- */
+/* ---------- Persuna, the on-screen assistant ---------- */
 
 /**
- * One chat turn with Persona. It talks briefly, asks one thing at a time, and
+ * One chat turn with Persuna. It talks briefly, asks one thing at a time, and
  * acts through a short list of actions the service applies.
  */
-export function personaChatMessages(
-  state: PersonaState,
-  history: PersonaTurn[],
+export function persunaChatMessages(
+  state: PersunaState,
+  history: PersunaTurn[],
   message: string | { audio: string },
   /**
-   * What's on the user's screen right now, when Persona may look: a numbered
+   * What's on the user's screen right now, when Persuna may look: a numbered
    * list of it (read on their computer) and/or a screenshot (a data URL).
    */
   sight: { scene: string | null; image: string | null; circled?: boolean } | null = null,
@@ -273,12 +273,13 @@ You act by adding actions to your reply:
 - coach: the user asks how a skill is doing, its score, or how to list it. The app adds the details; just say you'll check.
 - wrap_up: the user asks for a summary of their day. The app writes it; keep your reply to a short lead-in.
 - app_task: the user wants something done or found in their email, calendar or Notion ("what did Ada email me about?", "put lunch with Sam on Friday at 1", "add these notes to Notion"). Put their request in "goal" with every detail they gave. The app does it and adds the answer, so your reply is just a few words ("Checking your inbox.").
-- watch_screen: the user asks you to watch or follow their screen while they work, or to turn Work mode on ("on": true), or to stop watching or turn Work mode off ("on": false). Hearing "walk mode", "work mode" or "watch mode" means this. In Persona Desktop this is Work mode (you follow along, help when they're stuck, ask about their method and learn it into their skill). Just say it's on or off.
-- open_page: the user wants to see or go to a page (their skills, one skill by slug, jobs, the marketplace, earnings, the audit log, notes and memory as "persona", to-dos). The app takes them there.
+- watch_screen: the user asks you to watch or follow their screen while they work, or to turn Work mode on ("on": true), or to stop watching or turn Work mode off ("on": false). Hearing "walk mode", "work mode" or "watch mode" means this. In Persuna Desktop this is Work mode (you follow along, help when they're stuck, ask about their method and learn it into their skill). Just say it's on or off.
+- open_page: the user wants to see or go to a page (their skills, one skill by slug, jobs, the marketplace, earnings, the audit log, notes and memory as "persuna", to-dos). The app takes them there.
 - set_tone: the user says how they want you to talk (shorter, more detail, formal, casual, playful or not, or another preference as "note"). Set only what they asked for, and reply in the new style.
 - clipboard: copy text for them ("op": "copy": "copy that address", "copy the summary") or put it where their cursor is ("op": "paste": "paste it in", "write my reply here", "type this into the box"). "text" is exactly what goes on the clipboard: when it's something on screen, copy it exactly as it appears there. Say in a few words what you copied or pasted.
 - make_file: they want something made that they can keep or share: a document, plan, report, letter or summary ("kind": "document", "body" in Markdown with headings and lists), a table or spreadsheet ("kind": "table", "body" as CSV with a header row), or a flowchart, process or diagram ("kind": "flow", with "flow" as boxes and arrows, "body" a one-line caption). Give it a short "title". The app shows it with Preview, Copy and Save (PDF, Markdown, CSV, SVG or PNG). Your reply is one line about it; don't repeat the content.
-- draw: show something over their screen. "flow" is a small diagram (boxes and arrows) when explaining how something works or the steps of a process is clearer drawn; "marks" are numbered notes on entries in the list of what's on screen ({ "item": "e4", "note": "1. Open Settings" }) for a walkthrough of where to click, in order. Use draw when they ask you to show, explain, walk them through, or draw something; use make_file when they want to keep it. The drawing appears step by step while you speak, so list the boxes (and marks) in the order your reply explains them, and say them in that order.
+- draw: show something over their screen. When their screen is visible and you're explaining or walking through steps, draw is the default: use 2-4 numbered "marks" on entries in the list of what's on screen ({ "item": "e4", "note": "1. Open Settings" }), in the order to follow them. Add a "flow" (boxes and arrows) only for a standalone diagram — how something works in general, not tied to entries on screen. Use make_file when they want to keep it. The drawing appears step by step while you speak, so list the marks (and any boxes) in the order your reply explains them, and say them in that order.
+  Example — user: "How do I export this?" (screen lists e3 "Export", e5 "Format", e7 "Download"): { "reply": "Three steps, marked on your screen.", "actions": [{ "type": "draw", "title": null, "marks": [{ "item": "e3", "note": "1. Export" }, { "item": "e5", "note": "2. Choose a format" }, { "item": "e7", "note": "3. Download" }], "flow": null }], "asked": null }
 
 Skills: a skill is one task the user does their way (state.skills; today's is state.focusSkill, with its examples and score). You help them build each one, all by conversation:
 - create_skill: they want you to learn a new kind of task. Name it briefly, describe it in a sentence (what goes in, what comes out). It becomes today's focus.
@@ -300,26 +301,26 @@ ${
     : ""
 }${
         file
-          ? `They handed you a file, ${JSON.stringify(file.name)}: ${file.image ? "the picture is attached." : "its text is in <persona_file>."} Answer about it (summarise, explain, extract, rewrite, turn it into a table or flow) as they ask. It's their material: don't save its details with remember or learn unless they ask.
+          ? `They handed you a file, ${JSON.stringify(file.name)}: ${file.image ? "the picture is attached." : "its text is in <persuna_file>."} Answer about it (summarise, explain, extract, rewrite, turn it into a table or flow) as they ask. It's their material: don't save its details with remember or learn unless they ask.
 
 `
           : ""
       }${
         scene || screen
-          ? `Their screen, as it was when they spoke${sight?.circled ? ", cropped to the part they circled (talk about that part)" : ""}: ${scene ? `<persona_screen> lists what's on it (the front app's buttons, fields and links as e1…, lines of text as t1…, each with a rough place, and any text they've selected).${screen ? " A screenshot is attached too." : ""}` : "a screenshot is attached."} Use it only when what they say points at something on screen ("what's this", "reply to this email", "what am I looking at", "fix this", "what does this error mean", "where do I click", "copy this", "this" meaning what they selected): then be specific about what's there. Otherwise (a greeting, an introduction, a reminder, a question about their work) answer as you normally would and don't describe or mention the screen at all. Never read out passwords, codes or card numbers.
-- point: when they ask where something is, what to click or what needs their attention (or showing would help), point at it: "item" is its entry (e12, t3); if it's something visual that isn't listed (an icon, a picture, part of a chart), leave "item" null and give "thing", a short name for it ("red warning icon"). One point per reply, and say in your reply what you're pointing at.${
+          ? `Their screen, as it was when they spoke${sight?.circled ? ", cropped to the part they circled (talk about that part)" : ""}: ${scene ? `<persuna_screen> lists what's on it (the front app's buttons, fields and links as e1…, lines of text as t1…, each with a rough place, and any text they've selected).${screen ? " A screenshot is attached too." : ""}` : "a screenshot is attached."} Use it only when what they say points at something on screen ("what's this", "reply to this email", "what am I looking at", "fix this", "what does this error mean", "where do I click", "copy this", "this" meaning what they selected): then be specific about what's there. Otherwise (a greeting, an introduction, a reminder, a question about their work) answer as you normally would and don't describe or mention the screen at all. Never read out passwords, codes or card numbers.
+- point: only for a single-target "where is X" question (where something is, what to click, or what needs their attention): point alone at that one thing — "item" is its entry (e12, t3); if it's something visual that isn't listed (an icon, a picture, part of a chart), leave "item" null and give "thing", a short name for it ("red warning icon"). One point per reply, and say in your reply what you're pointing at. For explanations or multi-step walkthroughs, use draw with numbered marks instead, not point.${
               scene && !screen
                 ? `
 - look_closer: if answering needs the picture itself (a photo, colours, a design, a chart) and the list isn't enough, add only { "type": "look_closer" } with a short reply; you'll be asked again with the screenshot.`
                 : ""
             }`
-          : `You can't see their screen right now. If they ask about it, say so in a few words: in Persona Desktop they can allow Screen Recording; in a browser they can say "watch my screen".`
+          : `You can't see their screen right now. If they ask about it, say so in a few words: in Persuna Desktop they can allow Screen Recording; in a browser they can say "watch my screen".`
       }
 
-The user's state is in <persona_state>. ${
+The user's state is in <persuna_state>. ${
         spoken
           ? `Their latest message is the attached recording: they said it out loud. Write exactly what they said in "heard" (their words, not a summary), then answer it.`
-          : "Their latest message is in <persona_user>."
+          : "Their latest message is in <persuna_user>."
       }
 
 Reply with one JSON object and nothing else:
@@ -330,7 +331,7 @@ Reply with one JSON object and nothing else:
           : ""
       }
   "reply": "what you say",
-  "actions": [ { "type": "remember", "fact": "..." } | { "type": "note", "title": "...", "body": "..." } | { "type": "set_focus", "focus": "...", "skill": "slug or null" } | { "type": "answer", "key": one of ${JSON.stringify(keys)}, "answer": "..." } | { "type": "learn", "method": "..." } | { "type": "remind", "text": "...", "at": "YYYY-MM-DDTHH:mm or null" } | { "type": "run_task", "skill": "slug or null" } | { "type": "coach", "skill": "slug or null" } | { "type": "wrap_up" } | { "type": "app_task", "goal": "..." } | { "type": "watch_screen", "on": true|false } | { "type": "point", "item": "e12 or null", "thing": "short name or null" } | { "type": "look_closer" } | { "type": "clipboard", "op": "copy|paste", "text": "..." } | { "type": "make_file", "kind": "document|table|flow", "title": "...", "body": "...", "flow": { "direction": "down|right", "nodes": [ { "id": "a", "label": "..." } ], "edges": [ { "from": "a", "to": "b", "label": "or null" } ] } or null } | { "type": "draw", "title": "... or null", "marks": [ { "item": "e4", "note": "..." } ] or null, "flow": { ... } or null } | { "type": "open_page", "page": "persona|todos|skills|skill|jobs|market|earnings|audit", "skill": "slug or null" } | { "type": "create_skill", "name": "...", "task": "...", "input": "what goes in or null", "output": "what comes out or null" } | { "type": "add_example" | "train_skill" | "test_skill" | "publish_skill", "skill": "slug or null" } | { "type": "suggest_switch", "skill": "slug or null", "task": "a new task, or null" } | { "type": "set_tone", "length": "short|normal|detailed", "formality": "casual|neutral|formal", "playful": true|false, "note": "..." } ],
+  "actions": [ { "type": "remember", "fact": "..." } | { "type": "note", "title": "...", "body": "..." } | { "type": "set_focus", "focus": "...", "skill": "slug or null" } | { "type": "answer", "key": one of ${JSON.stringify(keys)}, "answer": "..." } | { "type": "learn", "method": "..." } | { "type": "remind", "text": "...", "at": "YYYY-MM-DDTHH:mm or null" } | { "type": "run_task", "skill": "slug or null" } | { "type": "coach", "skill": "slug or null" } | { "type": "wrap_up" } | { "type": "app_task", "goal": "..." } | { "type": "watch_screen", "on": true|false } | { "type": "point", "item": "e12 or null", "thing": "short name or null" } | { "type": "look_closer" } | { "type": "clipboard", "op": "copy|paste", "text": "..." } | { "type": "make_file", "kind": "document|table|flow", "title": "...", "body": "...", "flow": { "direction": "down|right", "nodes": [ { "id": "a", "label": "..." } ], "edges": [ { "from": "a", "to": "b", "label": "or null" } ] } or null } | { "type": "draw", "title": "... or null", "marks": [ { "item": "e4", "note": "..." } ] or null, "flow": { ... } or null } | { "type": "open_page", "page": "persuna|todos|skills|skill|jobs|market|earnings|audit", "skill": "slug or null" } | { "type": "create_skill", "name": "...", "task": "...", "input": "what goes in or null", "output": "what comes out or null" } | { "type": "add_example" | "train_skill" | "test_skill" | "publish_skill", "skill": "slug or null" } | { "type": "suggest_switch", "skill": "slug or null", "task": "a new task, or null" } | { "type": "set_tone", "length": "short|normal|detailed", "formality": "casual|neutral|formal", "playful": true|false, "note": "..." } ],
   "asked": one of ${JSON.stringify(keys)} or null
 }`,
     },
@@ -341,8 +342,8 @@ Reply with one JSON object and nothing else:
         {
           type: "text",
           text: spoken
-            ? fence("persona_state", JSON.stringify(state, null, 1))
-            : `${fence("persona_state", JSON.stringify(state, null, 1))}\n\n${fence("persona_user", message)}`,
+            ? fence("persuna_state", JSON.stringify(state, null, 1))
+            : `${fence("persuna_state", JSON.stringify(state, null, 1))}\n\n${fence("persuna_user", message)}`,
         },
         ...(spoken
           ? [
@@ -352,9 +353,9 @@ Reply with one JSON object and nothing else:
               },
             ]
           : []),
-        ...(scene ? [{ type: "text" as const, text: fence("persona_screen", scene) }] : []),
+        ...(scene ? [{ type: "text" as const, text: fence("persuna_screen", scene) }] : []),
         ...(screen ? [{ type: "image_url" as const, image_url: { url: screen } }] : []),
-        ...(file?.text ? [{ type: "text" as const, text: fence("persona_file", file.text) }] : []),
+        ...(file?.text ? [{ type: "text" as const, text: fence("persuna_file", file.text) }] : []),
         ...(file?.image ? [{ type: "image_url" as const, image_url: { url: file.image } }] : []),
       ],
     },
@@ -362,12 +363,12 @@ Reply with one JSON object and nothing else:
 }
 
 /**
- * Work mode: Persona keeps an eye on what the user is doing (the list of
+ * Work mode: Persuna keeps an eye on what the user is doing (the list of
  * what's on screen, read on their computer) and decides whether to step in.
  * Usually it doesn't. It keeps the user's own way of working.
  */
-export function personaWorkMessages(input: {
-  state: PersonaState;
+export function persunaWorkMessages(input: {
+  state: PersunaState;
   scene: string;
   image: string | null;
   trail: string[];
@@ -380,7 +381,7 @@ export function personaWorkMessages(input: {
   return [
     {
       role: "system",
-      content: `You are ${state.name}, the user's personal assistant, in Work mode: they've asked you to keep an eye on what they're doing and help the way a good colleague sitting beside them would. You see what's on their screen now (<persona_screen>: the front app's elements as e1…, lines of text as t1…, and any selected text) and what they were doing just before (<work_trail>, oldest first).
+      content: `You are ${state.name}, the user's personal assistant, in Work mode: they've asked you to keep an eye on what they're doing and help the way a good colleague sitting beside them would. You see what's on their screen now (<persuna_screen>: the front app's elements as e1…, lines of text as t1…, and any selected text) and what they were doing just before (<work_trail>, oldest first).
 
 Choose ONE mode:
 - "quiet": nothing worth doing. This is the usual answer.
@@ -405,7 +406,7 @@ Reply with one JSON object and nothing else: { "mode": "quiet|follow|guide|lead|
           type: "text",
           text: [
             fence(
-              "persona_state",
+              "persuna_state",
               JSON.stringify(
                 {
                   name: state.name,
@@ -431,7 +432,7 @@ Reply with one JSON object and nothing else: { "mode": "quiet|follow|guide|lead|
                 ? `Over: ${input.pointer.over ?? "nothing listed"}. Still for ${input.pointer.still} s.`
                 : "(unknown)",
             ),
-            fence("persona_screen", input.scene),
+            fence("persuna_screen", input.scene),
           ].join("\n\n"),
         },
         ...(input.image ? [{ type: "image_url" as const, image_url: { url: input.image } }] : []),
@@ -441,10 +442,10 @@ Reply with one JSON object and nothing else: { "mode": "quiet|follow|guide|lead|
 }
 
 /**
- * Persona looks at one frame of the window the user chose to share. It stays
+ * Persuna looks at one frame of the window the user chose to share. It stays
  * quiet unless something is worth saying, and records method steps only.
  */
-export function personaObserveMessages(
+export function persunaObserveMessages(
   name: string,
   focus: string | null,
   recentSteps: string[],
@@ -468,7 +469,7 @@ Reply with one JSON object and nothing else: { "say": "..." or null, "step": "..
       content: [
         {
           type: "text",
-          text: `<persona_observe>\nToday's focus: ${focus ?? "(not set)"}\n${fence("recent_steps", recentSteps.join("\n") || "(none yet)")}\n</persona_observe>`,
+          text: `<persuna_observe>\nToday's focus: ${focus ?? "(not set)"}\n${fence("recent_steps", recentSteps.join("\n") || "(none yet)")}\n</persuna_observe>`,
         },
         { type: "image_url", image_url: { url: frame } },
       ],

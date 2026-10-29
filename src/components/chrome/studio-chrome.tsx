@@ -2,11 +2,11 @@ import Link from "next/link";
 import { Logo } from "@/components/brand";
 import { AccountMenu } from "@/components/account-menu";
 import { MobileNav } from "@/components/chrome/mobile-nav";
-import { CompanionMount } from "@/components/persona/companion-mount";
+import { CompanionMount } from "@/components/persuna/companion-mount";
 import { StudioNav } from "@/components/studio-nav";
 import { modelProvider } from "@/env";
 import type { SessionUser } from "@/lib/auth/session";
-import { ensureHandle } from "@/lib/persona/service";
+import { ensureHandle } from "@/lib/persuna/service";
 
 /**
  * The signed-in app: a sidebar with every section (a drawer on phones), a
@@ -22,7 +22,7 @@ export async function StudioChrome({
   const mock = modelProvider() === "mock";
   // Everyone gets a public profile address the first time it's needed.
   const handle = await ensureHandle(user.id).catch(() => null);
-  const profileHref = handle ? `/personas/${handle}` : null;
+  const profileHref = handle ? `/persunas/${handle}` : null;
   return (
     <div className="flex min-h-screen flex-1">
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-line bg-card lg:flex">

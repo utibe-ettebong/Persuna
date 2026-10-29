@@ -22,7 +22,7 @@ import type { ModelClient } from "@/lib/models/gateway";
 import { formatUsd } from "@/lib/money";
 import { createPaystack, paymentMatches } from "@/lib/payments/paystack";
 import { refundProviderPayment } from "@/lib/payments/service";
-import { sayToUser } from "@/lib/persona/service";
+import { sayToUser } from "@/lib/persuna/service";
 import { NotFoundError } from "@/lib/skill/service";
 import { normalizeText } from "@/lib/text";
 import {
@@ -161,7 +161,7 @@ export async function createProject(
     await post(
       {
         projectId: row.id,
-        author: "persona",
+        author: "persuna",
         kind: "plan",
         body: `I read the brief and drafted a scope, ${plan.criteria.length} acceptance criteria and ${plan.milestones.length} milestone(s) adding up to ${formatUsd(input.budgetCents)}. ${
           plan.flags.length
@@ -252,7 +252,7 @@ export async function savePlan(
       await post(
         {
           projectId,
-          author: "persona",
+          author: "persuna",
           kind: "opened",
           body: `Open for proposals: ${milestones.length} milestone(s), ${formatUsd(input.budgetCents)} in total. Each milestone is paid into escrow before work on it starts and released only when it's approved. I'll check every delivery against its criteria.`,
         },
@@ -484,7 +484,7 @@ export async function propose(
       {
         projectId,
         proposalId: row.id,
-        author: "persona",
+        author: "persuna",
         kind: "fit",
         body: `Fit for ${firstName(user.name)}: ${fit.recommendation}. ${fit.summary} Price ${fit.priceNote}.`,
       },
@@ -566,7 +566,7 @@ export async function acceptProposal(
     await post(
       {
         projectId,
-        author: "persona",
+        author: "persuna",
         kind: "accepted",
         body: `The poster accepted a proposal at ${formatUsd(proposal.priceCents)}; the milestones now add up to that. Fund the first milestone to start: the money is held until its work is approved.`,
       },
@@ -648,7 +648,7 @@ async function afterFunded(milestone: ProjectMilestone, project: Project, provid
   await post({
     projectId: project.id,
     milestoneId: milestone.id,
-    author: "persona",
+    author: "persuna",
     kind: "funded",
     body: `Milestone ${milestone.position} (${formatUsd(milestone.amountCents)}) is funded and held in escrow. The seller can start.`,
   });
@@ -737,7 +737,7 @@ export async function submitDelivery(
   await post({
     projectId: project.id,
     milestoneId: milestone.id,
-    author: "persona",
+    author: "persuna",
     kind: "check",
     body: `Checked "${milestone.title}" against its criteria: ${checkLine(check)} ${check.summary} For the poster: ${check.fairness.poster} For the seller: ${check.fairness.seller}`,
   });
@@ -837,7 +837,7 @@ async function release(
       {
         projectId: project.id,
         milestoneId: milestone.id,
-        author: "persona",
+        author: "persuna",
         kind: event === "approve" ? "approved" : "resolved",
         body: `${event === "approve" ? "Approved." : "Settled by a Persuna reviewer."} Released ${formatUsd(split.ownerShareCents)} to the seller (${formatUsd(milestone.amountCents)} minus the ${env().PLATFORM_FEE_PERCENT}% platform fee).`,
       },
@@ -911,7 +911,7 @@ async function finishIfSettled(client: ModelClient, projectId: string) {
   }).catch(() => null);
   await post({
     projectId,
-    author: "persona",
+    author: "persuna",
     kind: "wrapup",
     body: wrap
       ? [
@@ -1015,7 +1015,7 @@ export async function raiseDispute(
     await post(
       {
         projectId,
-        author: "persona",
+        author: "persuna",
         kind: "assessment",
         body: `Neutral assessment: ${assessment.assessment} The poster's strongest point: ${assessment.posterView} The seller's: ${assessment.sellerView} Suggestion: ${assessment.suggestion} Held money stays in escrow until a Persuna reviewer decides.`,
       },
@@ -1071,7 +1071,7 @@ export async function resumeProject(admin: NonNullable<Viewer>, projectId: strin
     .where(eq(projects.id, projectId));
   await post({
     projectId,
-    author: "persona",
+    author: "persuna",
     kind: "resolved",
     body: "A Persuna reviewer closed the dispute; the project carries on.",
   });
@@ -1106,7 +1106,7 @@ async function refundMilestone(
   await post({
     projectId: project.id,
     milestoneId: milestone.id,
-    author: "persona",
+    author: "persuna",
     kind: "refunded",
     body: `Refunded ${formatUsd(milestone.amountCents)} for milestone ${milestone.position} to the poster.`,
   });

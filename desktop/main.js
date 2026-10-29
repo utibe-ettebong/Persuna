@@ -13,7 +13,7 @@
 // gets you and Persuna acquainted.
 //
 // Watching is still your choice each time. The operating system asks once
-// (macOS: Screen Recording); after that, turning watching on in Persona
+// (macOS: Screen Recording); after that, turning watching on in Persuna
 // starts it without a picker, using the screen or window you chose and
 // asked it to remember. When you talk or type to Persuna, it takes one look at
 // the screen so it can see what you mean (switch that off from its menu).
@@ -111,7 +111,7 @@ const pathOf = (url) => {
   }
 };
 
-/* ---------- The overlay: Persona over the whole screen ---------- */
+/* ---------- The overlay: Persuna over the whole screen ---------- */
 
 /**
  * Where Persuna's island goes: hugging the camera notch on a Mac that has
@@ -170,7 +170,7 @@ function createOverlay() {
     // accessory and back (Electron's other way) makes the Dock icon flicker.
     skipTransformProcessType: MAC,
   });
-  // Clicks go through to the apps underneath until the pointer is over Persona.
+  // Clicks go through to the apps underneath until the pointer is over Persuna.
   overlay.setIgnoreMouseEvents(true, { forward: true });
   // Persuna shows in your screenshots and recordings; it hides itself only
   // from what it looks at itself (while watching, and for each look).
@@ -268,11 +268,11 @@ async function showOverlay() {
 
 /* ---------- Messages from the page (see preload.js) ---------- */
 
-ipcMain.on("persona:interactive", (event, on) => {
+ipcMain.on("persuna:interactive", (event, on) => {
   if (!overlay || event.sender !== overlay.webContents) return;
   overlay.setIgnoreMouseEvents(!on, { forward: true });
 });
-ipcMain.handle("persona:pick-screen", async (event) => {
+ipcMain.handle("persuna:pick-screen", async (event) => {
   if (!overlay || event.sender !== overlay.webContents) return null;
   if (!(await ensureScreenPermission())) return null;
   const source = await chooseSource();
@@ -280,10 +280,10 @@ ipcMain.handle("persona:pick-screen", async (event) => {
   if (source) setWatching(true);
   return source?.id ?? null;
 });
-ipcMain.on("persona:watching", (event, on) => {
+ipcMain.on("persuna:watching", (event, on) => {
   if (overlay && event.sender === overlay.webContents) setWatching(Boolean(on));
 });
-ipcMain.handle("persona:island", () => islandShape());
+ipcMain.handle("persuna:island", () => islandShape());
 
 /* ---------- Permissions, asked for in the island when needed ---------- */
 
@@ -296,7 +296,7 @@ function permissionStatus() {
     keyboard: keyboardAllowed() ? "granted" : "denied",
   };
 }
-ipcMain.handle("persona:permissions", (event) => (fromOverlay(event) ? permissionStatus() : null));
+ipcMain.handle("persuna:permissions", (event) => (fromOverlay(event) ? permissionStatus() : null));
 
 /**
  * The island's "Allow" button. The microphone gets macOS's own prompt the
@@ -304,7 +304,7 @@ ipcMain.handle("persona:permissions", (event) => (fromOverlay(event) ? permissio
  * (which macOS only lets you switch on in System Settings), it opens the
  * right pane. Resolves with the new status.
  */
-ipcMain.handle("persona:ask-permission", async (event, kind) => {
+ipcMain.handle("persuna:ask-permission", async (event, kind) => {
   if (!fromOverlay(event) || !MAC) return "granted";
   if (kind === "mic") {
     if (systemPreferences.getMediaAccessStatus("microphone") === "not-determined") {
@@ -324,7 +324,7 @@ ipcMain.handle("persona:ask-permission", async (event, kind) => {
 });
 
 /** The island opened: take the keyboard, so clicking anywhere else closes it again. */
-ipcMain.on("persona:focus", (event) => {
+ipcMain.on("persuna:focus", (event) => {
   if (!fromOverlay(event)) return;
   overlay.focus();
   if (!MAC) app.focus({ steal: true });
@@ -334,7 +334,7 @@ ipcMain.on("persona:focus", (event) => {
  * Work mode nudged you (a question, a correction): a light tap on a Mac's
  * trackpad, felt while your finger is on it. Nothing on Windows.
  */
-ipcMain.on("persona:nudge", (event) => {
+ipcMain.on("persuna:nudge", (event) => {
   if (fromOverlay(event) && MAC) void runEyes(["haptic"], 1500);
 });
 
@@ -347,7 +347,7 @@ function registerCircleShortcut() {
       if (!overlay.isVisible()) overlay.showInactive();
       // The keyboard too, so Esc cancels.
       overlay.focus();
-      overlay.webContents.send("persona:circle");
+      overlay.webContents.send("persuna:circle");
     });
   } catch {
     // Taken by another app: circling is still in the island.
@@ -359,7 +359,7 @@ function registerCircleShortcut() {
 const fromOverlay = (event) => Boolean(overlay) && event.sender === overlay.webContents;
 const MAX_CLIP = 20_000;
 
-ipcMain.on("persona:copy", (event, text) => {
+ipcMain.on("persuna:copy", (event, text) => {
   if (fromOverlay(event) && typeof text === "string") clipboard.writeText(text.slice(0, MAX_CLIP));
 });
 
@@ -369,7 +369,7 @@ ipcMain.on("persona:copy", (event, text) => {
  * ⌘V (Ctrl+V). Pressing keys needs the same permission as the talk key
  * (Accessibility); without it the text is only copied. Returns whether it pasted.
  */
-ipcMain.handle("persona:paste", async (event, text) => {
+ipcMain.handle("persuna:paste", async (event, text) => {
   if (!fromOverlay(event) || typeof text !== "string") return false;
   clipboard.writeText(text.slice(0, MAX_CLIP));
   if (!keyListener) return false;
@@ -401,7 +401,7 @@ function downloadPath(name, ext) {
 const SAVE_TYPES = new Set(["md", "txt", "csv", "svg", "png"]);
 
 /** Saves a file Persuna made (a note, a table, a diagram) to Downloads and shows it. */
-ipcMain.handle("persona:save-file", (event, file) => {
+ipcMain.handle("persuna:save-file", (event, file) => {
   if (!fromOverlay(event) || !file || !SAVE_TYPES.has(file.ext)) return null;
   const target = downloadPath(file.name, file.ext);
   const data = file.ext === "png" ? Buffer.from(String(file.data), "base64") : String(file.data);
@@ -411,7 +411,7 @@ ipcMain.handle("persona:save-file", (event, file) => {
 });
 
 /** Prints a document Persuna made to a PDF in Downloads (no scripts run while printing). */
-ipcMain.handle("persona:save-pdf", async (event, doc) => {
+ipcMain.handle("persuna:save-pdf", async (event, doc) => {
   if (!fromOverlay(event) || typeof doc?.html !== "string") return null;
   const printer = new BrowserWindow({
     show: false,
@@ -541,7 +541,7 @@ const LOOK_WIDTH = 1600;
  * of text it can read), each with its place on screen, so Persuna can point.
  * Null without Screen Recording (it never asks from here: that's setup's job).
  */
-ipcMain.handle("persona:look", async (event) => {
+ipcMain.handle("persuna:look", async (event) => {
   if (!overlay || event.sender !== overlay.webContents) return null;
   if (MAC && systemPreferences.getMediaAccessStatus("screen") !== "granted") return null;
   const display = screen.getPrimaryDisplay();
@@ -720,7 +720,7 @@ function startKeyListener() {
 }
 
 function announceHoldKey() {
-  overlay?.webContents.send("persona:hold-key", holdKeyLabel());
+  overlay?.webContents.send("persuna:hold-key", holdKeyLabel());
   rebuildTray();
 }
 
@@ -733,7 +733,7 @@ function chooseHoldKey(id) {
 /** The talk key did something: to the setup window while it's open, else to Persuna's bar. */
 function onHoldKey(phase) {
   if (setup?.isVisible()) {
-    setup.webContents.send("persona:hold", phase);
+    setup.webContents.send("persuna:hold", phase);
     return;
   }
   if (!overlay) createOverlay();
@@ -749,10 +749,10 @@ function onHoldKey(phase) {
     overlay.focus();
     if (!MAC) app.focus({ steal: true });
   }
-  overlay.webContents.send("persona:hold", phase);
+  overlay.webContents.send("persuna:hold", phase);
 }
 
-ipcMain.handle("persona:hold-key", () => holdKeyLabel());
+ipcMain.handle("persuna:hold-key", () => holdKeyLabel());
 
 /* ---------- Watching ---------- */
 
@@ -779,7 +779,7 @@ async function ask(options) {
  * an entry left by an earlier version shows Persuna as allowed while macOS
  * refuses this one. Clearing it lets macOS ask again for this version.
  */
-const APP_ID = "app.persuna.persona";
+const APP_ID = "app.persuna.persuna";
 function forgetOldScreenPermission() {
   return new Promise((resolve) => {
     execFile("/usr/bin/tccutil", ["reset", "ScreenCapture", APP_ID], () => resolve());
@@ -1003,7 +1003,7 @@ function callPersuna() {
     overlay.showInactive();
     rebuildTray();
   }
-  overlay.webContents.send("persona:call");
+  overlay.webContents.send("persuna:call");
 }
 
 function registerCallShortcut() {
@@ -1031,7 +1031,7 @@ function chooseShortcut(accelerator) {
   registerCallShortcut();
   rebuildTray();
   // The page shows the shortcut beside Persuna.
-  overlay?.webContents.send("persona:shortcut", shortcutLabel(callShortcut));
+  overlay?.webContents.send("persuna:shortcut", shortcutLabel(callShortcut));
 }
 
 /** Once per launch: say Persuna is on, and how to call it. */
@@ -1100,7 +1100,7 @@ if (!app.requestSingleInstanceLock()) {
     ses.setPermissionCheckHandler(
       (_wc, permission, origin) => origin === ORIGIN && ALLOWED_PERMISSIONS.has(permission),
     );
-    // Persona's "watch" calls getDisplayMedia(); answer it with the chosen source.
+    // Persuna's "watch" calls getDisplayMedia(); answer it with the chosen source.
     ses.setDisplayMediaRequestHandler(async (request, callback) => {
       if (!isOurs(request.securityOrigin ?? request.frame?.url ?? "")) return callback({});
       if (!(await ensureScreenPermission())) return callback({});
@@ -1108,7 +1108,7 @@ if (!app.requestSingleInstanceLock()) {
       callback(source ? { video: source } : {});
     });
     // No permission prompts at launch: Persuna's island asks for each one
-    // the first time you use what needs it (see persona:ask-permission).
+    // the first time you use what needs it (see persuna:ask-permission).
 
     createOverlay();
     registerCallShortcut();
@@ -1127,7 +1127,7 @@ if (!app.requestSingleInstanceLock()) {
     screen.on("display-metrics-changed", () => {
       const { x, y, width, height } = screen.getPrimaryDisplay().bounds;
       overlay?.setBounds({ x, y, width, height });
-      overlay?.webContents.send("persona:island", islandShape());
+      overlay?.webContents.send("persuna:island", islandShape());
     });
   });
 
@@ -1135,6 +1135,6 @@ if (!app.requestSingleInstanceLock()) {
     globalShortcut.unregisterAll();
     keyListener?.stop();
   });
-  // Closing every window keeps Persona in the menu bar; Quit is in its menu.
+  // Closing every window keeps Persuna in the menu bar; Quit is in its menu.
   app.on("window-all-closed", () => {});
 }

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { EarningsChart } from "@/components/dashboard/earnings-chart";
 import { Greeting } from "@/components/dashboard/greeting";
-import { PersonaOrb } from "@/components/persona/orb";
+import { PersunaOrb } from "@/components/persuna/orb";
 import { ScoreBadge } from "@/components/score-trend";
 import { Badge, Card, buttonClass } from "@/components/ui";
 import { requireUser } from "@/lib/auth/session";
@@ -157,17 +157,17 @@ export default async function DashboardPage() {
         </Panel>
 
         <Card className="flex items-center gap-4 rounded-lg p-5">
-          <PersonaOrb look={d.persona.avatar} size={64} animate={false} />
+          <PersunaOrb look={d.persuna.avatar} size={64} animate={false} />
           <div className="min-w-0 flex-1">
             <p className="label-mono text-faint">Your Persuna</p>
-            <p className="font-display text-xl font-medium">{d.persona.name}</p>
+            <p className="font-display text-xl font-medium">{d.persuna.name}</p>
             <p className="truncate text-sm text-muted">
-              {d.persona.focus
-                ? `Working on: ${d.persona.focus}`
+              {d.persuna.focus
+                ? `Working on: ${d.persuna.focus}`
                 : "Tell it what you're working on today."}
             </p>
             <div className="mt-2 flex flex-wrap gap-2">
-              <Link href="/persona" className="label-mono text-accent hover:underline">
+              <Link href="/persuna" className="label-mono text-accent hover:underline">
                 Notes and to-dos →
               </Link>
               <Link href="/download" className="label-mono text-muted hover:text-accent">
@@ -185,7 +185,7 @@ export default async function DashboardPage() {
           />
         </Panel>
 
-        <Panel title="To-dos" href="/persona#todos">
+        <Panel title="To-dos" href="/persuna#todos">
           {d.todos.length === 0 ? (
             <Empty>No open to-dos. Ask your Persuna to remind you of anything.</Empty>
           ) : (

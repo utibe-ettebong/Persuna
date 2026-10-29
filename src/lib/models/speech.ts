@@ -1,7 +1,7 @@
 import { env, speechConfig, type SpeechConfig } from "@/env";
 
 /**
- * Persona's cloud voice: text in, audio out. Returns null when no speech
+ * Persuna's cloud voice: text in, audio out. Returns null when no speech
  * provider is configured, and the browser speaks instead.
  */
 export interface Speaker {

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 
 /**
- * Persona Desktop signs in here with the one-time token the browser made
+ * Persuna Desktop signs in here with the one-time token the browser made
  * (see /desktop/connect). The token is checked and spent, the app's window
  * gets its own session cookie, and setup carries on.
  */

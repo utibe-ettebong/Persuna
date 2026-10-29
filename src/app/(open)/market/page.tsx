@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { RatingLine, VerifiedBadge } from "@/components/market";
-import { PersonaOrb } from "@/components/persona/orb";
+import { PersunaOrb } from "@/components/persuna/orb";
 import { Badge, buttonClass, Card, inputClass, PageHeader } from "@/components/ui";
 import { isFiltered, parseBrowseQuery, SORTS, TURNAROUNDS } from "@/lib/market/browse";
 import { browseListings } from "@/lib/market/service";
 import { dollarsInput, formatUsd } from "@/lib/money";
-import { personasByOwner } from "@/lib/persona/service";
+import { persunasByOwner } from "@/lib/persuna/service";
 import { plural } from "@/lib/plural";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +24,7 @@ type Params = { searchParams: Promise<Record<string, string | string[] | undefin
 export default async function MarketPage({ searchParams }: Params) {
   const query = parseBrowseQuery(await searchParams);
   const { results, total, types } = await browseListings(query);
-  const personas = await personasByOwner([
+  const persunas = await persunasByOwner([
     ...new Set(results.flatMap((l) => (l.skill.ownerId ? [l.skill.ownerId] : []))),
   ]);
   const filtered = isFiltered(query);
@@ -146,7 +146,7 @@ export default async function MarketPage({ searchParams }: Params) {
       ) : (
         <ul className="grid gap-px overflow-hidden rounded-md border border-line bg-line sm:grid-cols-2 lg:grid-cols-3">
           {results.map((r) => {
-            const persona = r.skill.ownerId ? personas.get(r.skill.ownerId) : undefined;
+            const persuna = r.skill.ownerId ? persunas.get(r.skill.ownerId) : undefined;
             return (
               <li key={r.listing.id} className="flex flex-col bg-card">
                 <Link
@@ -180,14 +180,14 @@ export default async function MarketPage({ searchParams }: Params) {
                     <span className="label-mono text-accent">View →</span>
                   </div>
                 </Link>
-                {persona?.handle && (
+                {persuna?.handle && (
                   <Link
-                    href={`/personas/${persona.handle}`}
+                    href={`/persunas/${persuna.handle}`}
                     className="label-mono border-t border-line px-6 py-3 text-muted hover:text-accent"
                   >
                     <span className="inline-flex items-center gap-2">
-                      <PersonaOrb look={persona.avatar} size={22} animate={false} />
-                      by {persona.name} →
+                      <PersunaOrb look={persuna.avatar} size={22} animate={false} />
+                      by {persuna.name} →
                     </span>
                   </Link>
                 )}

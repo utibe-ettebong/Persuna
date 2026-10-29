@@ -1,5 +1,5 @@
 /**
- * The apps Persona can connect to, and their OAuth details. Pure except for
+ * The apps Persuna can connect to, and their OAuth details. Pure except for
  * the token calls, which take a fetch so they can be tested.
  */
 export const PROVIDERS = {
@@ -15,7 +15,7 @@ export const PROVIDERS = {
       "https://www.googleapis.com/auth/gmail.compose",
       "https://www.googleapis.com/auth/calendar.events",
     ],
-    // A refresh token, so Persona keeps working after the first hour.
+    // A refresh token, so Persuna keeps working after the first hour.
     extra: { access_type: "offline", prompt: "consent", include_granted_scopes: "true" },
   },
   notion: {

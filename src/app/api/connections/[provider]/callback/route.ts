@@ -2,8 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { actorOf, getUser } from "@/lib/auth/session";
 import { PROVIDERS, isProvider } from "@/lib/connections/providers";
-import { finishConnecting } from "@/lib/connections/service";
-import { NONCE_COOKIE } from "../route";
+import { NONCE_COOKIE, finishConnecting } from "@/lib/connections/service";
 
 /** The provider sends the browser back here with a code: store the connection. */
 export async function GET(request: Request, { params }: { params: Promise<{ provider: string }> }) {
@@ -11,10 +10,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
   const url = new URL(request.url);
   const back = (message: string) =>
     NextResponse.redirect(
-      new URL(`/persona?apps=${encodeURIComponent(message)}#apps`, request.url),
+      new URL(`/persuna?apps=${encodeURIComponent(message)}#apps`, request.url),
     );
   const user = await getUser();
-  if (!user) return NextResponse.redirect(new URL("/sign-in?next=/persona%23apps", request.url));
+  if (!user) return NextResponse.redirect(new URL("/sign-in?next=/persuna%23apps", request.url));
   if (!isProvider(provider)) return new Response("Unknown app", { status: 404 });
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");

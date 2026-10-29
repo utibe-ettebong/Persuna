@@ -21,7 +21,7 @@ import { userById } from "@/lib/auth/users";
 import { readiness, saveListing, setListingActive } from "@/lib/market/service";
 import { createModelClient } from "@/lib/models";
 import type { ModelClient } from "@/lib/models/gateway";
-import { sayToUser } from "@/lib/persona/service";
+import { sayToUser } from "@/lib/persuna/service";
 import { findNames, mapLimit } from "@/lib/skill/engine";
 import { redactTogether, scanText } from "@/lib/skill/redact";
 import {

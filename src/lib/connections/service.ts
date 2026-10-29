@@ -11,7 +11,7 @@ import { appConnections } from "@/db/schema";
 import { env } from "@/env";
 import { audit, type Actor } from "@/lib/audit";
 import type { ModelClient } from "@/lib/models/gateway";
-import type { OffsetMinutes } from "@/lib/persona/when";
+import type { OffsetMinutes } from "@/lib/persuna/when";
 import { runAppTask } from "./agent";
 import { readToken, seal, signToken, unseal } from "./crypto";
 import {
@@ -75,6 +75,9 @@ export async function connectedProviders(userId: string): Promise<Provider[]> {
 }
 
 const STATE_TTL_MS = 10 * 60_000;
+
+/** The cookie holding the OAuth nonce between the start and callback routes. */
+export const NONCE_COOKIE = "persuna_connect";
 
 /**
  * Where to send the browser to connect an app: the provider's sign-in page,

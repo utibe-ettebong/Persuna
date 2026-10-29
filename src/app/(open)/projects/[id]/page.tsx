@@ -684,7 +684,7 @@ function DraftEditor({
 /** A person's name, linking to their public profile when they have one. */
 function PersonLink({ person }: { person: { name: string; handle: string | null } }) {
   return person.handle ? (
-    <Link href={`/personas/${person.handle}`} className="text-accent hover:underline">
+    <Link href={`/persunas/${person.handle}`} className="text-accent hover:underline">
       {person.name}
     </Link>
   ) : (

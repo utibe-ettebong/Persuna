@@ -20,7 +20,7 @@ const text = (form: FormData, key: string) => String(form.get(key) ?? "");
 /** Your public page changes too. */
 async function refresh(userId: string) {
   revalidatePath(PAGE);
-  revalidatePath(`/personas/${(await myProfile(userId)).handle}`);
+  revalidatePath(`/persunas/${(await myProfile(userId)).handle}`);
 }
 
 export async function saveProfileAction(_: ActionState, form: FormData): Promise<ActionState> {

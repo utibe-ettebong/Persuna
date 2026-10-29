@@ -73,7 +73,7 @@ function SiteFooter() {
       links: [
         ["Meet your Persuna", "/#assistant"],
         ["Download for Mac & Windows", "/download"],
-        ["My Persuna", "/persona"],
+        ["My Persuna", "/persuna"],
       ],
     },
     {

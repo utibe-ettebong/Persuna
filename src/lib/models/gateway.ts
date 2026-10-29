@@ -36,6 +36,12 @@ export interface CompleteOptions {
   maxTokens?: number;
   /** Ask the provider for a guaranteed JSON object (response_format json_object). */
   json?: boolean;
+  /**
+   * Give up on each attempt after this long instead of MODEL_TIMEOUT_MS.
+   * Interactive turns (Persuna chat) pass a short budget so a stuck provider
+   * fails in seconds, not minutes; training keeps the long default.
+   */
+  timeoutMs?: number;
 }
 
 /**
@@ -271,7 +277,7 @@ async function post(
           authorization: `Bearer ${config.apiKey}`,
         },
         body,
-        signal: AbortSignal.timeout(env().MODEL_TIMEOUT_MS),
+        signal: AbortSignal.timeout(options.timeoutMs ?? env().MODEL_TIMEOUT_MS),
       });
     } catch (error) {
       if (attempt < MAX_ATTEMPTS) {

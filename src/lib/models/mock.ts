@@ -5,8 +5,8 @@
  * without keys. Its drafts are rough and its scores are plain text
  * similarity: good for building and demoing the flow, not for judging a skill.
  */
-import { toneFromMessage } from "@/lib/persona/tone";
-import { parseWhen } from "@/lib/persona/when";
+import { toneFromMessage } from "@/lib/persuna/tone";
+import { parseWhen } from "@/lib/persuna/when";
 import { tokenize } from "@/lib/skill/retrieve";
 import type { RuleCategory } from "@/lib/skill/types";
 import { textOf, type ChatMessage, type ModelClient } from "./gateway";
@@ -51,8 +51,8 @@ export function createMockClient(): ModelClient {
         text = JSON.stringify(mockTranscription(user));
       else if (user.includes("<ground_draft>")) text = JSON.stringify(mockGrounding(user));
       else if (user.includes("<unsupported>")) text = mockRedraft(messages, user);
-      else if (user.includes("<persona_user>")) text = JSON.stringify(mockPersona(user));
-      else if (user.includes("<persona_observe>")) text = JSON.stringify(mockObserve(user));
+      else if (user.includes("<persuna_user>")) text = JSON.stringify(mockPersuna(user));
+      else if (user.includes("<persuna_observe>")) text = JSON.stringify(mockObserve(user));
       else if (user.includes("<work_trail>")) text = JSON.stringify(mockWork(user, system));
       else if (user.includes("<task>")) text = JSON.stringify(mockAppStep(user));
       else if (role === "draft") text = mockDraft(user, system);
@@ -95,7 +95,7 @@ function mockScreenSteps(content: ChatMessage["content"]): string {
     .join("\n");
 }
 
-interface MockPersonaState {
+interface MockPersunaState {
   now: string;
   tone?: { length?: string };
   memory: string[];
@@ -114,10 +114,10 @@ interface MockPersonaState {
   onboarding?: { org: string; role: string; next: string | null } | null;
 }
 
-/** Stand-in for Persona's chat. A "short" tone keeps only the first sentence, as asked. */
-function mockPersona(user: string) {
-  const state = JSON.parse(blocks(user, "persona_state")[0] ?? "{}") as MockPersonaState;
-  const out = mockPersonaTurn(user);
+/** Stand-in for Persuna's chat. A "short" tone keeps only the first sentence, as asked. */
+function mockPersuna(user: string) {
+  const state = JSON.parse(blocks(user, "persuna_state")[0] ?? "{}") as MockPersunaState;
+  const out = mockPersunaTurn(user);
   if (state.tone?.length === "short") {
     out.reply = out.reply.match(/^[^.!?]+[.!?]/)?.[0] ?? out.reply;
   }
@@ -125,13 +125,13 @@ function mockPersona(user: string) {
 }
 
 /** Keyword rules that exercise every action. */
-function mockPersonaTurn(user: string): {
+function mockPersunaTurn(user: string): {
   reply: string;
   actions: Record<string, unknown>[];
   asked?: string | null;
 } {
-  const state = JSON.parse(blocks(user, "persona_state")[0] ?? "{}") as MockPersonaState;
-  const text = blocks(user, "persona_user")[0] ?? "";
+  const state = JSON.parse(blocks(user, "persuna_state")[0] ?? "{}") as MockPersunaState;
+  const text = blocks(user, "persuna_user")[0] ?? "";
   const lower = text.toLowerCase();
   // A new hire asking about their onboarding.
   if (state.onboarding && /\b(onboarding|what'?s next|next module|new job)\b/.test(lower)) {
@@ -143,8 +143,8 @@ function mockPersonaTurn(user: string): {
       actions: [],
     };
   }
-  // Persona Desktop sent the list of what's on screen: "where's X" points at the matching entry.
-  const screen = blocks(user, "persona_screen")[0];
+  // Persuna Desktop sent the list of what's on screen: "where's X" points at the matching entry.
+  const screen = blocks(user, "persuna_screen")[0];
   const where = /\b(?:where(?:'s| is)|point (?:at|to)|show me)\s+(?:the\s+)?(.+?)[?.!]*$/i.exec(
     text,
   );
@@ -353,8 +353,8 @@ function mockPersonaTurn(user: string): {
             ? "audit"
             : /to-?do|remind/.test(what)
               ? "todos"
-              : /note|memory|persona|profile/.test(what)
-                ? "persona"
+              : /note|memory|persuna|profile/.test(what)
+                ? "persuna"
                 : /skill/.test(what)
                   ? "skills"
                   : null;
@@ -533,7 +533,7 @@ function mockPersonaTurn(user: string): {
  * trail looks like searching (guide); otherwise it follows quietly.
  */
 function mockWork(user: string, system: string) {
-  const screen = blocks(user, "persona_screen")[0] ?? "";
+  const screen = blocks(user, "persuna_screen")[0] ?? "";
   const trail = (blocks(user, "work_trail")[0] ?? "").split("\n");
   const search = screen.split("\n").find((l) => /^e\d+ search /.test(l));
   const interrupt = !system.includes("don't interrupt again now");

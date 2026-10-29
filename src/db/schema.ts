@@ -16,7 +16,7 @@ import {
 } from "drizzle-orm/pg-core";
 import type { GroundingReport } from "@/lib/jobs/grounding";
 import type { JobFlag } from "@/lib/jobs/self-check";
-import type { Tone } from "@/lib/persona/tone";
+import type { Tone } from "@/lib/persuna/tone";
 import type { FitReport, MilestoneCheck, ProjectPlan } from "@/lib/projects/types";
 import type { InterviewAnswers } from "@/lib/skill/interview";
 import type { OnboardingPlan, OnboardingProgress, Playbook } from "@/lib/teams/types";
@@ -416,34 +416,34 @@ export const auditEvents = pgTable(
   (t) => [index().on(t.at), index().on(t.skillId)],
 );
 
-/* ---------- Persona: the personal assistant that learns from its user ---------- */
+/* ---------- Persuna: the personal assistant that learns from its user ---------- */
 
-/** One per user: what Persona is called, what it knows about them, today's focus. */
-export const personaProfiles = pgTable("persona_profiles", {
+/** One per user: what Persuna is called, what it knows about them, today's focus. */
+export const persunaProfiles = pgTable("persuna_profiles", {
   userId: text("user_id")
     .primaryKey()
     .references(() => authUsers.id, { onDelete: "cascade" }),
   name: text("name").notNull().default("Persuna"),
-  /** The companion's look, a key of LOOKS in lib/persona/looks (older rows hold an emoji). */
+  /** The companion's look, a key of LOOKS in lib/persuna/looks (older rows hold an emoji). */
   avatar: text("avatar").notNull().default("plum"),
   /** Set once the first-meeting setup (name, avatar, first task) is done or skipped. */
   setupDone: boolean("setup_done").notNull().default(false),
-  /** Public profile address: /personas/<handle>. */
+  /** Public profile address: /persunas/<handle>. */
   handle: text("handle").unique(),
-  /** Short facts the user asked Persona to remember, newest last. */
+  /** Short facts the user asked Persuna to remember, newest last. */
   memory: jsonb("memory").$type<string[]>().notNull().default([]),
   focus: text("focus"),
   focusSkillId: uuid("focus_skill_id").references(() => skills.id, { onDelete: "set null" }),
-  /** The user's local day (YYYY-MM-DD) Persona last asked what you're working on. */
+  /** The user's local day (YYYY-MM-DD) Persuna last asked what you're working on. */
   checkinDay: text("checkin_day"),
   /** The local day of the last end-of-day wrap-up. */
   wrapupDay: text("wrapup_day"),
-  /** How the user likes to be spoken to (see lib/persona/tone). */
+  /** How the user likes to be spoken to (see lib/persuna/tone). */
   tone: jsonb("tone").$type<Tone>().notNull().default({}),
-  /** Keys of notices Persona already raised, newest last, so each is said once. */
+  /** Keys of notices Persuna already raised, newest last, so each is said once. */
   noticeKeys: jsonb("notice_keys").$type<string[]>().notNull().default([]),
   /**
-   * The person's public profile (at /personas/<handle>), for clients posting
+   * The person's public profile (at /persunas/<handle>), for clients posting
    * projects and for people renting their skills. Their own words; null until set.
    */
   publicName: text("public_name"),
@@ -455,8 +455,8 @@ export const personaProfiles = pgTable("persona_profiles", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const personaMessages = pgTable(
-  "persona_messages",
+export const persunaMessages = pgTable(
+  "persuna_messages",
   {
     id: id(),
     userId: text("user_id")
@@ -467,17 +467,17 @@ export const personaMessages = pgTable(
     kind: text("kind").notNull().default("chat"),
     content: text("content").notNull(),
     skillId: uuid("skill_id").references(() => skills.id, { onDelete: "set null" }),
-    /** For interview turns: which question Persona just asked. */
+    /** For interview turns: which question Persuna just asked. */
     askedKey: text("asked_key"),
-    /** A job Persona ran from the chat. The job's text stays in `jobs`, never here. */
+    /** A job Persuna ran from the chat. The job's text stays in `jobs`, never here. */
     jobId: uuid("job_id").references(() => jobs.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
   (t) => [index().on(t.userId, t.createdAt)],
 );
 
-export const personaNotes = pgTable(
-  "persona_notes",
+export const persunaNotes = pgTable(
+  "persuna_notes",
   {
     id: id(),
     userId: text("user_id")
@@ -494,8 +494,8 @@ export const personaNotes = pgTable(
 );
 
 /** To-dos, and reminders when they have a due time. */
-export const personaReminders = pgTable(
-  "persona_reminders",
+export const persunaReminders = pgTable(
+  "persuna_reminders",
   {
     id: id(),
     userId: text("user_id")
@@ -535,13 +535,13 @@ export type Listing = typeof listings.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
 export type AuditEvent = typeof auditEvents.$inferSelect;
 export type AuthUser = typeof authUsers.$inferSelect;
-export type PersonaProfile = typeof personaProfiles.$inferSelect;
-export type PersonaMessage = typeof personaMessages.$inferSelect;
-export type PersonaNote = typeof personaNotes.$inferSelect;
-export type PersonaReminder = typeof personaReminders.$inferSelect;
+export type PersunaProfile = typeof persunaProfiles.$inferSelect;
+export type PersunaMessage = typeof persunaMessages.$inferSelect;
+export type PersunaNote = typeof persunaNotes.$inferSelect;
+export type PersunaReminder = typeof persunaReminders.$inferSelect;
 
 /**
- * Apps Persona may use for the user (Google for Gmail and Calendar, Notion),
+ * Apps Persuna may use for the user (Google for Gmail and Calendar, Notion),
  * connected by OAuth. Tokens are encrypted at rest (CONNECTIONS_KEY) and
  * never leave the server.
  */
@@ -691,7 +691,7 @@ export const proposalStatus = pgEnum("proposal_status", [
   "declined",
   "withdrawn",
 ]);
-export const updateAuthor = pgEnum("project_update_author", ["persona", "poster", "seller"]);
+export const updateAuthor = pgEnum("project_update_author", ["persuna", "poster", "seller"]);
 
 /**
  * A piece of work someone posts. The brief is material: it stays here and is

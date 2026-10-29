@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Frame, HatchStrip, SectionLabel } from "@/components/brand";
 import { HeroDemo } from "@/components/landing/hero-demo";
 import { WorkflowTabs } from "@/components/landing/workflow-tabs";
-import { PersonaOrb } from "@/components/persona/orb";
+import { PersunaOrb } from "@/components/persuna/orb";
 import { buttonClass } from "@/components/ui";
 
 export const metadata: Metadata = {
@@ -215,7 +215,7 @@ export default function LandingPage() {
               </p>
               <div className="mt-6 flex items-end justify-end gap-3">
                 <span className="label-mono mb-6 text-muted">Speaking</span>
-                <PersonaOrb look="plum" state="speaking" level={0.5} size={110} />
+                <PersunaOrb look="plum" state="speaking" level={0.5} size={110} />
               </div>
             </div>
           </div>
@@ -374,7 +374,7 @@ export default function LandingPage() {
             </p>
           </div>
           <div className="flex items-center justify-center border-t border-white/10 px-6 py-14 lg:border-l lg:border-t-0">
-            <PersonaOrb look="aurora" size={160} />
+            <PersunaOrb look="aurora" size={160} />
           </div>
         </Frame>
       </section>

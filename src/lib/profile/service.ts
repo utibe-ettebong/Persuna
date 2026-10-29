@@ -8,7 +8,7 @@ import { and, asc, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import { audit, type Actor } from "@/lib/audit";
 import { NotFoundError } from "@/lib/skill/service";
-import { ensureHandle, getProfile, publicProfile } from "@/lib/persona/service";
+import { ensureHandle, getProfile, publicProfile } from "@/lib/persuna/service";
 import { confidentialSkills } from "@/lib/teams/confidential";
 import { publicSkillName } from "@/lib/teams/rules";
 import {
@@ -20,7 +20,7 @@ import {
   type ProfileInput,
 } from "./rules";
 
-const { personaProfiles, portfolioItems, skills, projects, projectProposals, authUsers } = schema;
+const { persunaProfiles, portfolioItems, skills, projects, projectProposals, authUsers } = schema;
 
 /** Your profile as you edit it, with your portfolio and skills to tag pieces with. */
 export async function myProfile(userId: string) {
@@ -47,9 +47,9 @@ export async function myProfile(userId: string) {
 export async function saveProfile(userId: string, input: ProfileInput, actor: Actor) {
   await getProfile(userId);
   await db()
-    .update(personaProfiles)
+    .update(persunaProfiles)
     .set({ ...input, updatedAt: new Date() })
-    .where(eq(personaProfiles.userId, userId));
+    .where(eq(persunaProfiles.userId, userId));
   await audit({
     actor,
     action: "profile.updated",
@@ -180,9 +180,9 @@ export async function handlesFor(userIds: string[]): Promise<Map<string, string>
  * record on projects, as a client and as a seller.
  */
 export async function personProfile(handle: string) {
-  const persona = await publicProfile(handle);
-  const profile = await db().query.personaProfiles.findFirst({
-    where: eq(personaProfiles.handle, handle),
+  const persuna = await publicProfile(handle);
+  const profile = await db().query.persunaProfiles.findFirst({
+    where: eq(persunaProfiles.handle, handle),
   });
   if (!profile) throw new NotFoundError("No such profile");
   const user = await db().query.authUsers.findFirst({ where: eq(authUsers.id, profile.userId) });
@@ -231,7 +231,7 @@ export async function personProfile(handle: string) {
     location: profile.location,
     website: profile.website,
     memberSince: user?.createdAt ?? profile.createdAt,
-    persona: persona,
+    persuna: persuna,
     portfolio: portfolio.map(({ item, skill }) => ({
       id: item.id,
       title: item.title,
@@ -269,9 +269,9 @@ export async function peopleFor(userIds: string[]) {
   if (!ids.length) return new Map<string, { name: string; handle: string | null }>();
   const handles = await handlesFor(ids);
   const rows = await db()
-    .select({ id: authUsers.id, name: authUsers.name, publicName: personaProfiles.publicName })
+    .select({ id: authUsers.id, name: authUsers.name, publicName: persunaProfiles.publicName })
     .from(authUsers)
-    .leftJoin(personaProfiles, eq(personaProfiles.userId, authUsers.id))
+    .leftJoin(persunaProfiles, eq(persunaProfiles.userId, authUsers.id))
     .where(inArray(authUsers.id, ids));
   return new Map(
     rows.map((r) => [

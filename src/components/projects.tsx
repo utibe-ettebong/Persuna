@@ -1,6 +1,6 @@
 import type { ProjectUpdate } from "@/db/schema";
 import type { FitReport, MilestoneCheck } from "@/lib/projects/types";
-import { PersonaOrb } from "./persona/orb";
+import { PersunaOrb } from "./persuna/orb";
 import { Badge, type Tone } from "./ui";
 
 export const PROJECT_STATUS: Record<string, { tone: Tone; label: string }> = {
@@ -33,7 +33,7 @@ export function CheckReport({ check }: { check: MilestoneCheck }) {
   return (
     <div className="space-y-3 rounded-md border border-line bg-subtle/60 p-4 text-sm">
       <p className="flex items-center gap-2 font-medium">
-        <PersonaOrb look="plum" size={20} animate={false} /> Persuna&apos;s check · round{" "}
+        <PersunaOrb look="plum" size={20} animate={false} /> Persuna&apos;s check · round{" "}
         {check.round}
       </p>
       <ul className="space-y-2">
@@ -102,7 +102,7 @@ export function FitReportView({ fit }: { fit: FitReport }) {
   );
 }
 
-const AUTHOR = { persona: "Persuna", poster: "Poster", seller: "Seller" } as const;
+const AUTHOR = { persuna: "Persuna", poster: "Poster", seller: "Seller" } as const;
 
 /** Every step of the project, with Persuna's checks marked. */
 export function Timeline({ updates }: { updates: ProjectUpdate[] }) {
@@ -113,11 +113,11 @@ export function Timeline({ updates }: { updates: ProjectUpdate[] }) {
         <li
           key={u.id}
           className={`rounded-md border p-3 text-sm ${
-            u.author === "persona" ? "border-accent/40 bg-accent-soft/40" : "border-line bg-card"
+            u.author === "persuna" ? "border-accent/40 bg-accent-soft/40" : "border-line bg-card"
           }`}
         >
           <p className="label-mono flex flex-wrap items-center gap-2 text-faint">
-            {u.author === "persona" && <PersonaOrb look="plum" size={16} animate={false} />}
+            {u.author === "persuna" && <PersunaOrb look="plum" size={16} animate={false} />}
             {AUTHOR[u.author]} · {u.kind} ·{" "}
             {u.createdAt.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}
           </p>

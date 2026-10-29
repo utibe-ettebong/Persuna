@@ -206,16 +206,16 @@ textarea.outline-none:focus-visible {
   }
 }
 
-/* Persona, the on-screen companion. */
-.persona-stream {
+/* Persuna, the on-screen companion. */
+.persuna-stream {
   /* The conversation fades out at the top instead of ending at an edge. */
   mask-image: linear-gradient(to bottom, transparent 0, black 48px);
   scrollbar-width: none;
 }
-.persona-stream::-webkit-scrollbar {
+.persuna-stream::-webkit-scrollbar {
   display: none;
 }
-.persona-backdrop {
+.persuna-backdrop {
   background:
     radial-gradient(
       120% 60% at 50% 0%,
@@ -224,9 +224,9 @@ textarea.outline-none:focus-visible {
     ),
     color-mix(in oklab, var(--background) 88%, transparent);
 }
-/* Electron: drag the window by Persona; controls stay clickable. */
+/* Electron: drag the window by Persuna; controls stay clickable. */
 /*
- * Persona Desktop's island and everything that grows out of it: solid black,
+ * Persuna Desktop's island and everything that grows out of it: solid black,
  * like the notch, whatever the system theme. Cards inside (tasks, examples,
  * jobs) use the same tokens, so they turn black too.
  */
@@ -270,7 +270,7 @@ textarea.outline-none:focus-visible {
   background: radial-gradient(circle at 100% 100%, transparent 10px, #000 10.5px);
 }
 
-.persona-drag {
+.persuna-drag {
   -webkit-app-region: drag;
 }
 
@@ -281,26 +281,26 @@ textarea.outline-none:focus-visible {
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
-.persona-no-drag,
-.persona-drag button {
+.persuna-no-drag,
+.persuna-drag button {
   -webkit-app-region: no-drag;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .persona-float {
-    animation: persona-float 6s ease-in-out infinite;
+  .persuna-float {
+    animation: persuna-float 6s ease-in-out infinite;
   }
-  .persona-in {
-    animation: persona-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  .persuna-in {
+    animation: persuna-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
   }
-  .persona-dot {
-    animation: persona-dot 1s ease-in-out infinite;
+  .persuna-dot {
+    animation: persuna-dot 1s ease-in-out infinite;
   }
   /* Persuna's drawings draw themselves in. */
-  .persona-draw-line {
+  .persuna-draw-line {
     stroke-dasharray: 1200;
-    animation: persona-draw 1.2s ease-out both;
+    animation: persuna-draw 1.2s ease-out both;
   }
-  @keyframes persona-draw {
+  @keyframes persuna-draw {
     from {
       stroke-dashoffset: 1200;
     }
@@ -308,7 +308,7 @@ textarea.outline-none:focus-visible {
       stroke-dashoffset: 0;
     }
   }
-  @keyframes persona-float {
+  @keyframes persuna-float {
     0%,
     100% {
       transform: translate(0, 0) rotate(0deg);
@@ -320,14 +320,14 @@ textarea.outline-none:focus-visible {
       transform: translate(2px, -3px) rotate(2deg);
     }
   }
-  @keyframes persona-in {
+  @keyframes persuna-in {
     from {
       opacity: 0;
       transform: translateY(10px) scale(0.96);
       filter: blur(4px);
     }
   }
-  @keyframes persona-dot {
+  @keyframes persuna-dot {
     50% {
       transform: translateY(-4px);
       opacity: 0.5;
