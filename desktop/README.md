@@ -1,6 +1,8 @@
 # Persuna Desktop
 
-Persuna, your PERSUNA assistant, in a small bar at the top centre of your screen, above every app (even full-screen ones). Clicks pass straight through to your apps everywhere else.
+Persuna, your PERSUNA assistant, as a small island on your Mac's notch (or hanging from the top centre of the screen on Windows and Macs without one), above every app, even full-screen ones. Clicks pass straight through to your apps everywhere else.
+
+- **It sees what you mean:** when you talk or type, it takes one look at your screen (leaving itself out) so you can ask "what's this?" or "reply to this email". Switch it off from its right-click menu. It never keeps the screenshots.
 
 - **Talk:** hold **right ⌥** (right Alt on Windows) from any app, say what you need, and let go. Persuna answers out loud.
 - **Type:** tap right ⌥ twice quickly, or click the bar. The panel has a message box, your last exchange and quick actions (watch my screen, wrap up my day, to-dos).
