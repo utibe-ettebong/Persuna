@@ -37,7 +37,7 @@ import { PersonaOrb, type OrbState } from "./orb";
 import { MAX_LOOKS, startWatching, watchesWithoutClick, type Watcher } from "./screen-watch";
 import { TaskComposer } from "./task-composer";
 import { MadeFileCard } from "./made-file";
-import { CircleLayer, DrawingLayer, cropPicture, type Area } from "./screen-drawing";
+import { CircleLayer, CircledMark, DrawingLayer, cropPicture, type Area } from "./screen-drawing";
 import {
   WORK_EVERY_MS,
   WORK_QUIET_MS,
@@ -118,6 +118,13 @@ type DesktopWindow = Window & {
     /** Tell the app watching started or stopped. */
     watching?(on: boolean): void;
     island?(): Promise<{ notch: boolean; height: number; notchWidth: number }>;
+    permissions?(): Promise<Record<
+      Permission,
+      "granted" | "denied" | "not-determined" | string
+    > | null>;
+    askPermission?(kind: Permission): Promise<string>;
+    focus?(): void;
+    onCircle?(handler: () => void): void;
     copy?(text: string): void;
     paste?(text: string): Promise<boolean>;
     saveFile?(file: { name: string; ext: string; data: string }): Promise<string | null>;
@@ -137,16 +144,14 @@ const noSubscribe = () => () => {};
 /** How long a highlight stays on screen. */
 const POINT_MS = 9000;
 
-/** "Good morning" and friends, by the local hour. */
-function greeting(hour = new Date().getHours()) {
-  return hour < 5
-    ? "Up late"
-    : hour < 12
-      ? "Good morning"
-      : hour < 17
-        ? "Good afternoon"
-        : "Good evening";
-}
+/** Things Persona Desktop needs the Mac's permission for, asked for in the island. */
+type Permission = "mic" | "screen" | "keyboard";
+const NEEDS: Record<Permission, string> = {
+  mic: "I need your microphone to hear you.",
+  screen: "I need Screen Recording to see your screen. Switch Persuna on, then reopen it.",
+  keyboard: "I need Accessibility for the talk key and pasting. Switch Persuna on.",
+};
+
 const WRAP_UP_OFFER = "It's getting late. Want a wrap-up of today?";
 /** After this local hour, Persona offers an end-of-day wrap-up (once a day). */
 const WRAP_UP_HOUR = 17;
@@ -261,7 +266,17 @@ export function Companion(props: CompanionProps) {
   const [made, setMade] = useState<MadeFile | null>(null);
   // Circle something to ask about it: picking, then the area picked (until the next message).
   const [circling, setCircling] = useState(false);
-  const [circled, setCircled] = useState<Area | null>(null);
+  const [circled, setCircled] = useState<{ area: Area; path: string } | null>(null);
+  // A permission the island is asking for (only when you use what needs it).
+  const [need, setNeed] = useState<Permission | null>(null);
+  const perms = useRef<Record<string, string> | null>(null);
+  // Work mode learned enough steps to teach today's skill.
+  const [teachOffer, setTeachOffer] = useState<{
+    noteId: string;
+    skill: string;
+    steps: number;
+  } | null>(null);
+  const [drawPace, setDrawPace] = useState(1100);
   const circledRef = useRef<Area | null>(null);
   // A file handed to Persuna, waiting for what to do with it.
   const [attached, setAttached] = useState<File | null>(null);
@@ -554,19 +569,33 @@ export function Companion(props: CompanionProps) {
     ]);
     setFocusSkill(value.focus.skill);
     if (value.task) setTask(value.task);
-    // A browser only opens its share picker from a click: ask with a button there.
-    if (value.watch === "start" && !watcher.current) {
-      if (watchesWithoutClick()) void startWatch();
-      else setAskWatch(true);
+    if (props.overlay && (window as DesktopWindow).personaDesktop?.look) {
+      // On the desktop, "watch my screen" is Work mode.
+      if (value.watch === "start") void enableWork();
+      if (value.watch === "stop") {
+        watcher.current?.stop();
+        setWork(false);
+      }
+    } else {
+      // A browser only opens its share picker from a click: ask with a button there.
+      if (value.watch === "start" && !watcher.current) {
+        if (watchesWithoutClick()) void startWatch();
+        else setAskWatch(true);
+      }
+      if (value.watch === "stop") watcher.current?.stop();
     }
-    if (value.watch === "stop") watcher.current?.stop();
     if (value.example) setExample(value.example.skill);
     if (value.appConfirm) setAppConfirm(value.appConfirm);
     // Showing something on screen: the island folds up so it doesn't cover it.
     if (value.point || value.drawing) setPanel(false);
     if (value.point) showPoint(value.point);
     if (value.clipboard) void doClipboard(value.clipboard);
-    if (value.drawing) setDrawing(value.drawing);
+    if (value.drawing) {
+      // Each step of the drawing appears as Persuna gets to it.
+      const steps = value.drawing.marks.length + (value.drawing.flow?.nodes.length ?? 0);
+      setDrawPace(Math.min(2600, Math.max(700, (reply.content.length * 60) / Math.max(1, steps))));
+      setDrawing(value.drawing);
+    }
     if (value.file) setMade(value.file);
     if (value.confirm) {
       setConfirm(value.confirm);
@@ -649,8 +678,70 @@ export function Companion(props: CompanionProps) {
     setAskWork(false);
     setWorkMode(on);
     store("persona.workMode", on);
-    if (!on) setOffer(null);
+    if (!on) {
+      setOffer(null);
+      setTeachOffer(null);
+    }
     flash(on ? "Work mode is on" : "Work mode is off");
+  }
+
+  /** The Mac's permissions as they are now (null off the desktop app). */
+  async function checkPerms() {
+    const desktop = (window as DesktopWindow).personaDesktop;
+    perms.current = (await desktop?.permissions?.().catch(() => null)) ?? null;
+    return perms.current;
+  }
+
+  /** True when Persuna may use it; otherwise the island asks for it. */
+  async function allowed(kind: Permission) {
+    const now = perms.current ?? (await checkPerms());
+    if (!now || now[kind] === "granted") return true;
+    setNeed(kind);
+    return false;
+  }
+
+  async function askFor(kind: Permission) {
+    const desktop = (window as DesktopWindow).personaDesktop;
+    const result = await desktop?.askPermission?.(kind).catch(() => "denied");
+    await checkPerms();
+    if (result === "granted") {
+      setNeed(null);
+      flash(kind === "mic" ? "Thanks. Hold the key and talk." : "Thanks");
+    }
+  }
+
+  /** Work mode on, by voice or the island (it needs to see the screen). */
+  async function enableWork() {
+    if (!(await allowed("screen"))) return;
+    setWork(true);
+  }
+
+  async function startCircle() {
+    if (!(await allowed("screen"))) return;
+    setPanel(false);
+    setCircling(true);
+  }
+
+  async function teachSteps() {
+    if (!teachOffer) return;
+    const offer = teachOffer;
+    setTeachOffer(null);
+    setBusy("thinking");
+    const res = await personaTeachNoteAction(offer.noteId);
+    setBusy("idle");
+    if (!res.ok) return setError(res.error);
+    const line = `Done. I added what I learned to ${offer.skill} for you to review.`;
+    setMessages((all) => [
+      ...all,
+      {
+        id: `taught-${Date.now()}`,
+        role: "assistant",
+        kind: "chat",
+        content: line,
+        link: res.value,
+      },
+    ]);
+    express(line);
   }
 
   const hear = useCallback(
@@ -777,6 +868,11 @@ export function Companion(props: CompanionProps) {
 
   function holdStart() {
     if (holdRec.current) return;
+    // No microphone yet: the island asks for it instead of recording silence.
+    if (perms.current && perms.current.mic !== "granted") {
+      setNeed("mic");
+      return;
+    }
     lastInput.current = Date.now();
     setDozing(false);
     setMenu(false);
@@ -812,6 +908,8 @@ export function Companion(props: CompanionProps) {
     setPanel(true);
     setMenu(false);
     setIslandTyping(typing);
+    // Taking the keyboard means a click anywhere else closes it again.
+    (window as DesktopWindow).personaDesktop?.focus?.();
     if (typing) window.setTimeout(() => panelInput.current?.focus(), 50);
   }
 
@@ -900,6 +998,8 @@ export function Companion(props: CompanionProps) {
     void desktop?.holdKey?.().then(setHoldLabel);
     void desktop?.island?.().then((shape) => shape && setIsland(shape));
     desktop?.onIsland?.(setIsland);
+    desktop?.onCircle?.(() => void startCircle());
+    void checkPerms();
     desktop?.onHoldKey?.(setHoldLabel);
     void desktop?.shortcut?.().then(setDesktopShortcut);
     desktop?.onShortcut?.(setDesktopShortcut);
@@ -907,6 +1007,18 @@ export function Companion(props: CompanionProps) {
     // call reads live state through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The island closes when you click anywhere else (Persuna loses the keyboard then).
+  useEffect(() => {
+    if (!props.overlay || !panel) return;
+    const close = () => {
+      setPanel(false);
+      setMenu(false);
+      setIslandTyping(false);
+    };
+    window.addEventListener("blur", close);
+    return () => window.removeEventListener("blur", close);
+  }, [props.overlay, panel]);
 
   /* ---------- Work mode ---------- */
 
@@ -943,7 +1055,24 @@ export function Companion(props: CompanionProps) {
           clock(),
         );
         if (!res.ok || stopped) return;
-        const { message, point, offer: next } = res.value;
+        const { message, point, offer: next, switchTo, teachOffer: teach } = res.value;
+        if (teach) setTeachOffer(teach);
+        if (switchTo && !offFocusAsked.current) {
+          // Once per session: the work looks like another of their skills.
+          offFocusAsked.current = true;
+          const line = `This looks like ${switchTo.name}. Want me to learn it there?`;
+          setMessages((all) => [
+            ...all,
+            {
+              id: `work-switch-${Date.now()}`,
+              role: "assistant",
+              kind: "chat",
+              content: line,
+              switchTo,
+            },
+          ]);
+          express(line);
+        }
         if (message) {
           spokeAt = Date.now();
           setMessages((all) => [...all, { ...message, role: "assistant" }]);
@@ -1803,30 +1932,40 @@ export function Companion(props: CompanionProps) {
       ) : (
         <span className="h-1.5 w-1.5 rounded-full bg-white/25" />
       );
-    const chips: { label: string; act: () => void; hidden?: boolean }[] = [
-      { label: "Type", act: () => openPanel(true) },
+    // What Persuna can do from the island, as one row of icons (names on hover).
+    const tools: {
+      label: string;
+      icon: ToolIcon;
+      act: () => void;
+      on?: boolean;
+      hidden?: boolean;
+    }[] = [
+      { label: "Type", icon: "type", act: () => openPanel(true) },
       {
-        label: "Circle something",
-        act: () => {
-          setPanel(false);
-          setCircling(true);
-        },
+        label: "Circle something (⌃⌥C)",
+        icon: "circle",
+        act: () => void startCircle(),
         hidden: !desktop?.look,
       },
-      { label: "Add a file", act: () => fileInput.current?.click() },
+      { label: "Give me a file", icon: "file", act: () => fileInput.current?.click() },
       {
-        label: workMode ? "Work mode: on" : "Work mode",
+        label: workMode ? "Work mode is on: turn it off" : "Work mode: follow along and help",
+        icon: "work",
+        on: workMode,
         act: () => (workMode ? setWork(false) : setAskWork(true)),
         hidden: !desktop?.look,
       },
       {
         label: watching ? "Stop watching" : "Watch my screen",
+        icon: "work",
+        on: watching,
         act: () => (watching ? watcher.current?.stop() : setAskWatch(true)),
+        hidden: Boolean(desktop?.look),
       },
-      { label: "Wrap up my day", act: () => void send("Wrap up my day") },
+      { label: "Wrap up my day", icon: "wrap", act: () => void send("Wrap up my day") },
     ];
     const islandCards =
-      hasCards || showSetupInput || made || offer || askWork || (attached && !panel);
+      hasCards || showSetupInput || made || offer || askWork || teachOffer || (attached && !panel);
     return (
       <section
         data-persona
@@ -1866,24 +2005,20 @@ export function Companion(props: CompanionProps) {
             </span>
           </div>
         )}
-        {drawing && <DrawingLayer drawing={drawing} onDone={() => setDrawing(null)} />}
+        {drawing && (
+          <DrawingLayer drawing={drawing} paceMs={drawPace} onDone={() => setDrawing(null)} />
+        )}
         {circling && (
           <CircleLayer
             onCancel={() => setCircling(false)}
-            onPick={(area) => {
+            onPick={(pick) => {
               setCircling(false);
-              circledRef.current = area;
-              setCircled(area);
+              circledRef.current = pick.area;
+              setCircled(pick);
             }}
           />
         )}
-        {circled && !circling && (
-          <span
-            aria-hidden
-            className="pointer-events-none fixed rounded-2xl border-2 border-dashed border-[#b794ff] bg-[#b794ff]/5"
-            style={{ left: circled.x, top: circled.y, width: circled.w, height: circled.h }}
-          />
-        )}
+        {circled && !circling && <CircledMark path={circled.path} />}
 
         {/* The island: on the notch (or hanging from the top centre), solid black.
             Click it for Persuna, right-click for more, drop a file on it. */}
@@ -1965,22 +2100,42 @@ export function Companion(props: CompanionProps) {
             <p className="px-5 pb-3 pt-1 text-[12px] leading-snug text-[#ff8f87]">{error}</p>
           )}
 
+          {/* A permission it needs, asked for only when you use what needs it. */}
+          {need && (
+            <div className="flex items-center gap-2 px-5 pb-3.5 pt-1 text-[12.5px] leading-snug">
+              <span className="flex-1 text-white/90">{NEEDS[need]}</span>
+              <button
+                type="button"
+                onClick={() => void askFor(need)}
+                className="rounded-full bg-white px-3 py-1 text-[11px] font-medium text-black"
+              >
+                {perms.current?.[need] === "not-determined" ? "Allow" : "Open Settings"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setNeed(null)}
+                aria-label="Not now"
+                className="px-1 text-white/50 hover:text-white"
+              >
+                ×
+              </button>
+            </div>
+          )}
+
           {/* Persuna itself: who it is, what it's on, the last words, and what it can do. */}
           {panel && setupDone && (
-            <div className="space-y-3 px-5 pb-5 pt-1">
-              <div className="flex items-center gap-3.5">
-                <PersonaOrb look={look} state={orbState} level={level} size={52} gaze={null} />
-                <div className="min-w-0">
-                  <p className="label-mono text-[10px] text-white/45">
-                    {greeting()} · {barStatus}
-                  </p>
-                  <h2 className="font-display text-lg font-medium leading-tight tracking-[-0.02em]">
+            <div className="space-y-2.5 px-4 pb-4 pt-0.5">
+              <div className="flex items-center gap-3">
+                <PersonaOrb look={look} state={orbState} level={level} size={36} gaze={null} />
+                <div className="min-w-0 flex-1">
+                  <h2 className="truncate text-[14px] font-medium leading-tight">
                     {firstName ? `${firstName}, what's next?` : "What's next?"}
                   </h2>
-                  <p className="truncate text-[12px] text-white/55">
+                  <p className="truncate text-[11.5px] text-white/50">
                     {focusSkill
                       ? `Today: ${focusSkill.name}`
                       : (props.focus ?? "Tell me what you're working on")}
+                    {workMode ? " · Work mode on" : ""}
                   </p>
                 </div>
               </div>
@@ -1991,10 +2146,10 @@ export function Companion(props: CompanionProps) {
               )}
               {!caption && recent.length > 0 && (
                 <ul className="space-y-1 text-[13px] leading-snug">
-                  {recent.map((m) => (
+                  {recent.slice(-1).map((m) => (
                     <li
                       key={m.id}
-                      className={m.role === "user" ? "text-white/50" : "text-white/90"}
+                      className={`line-clamp-2 ${m.role === "user" ? "text-white/50" : "text-white/90"}`}
                     >
                       <span className="label-mono mr-2 text-[9px] text-white/35">
                         {m.role === "user" ? "You" : name}
@@ -2095,18 +2250,28 @@ export function Companion(props: CompanionProps) {
                   </button>
                 </form>
               )}
-              <div className="flex flex-wrap gap-1.5">
-                {chips
-                  .filter((c) => !c.hidden && !(c.label === "Type" && islandTyping))
-                  .map((c) => (
-                    <button key={c.label} type="button" onClick={c.act} className={CHIP}>
-                      {c.label}
+              <div className="flex items-center gap-1" role="toolbar" aria-label="What I can do">
+                {tools
+                  .filter((t) => !t.hidden && !(t.icon === "type" && islandTyping))
+                  .map((t) => (
+                    <button
+                      key={t.label}
+                      type="button"
+                      onClick={t.act}
+                      title={t.label}
+                      aria-label={t.label}
+                      aria-pressed={t.on}
+                      className={`grid h-9 w-9 place-items-center rounded-full transition-colors ${
+                        t.on
+                          ? "bg-[#5cc98f]/20 text-[#5cc98f]"
+                          : "text-white/75 hover:bg-white/10 hover:text-white"
+                      }`}
+                    >
+                      <ToolGlyph icon={t.icon} />
                     </button>
                   ))}
+                <span className="label-mono ml-auto text-[9px] text-white/35">{talkHint}</span>
               </div>
-              <p className="label-mono text-[9px] text-white/35">
-                {talkHint} · double-tap to type · right-click for more
-              </p>
             </div>
           )}
         </div>
@@ -2120,6 +2285,30 @@ export function Companion(props: CompanionProps) {
         {islandCards && (
           <div className="pointer-events-auto flex w-[min(30rem,94vw)] flex-col gap-2">
             {!setupDone ? setupChips : assistCards}
+            {teachOffer && (
+              <div
+                className={`persona-in flex items-center gap-2 rounded-[22px] p-2 pl-4 text-[13px] ${ISLAND_CARD}`}
+              >
+                <span className="flex-1">
+                  I&apos;ve learned {teachOffer.steps} steps of how you work. Teach them to{" "}
+                  {teachOffer.skill}?
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void teachSteps()}
+                  className="rounded-full bg-white px-3 py-1.5 text-xs font-medium text-black"
+                >
+                  Teach it
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTeachOffer(null)}
+                  className="rounded-full px-3 py-1.5 text-xs text-white/60 hover:text-white"
+                >
+                  Not now
+                </button>
+              </div>
+            )}
             {offer && (
               <div
                 className={`persona-in flex items-center gap-2 rounded-[22px] p-2 pl-4 text-sm ${ISLAND_CARD}`}
@@ -2159,7 +2348,7 @@ export function Companion(props: CompanionProps) {
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    onClick={() => setWork(true)}
+                    onClick={() => void enableWork()}
                     className="rounded-full bg-white px-4 py-1.5 text-xs font-medium text-black"
                   >
                     Turn on Work mode
@@ -2482,5 +2671,31 @@ export function Companion(props: CompanionProps) {
         </button>
       )}
     </section>
+  );
+}
+
+type ToolIcon = "type" | "circle" | "file" | "work" | "wrap";
+const TOOL_PATHS: Record<ToolIcon, string> = {
+  type: "M4 7h16v10H4zM7 10h1m3 0h1m3 0h1m2 0h0M8 14h8",
+  circle:
+    "M12 5c4.4 0 8 2.4 8 5.6 0 3.3-3.6 5.9-8 5.9-1.1 0-2.2-.1-3.1-.4M5.2 13.4C4.4 12.6 4 11.6 4 10.6 4 7.4 7.6 5 12 5M7 16.5 5 20",
+  file: "M8.5 12.5 14 7a2.5 2.5 0 0 1 3.5 3.5l-7 7a4 4 0 0 1-5.7-5.7l6.6-6.6",
+  work: "M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Zm9.5 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
+  wrap: "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z",
+};
+
+/** The island's tool icons, drawn to match the companion's other icons. */
+function ToolGlyph({ icon }: { icon: ToolIcon }) {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+      <path
+        d={TOOL_PATHS[icon]}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }

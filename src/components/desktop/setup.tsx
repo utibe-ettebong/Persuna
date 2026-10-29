@@ -32,6 +32,9 @@ import {
   INTRO_QUESTIONS,
   parseName,
   suggestedSkill,
+  COMMON_SKILLS,
+  MAX_FIRST_SKILLS,
+  describeSkill,
   type IntroAnswers,
 } from "@/lib/persona/onboarding";
 
@@ -1056,15 +1059,19 @@ function FirstSkillStep({
   timeSink: string | undefined;
 } & Nav) {
   const suggestion = suggestedSkill(timeSink);
-  const [skillName, setSkillName] = useState(suggestion ?? "");
-  const [description, setDescription] = useState(timeSink?.trim() ?? "");
+  // The list to pick from: their answer first, then the common ones, plus any they add.
+  const [options, setOptions] = useState<string[]>(() => [
+    ...new Set([...(suggestion ? [suggestion] : []), ...COMMON_SKILLS.map((s) => s.name)]),
+  ]);
+  const [picked, setPicked] = useState<string[]>(suggestion ? [suggestion] : []);
+  const [custom, setCustom] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useIntro(
     say,
     suggestion
-      ? `You said ${suggestion.toLowerCase()} takes the most time. Want me to learn it?`
-      : "What's one task you'd like me to learn to do your way?",
+      ? `You said ${suggestion.toLowerCase()} takes the most time. Pick everything you'd like me to learn.`
+      : "Which tasks would you like me to learn to do your way? Pick as many as you like.",
   );
 
   async function finish(task: Parameters<typeof personaSetupAction>[0]["task"]) {
@@ -1075,64 +1082,101 @@ function FirstSkillStep({
     if (!res.ok) return setError(res.error);
     onDone();
   }
-  const ready = skillName.trim().length >= 3 && description.trim().length >= 10;
+  const toggle = (option: string) =>
+    setPicked((now) =>
+      now.includes(option)
+        ? now.filter((p) => p !== option)
+        : now.length >= MAX_FIRST_SKILLS
+          ? now
+          : [...now, option],
+    );
+  function addCustom() {
+    const value = custom.trim();
+    if (value.length < 3) return;
+    setOptions((all) => (all.includes(value) ? all : [value, ...all]));
+    setPicked((now) =>
+      now.includes(value) || now.length >= MAX_FIRST_SKILLS ? now : [...now, value],
+    );
+    setCustom("");
+  }
 
   return (
     <div className="flex flex-1 flex-col">
-      <div className="max-w-xl space-y-4 rounded-2xl bg-card p-5 ring-1 ring-accent/25">
-        {suggestion && (
-          <span className="label-mono inline-block rounded-full bg-accent-soft px-2.5 py-1 text-[9px] text-accent">
-            Suggested from your answers
-          </span>
-        )}
-        <label className="block text-sm">
-          <span className="text-muted">The task</span>
+      <div className="max-w-2xl space-y-4">
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Tasks to learn">
+          {options.map((option) => {
+            const on = picked.includes(option);
+            return (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={on}
+                onClick={() => toggle(option)}
+                className={`rounded-full px-3.5 py-1.5 text-sm ring-1 transition-colors ${
+                  on
+                    ? "bg-accent text-accent-ink ring-accent"
+                    : "bg-card ring-line hover:ring-accent/50"
+                }`}
+              >
+                {on ? "✓ " : ""}
+                {option}
+              </button>
+            );
+          })}
+        </div>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            addCustom();
+          }}
+          className="flex max-w-md gap-2"
+        >
           <input
-            value={skillName}
-            onChange={(e) => setSkillName(e.target.value)}
-            placeholder="For example: meeting notes into minutes"
+            value={custom}
+            onChange={(e) => setCustom(e.target.value)}
+            placeholder="Add your own, e.g. podcast show notes"
             maxLength={120}
-            aria-label="The task"
-            className={`${field} mt-1.5`}
+            aria-label="Add your own task"
+            className={field}
           />
-        </label>
-        <label className="block text-sm">
-          <span className="text-muted">What goes in, and what comes out?</span>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            rows={3}
-            maxLength={1000}
-            aria-label="What goes in, and what comes out"
-            placeholder="For example: rough notes from a client call in, a one-page proposal out."
-            className={`${field} mt-1.5`}
-          />
-        </label>
-      </div>
-      <p className="mt-6 text-sm text-muted">Or start with:</p>
-      <div className="mt-2 flex max-w-xl flex-wrap gap-2">
-        {skills.map((s) => (
-          <button
-            key={s.slug}
-            type="button"
-            disabled={saving}
-            onClick={() => void finish({ kind: "existing", slug: s.slug })}
-            className="rounded-full bg-card px-3.5 py-1.5 text-sm ring-1 ring-line hover:ring-accent/50"
-          >
-            {s.name}
+          <button type="submit" disabled={custom.trim().length < 3} className={quiet}>
+            Add
           </button>
-        ))}
+        </form>
+        <p className="text-xs text-muted">
+          {picked.length
+            ? `${picked.length} picked. We'll start with ${picked[0]}; the rest wait in your skills.`
+            : "Pick one or more."}
+        </p>
+      </div>
+      {skills.length > 0 && (
+        <>
+          <p className="mt-6 text-sm text-muted">Or carry on with one you have:</p>
+          <div className="mt-2 flex max-w-xl flex-wrap gap-2">
+            {skills.map((s) => (
+              <button
+                key={s.slug}
+                type="button"
+                disabled={saving}
+                onClick={() => void finish({ kind: "existing", slug: s.slug })}
+                className="rounded-full bg-card px-3.5 py-1.5 text-sm ring-1 ring-line hover:ring-accent/50"
+              >
+                {s.name}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      {error && <p className="mt-3 text-sm text-danger">{error}</p>}
+      <Footer back={back}>
         <button
           type="button"
           disabled={saving}
           onClick={() => void finish({ kind: "sample" })}
-          className="rounded-full bg-card px-3.5 py-1.5 text-sm ring-1 ring-line hover:ring-accent/50"
+          className={quiet}
         >
-          The meeting-minutes sample
+          Try the sample
         </button>
-      </div>
-      {error && <p className="mt-3 text-sm text-danger">{error}</p>}
-      <Footer back={back}>
         <button
           type="button"
           disabled={saving}
@@ -1143,13 +1187,20 @@ function FirstSkillStep({
         </button>
         <button
           type="button"
-          disabled={saving || !ready}
+          disabled={saving || picked.length === 0}
           onClick={() =>
-            void finish({ kind: "new", name: skillName.trim(), description: description.trim() })
+            void finish({
+              kind: "many",
+              skills: picked.map((p) => ({ name: p, description: describeSkill(p) })),
+            })
           }
           className={primary}
         >
-          {saving ? "Setting it up…" : "Learn this one"}
+          {saving
+            ? "Setting them up…"
+            : picked.length > 1
+              ? `Learn these ${picked.length}`
+              : "Learn this one"}
         </button>
       </Footer>
     </div>

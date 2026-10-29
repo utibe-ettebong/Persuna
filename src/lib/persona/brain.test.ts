@@ -466,3 +466,46 @@ describe("Work mode", () => {
     expect(quiet.step).toBeTruthy();
   });
 });
+
+describe("Work mode asking, explaining and matching skills", () => {
+  const scene = sceneSchema.parse({
+    screen: { w: 1440, h: 900 },
+    app: "Figma",
+    items: [{ role: "button", label: "Export", x: 10, y: 10, w: 80, h: 24 }],
+  });
+  const answering = (value: Record<string, unknown>): ModelClient => ({
+    async complete() {
+      return { text: JSON.stringify(value), model: "test", promptTokens: 0, completionTokens: 0 };
+    },
+  });
+  const look = (value: Record<string, unknown>, mayInterrupt = true) =>
+    personaWorkLook(answering(value), {
+      state: state({
+        skills: [{ slug: "design-briefs", name: "Design briefs", published: false }],
+      }),
+      scene,
+      image: null,
+      trail: [],
+      recentSteps: [],
+      mayInterrupt,
+    });
+
+  it("keeps a question and an explanation, pointing only when explaining", async () => {
+    const asked = await look({ mode: "ask", say: "Why export at 2x?", point: "e1", step: null });
+    expect(asked).toMatchObject({ mode: "ask", say: "Why export at 2x?", point: null });
+    const explained = await look({ mode: "explain", say: "That's the export menu.", point: "e1" });
+    expect(explained).toMatchObject({ mode: "explain", point: "e1" });
+  });
+
+  it("names only skills they have", async () => {
+    expect((await look({ mode: "follow", skill: "design-briefs", step: "x" })).skill).toBe(
+      "design-briefs",
+    );
+    expect((await look({ mode: "follow", skill: "made-up", step: "x" })).skill).toBeNull();
+  });
+
+  it("stays quiet right after speaking up, but still learns", async () => {
+    const quiet = await look({ mode: "ask", say: "Why?", step: "Exports at 2x" }, false);
+    expect(quiet).toMatchObject({ mode: "follow", say: null, step: "Exports at 2x" });
+  });
+});

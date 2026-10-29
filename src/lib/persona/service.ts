@@ -56,7 +56,13 @@ import {
   type Tone,
 } from "./tone";
 import { buildWrapUp } from "./wrapup";
-import { introFacts, type IntroAnswers } from "./onboarding";
+import {
+  MAX_FIRST_SKILLS,
+  describeSkill,
+  freeSlug,
+  introFacts,
+  type IntroAnswers,
+} from "./onboarding";
 import type { Flow, PersonaReply, PersonaState } from "./types";
 import { createLocator } from "@/lib/models/sam";
 import { samSpot, sceneIsThin, spotOf, wantsPicture, type Scene, type Spot } from "./scene";
@@ -791,11 +797,15 @@ export async function workLook(
     mayInterrupt: boolean;
   },
 ): Promise<{
-  mode: "quiet" | "follow" | "guide" | "lead";
+  mode: "quiet" | "follow" | "guide" | "lead" | "ask" | "explain";
   message: PersonaMessage | null;
   point: Spot | null;
   offer: string | null;
   noteId: string | null;
+  /** The work looks like another of their skills: offer to switch the focus to it. */
+  switchTo: { slug: string; name: string } | null;
+  /** Enough new steps to teach today's skill: offer to (the user decides). */
+  teachOffer: { noteId: string; skill: string; steps: number } | null;
 }> {
   const state = await stateFor(userId, input.clock);
   const title = `${WORK_NOTE}: ${input.clock.day}`;
@@ -814,7 +824,9 @@ export async function workLook(
 
   let noteId = note?.id ?? null;
   const step = seen.step ? redact(seen.step) : null;
+  let steps = recentSteps.length;
   if (step && !recentSteps.includes(step)) {
+    steps += 1;
     if (note) {
       await db()
         .update(personaNotes)
@@ -831,20 +843,33 @@ export async function workLook(
   }
 
   let message: PersonaMessage | null = null;
-  if (seen.say && (seen.mode === "guide" || seen.mode === "lead")) {
+  if (seen.say && seen.mode !== "quiet" && seen.mode !== "follow") {
     [message] = await db()
       .insert(personaMessages)
       .values({ userId, role: "assistant", kind: "observation", content: seen.say })
       .returning();
   }
+  const focusSlug = state.focusSkill?.slug ?? null;
+  const other =
+    seen.skill && seen.skill !== focusSlug ? state.skills.find((s) => s.slug === seen.skill) : null;
+  // Every few new steps, offer to teach them to today's skill.
+  const teachOffer =
+    noteId && state.focusSkill && step && steps > 0 && steps % TEACH_EVERY_STEPS === 0
+      ? { noteId, skill: state.focusSkill.name, steps }
+      : null;
   return {
     mode: seen.mode,
     message,
     point: seen.point ? spotOf(input.scene, seen.point) : null,
     offer: seen.offer ?? null,
     noteId,
+    switchTo: other ? { slug: other.slug, name: other.name } : null,
+    teachOffer,
   };
 }
+
+/** Work mode offers to teach what it learned to today's skill after this many new steps. */
+const TEACH_EVERY_STEPS = 5;
 
 /** Teaches the steps from a watched (or any) note to the focus skill. */
 export async function teachFromNote(
@@ -937,6 +962,8 @@ export type FirstTask =
   | { kind: "existing"; slug: string }
   | { kind: "sample" }
   | { kind: "new"; name: string; description: string }
+  /** Several at once (setup's list): new ones are created, the first becomes the focus. */
+  | { kind: "many"; skills: { name: string; description?: string }[] }
   | { kind: "skip" };
 
 /**
@@ -949,12 +976,42 @@ export async function completeSetup(
 ): Promise<{ href: string | null; message: PersonaMessage }> {
   await getProfile(userId);
   let skill: { id: string; slug: string; name: string } | null = null;
+  let manyNames: string[] = [];
   if (input.task.kind === "existing") {
     const slug = input.task.slug;
     skill = (await listSkills(userId)).find((s) => s.slug === slug) ?? null;
     if (!skill) throw new NotFoundError("That skill isn't yours");
   } else if (input.task.kind === "sample") {
     skill = await createSampleSkill(userId, input.actor);
+  } else if (input.task.kind === "many") {
+    const existing = await listSkills(userId);
+    const taken = new Set(existing.map((s) => s.slug));
+    const created: { id: string; slug: string; name: string }[] = [];
+    for (const want of input.task.skills.slice(0, MAX_FIRST_SKILLS)) {
+      const name = want.name.trim();
+      const already = existing.find((s) => s.name.toLowerCase() === name.toLowerCase());
+      if (already) {
+        created.push(already);
+        continue;
+      }
+      const slug = freeSlug(slugify(name), taken);
+      taken.add(slug);
+      created.push(
+        await createSkill(
+          {
+            slug,
+            name,
+            taskDescription: want.description?.trim() || describeSkill(name),
+            inputType: "text",
+            outputType: "text",
+          },
+          userId,
+          input.actor,
+        ),
+      );
+    }
+    skill = created[0] ?? null;
+    manyNames = created.map((s) => s.name);
   } else if (input.task.kind === "new") {
     const name = input.task.name.trim();
     skill = await createSkill(
@@ -981,9 +1038,12 @@ export async function completeSetup(
     .where(eq(personaProfiles.userId, userId));
   await ensureHandle(userId);
 
-  const content = skill
-    ? `Nice to meet you. I'm ${input.name}. First up: ${skill.name}. Say "teach me" and I'll ask how you do it, one question at a time. You can also add before-and-after examples on the skill's page.`
-    : `Nice to meet you. I'm ${input.name}. Tell me what you're working on whenever you're ready.`;
+  const content =
+    manyNames.length > 1
+      ? `Nice to meet you. I'm ${input.name}. I'll learn ${manyNames.length} skills with you: ${manyNames.join(", ")}. We'll start with ${skill!.name}. Say "teach me", or turn on Work mode and I'll learn while you work.`
+      : skill
+        ? `Nice to meet you. I'm ${input.name}. First up: ${skill.name}. Say "teach me" and I'll ask how you do it, one question at a time. You can also add before-and-after examples on the skill's page.`
+        : `Nice to meet you. I'm ${input.name}. Tell me what you're working on whenever you're ready.`;
   const [message] = await db()
     .insert(personaMessages)
     .values({ userId, role: "assistant", content, skillId: skill?.id ?? null })

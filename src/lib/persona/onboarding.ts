@@ -152,3 +152,59 @@ export function suggestedSkill(timeSink: string | undefined): string | null {
   const name = words.join(" ");
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
+
+/**
+ * Skills people often start with, to pick several from at setup. Each says
+ * what goes in and what comes out, so the new skill has a description.
+ */
+export const COMMON_SKILLS: { name: string; description: string }[] = [
+  {
+    name: "Meeting notes into minutes",
+    description: "Rough meeting notes in, clean minutes with decisions and actions out.",
+  },
+  { name: "Email replies", description: "An email I received in, a reply in my voice out." },
+  {
+    name: "Client proposals",
+    description: "Notes from a client call in, a one-page proposal out.",
+  },
+  {
+    name: "Social media posts",
+    description: "An idea or announcement in, posts for each channel out.",
+  },
+  {
+    name: "Graphic design briefs",
+    description: "A client's request in, a clear design brief with goals, audience and specs out.",
+  },
+  { name: "Blog posts", description: "An outline or notes in, a finished blog post out." },
+  {
+    name: "Reports from data",
+    description: "Figures and notes in, a short report with highlights out.",
+  },
+  {
+    name: "Customer support replies",
+    description: "A customer's message in, a helpful reply out.",
+  },
+  { name: "Job descriptions", description: "A role's needs in, a job description out." },
+  { name: "Product requirements", description: "A feature idea in, a requirements document out." },
+  {
+    name: "Invoices and quotes",
+    description: "The work done or asked for in, an invoice or quote out.",
+  },
+  { name: "SEO briefs", description: "A topic and keywords in, an SEO content brief out." },
+];
+
+/** Most skills to start with at once. */
+export const MAX_FIRST_SKILLS = 8;
+
+/** A description for a skill someone typed themselves. */
+export function describeSkill(name: string): string {
+  const known = COMMON_SKILLS.find((s) => s.name.toLowerCase() === name.trim().toLowerCase());
+  return known?.description ?? `${name.trim()}, done the way I do it.`;
+}
+
+/** A slug that isn't taken yet: "minutes", then "minutes-2"… */
+export function freeSlug(base: string, taken: Set<string>): string {
+  const root = base || "my-task";
+  if (!taken.has(root)) return root;
+  for (let n = 2; ; n++) if (!taken.has(`${root}-${n}`)) return `${root}-${n}`;
+}
