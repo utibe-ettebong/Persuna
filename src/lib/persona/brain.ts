@@ -10,7 +10,7 @@ import {
   personaObserveMessages,
   personaWorkMessages,
 } from "@/lib/skill/prompts";
-import { sceneForModel, spotOf, type Scene } from "./scene";
+import { entryAt, sceneForModel, spotOf, type Scene } from "./scene";
 import {
   personaObservation,
   personaReply,
@@ -160,8 +160,11 @@ export async function personaWorkLook(
     recentSteps: string[];
     /** False when Persona spoke up a moment ago: it may only follow quietly. */
     mayInterrupt: boolean;
+    /** Where the pointer is, and for how long it has stayed there (seconds). */
+    pointer?: { x: number; y: number; still: number } | null;
   },
 ): Promise<PersonaWork> {
+  const under = input.pointer ? entryAt(input.scene, input.pointer) : null;
   const { value } = await completeJson(
     client,
     input.image ? "listen" : "draft",
@@ -172,6 +175,12 @@ export async function personaWorkLook(
       trail: input.trail.slice(-6),
       recentSteps: input.recentSteps.slice(-6),
       mayInterrupt: input.mayInterrupt,
+      pointer: input.pointer
+        ? {
+            over: under ? `${under.id} ${under.kind} "${under.label.replace(/\s+/g, " ")}"` : null,
+            still: Math.round(input.pointer.still),
+          }
+        : null,
     }),
     personaWork,
     { maxTokens: 2048 },
@@ -182,6 +191,7 @@ export async function personaWorkLook(
   if (!input.mayInterrupt || value.mode === "quiet" || value.mode === "follow" || !value.say) {
     return {
       mode: value.mode === "quiet" ? "quiet" : "follow",
+      fit: value.fit ?? null,
       skill,
       say: null,
       point: null,
@@ -192,7 +202,9 @@ export async function personaWorkLook(
   return {
     ...value,
     skill,
-    point: value.mode === "guide" || value.mode === "explain" ? point : null,
+    fit: value.fit ?? null,
+    point:
+      value.mode === "guide" || value.mode === "explain" || value.mode === "correct" ? point : null,
     offer: value.mode === "lead" ? (value.offer ?? null) : null,
   };
 }

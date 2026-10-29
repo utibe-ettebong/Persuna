@@ -330,6 +330,14 @@ ipcMain.on("persona:focus", (event) => {
   if (!MAC) app.focus({ steal: true });
 });
 
+/**
+ * Work mode nudged you (a question, a correction): a light tap on a Mac's
+ * trackpad, felt while your finger is on it. Nothing on Windows.
+ */
+ipcMain.on("persona:nudge", (event) => {
+  if (fromOverlay(event) && MAC) void runEyes(["haptic"], 1500);
+});
+
 /** ⌃⌥C (Ctrl+Alt+C): circle something on screen to ask about it. */
 const CIRCLE_SHORTCUT = "Control+Alt+C";
 function registerCircleShortcut() {

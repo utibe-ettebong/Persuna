@@ -118,6 +118,31 @@ export function sceneWithin(
   };
 }
 
+/**
+ * The entry under the pointer: the smallest one containing it, else the
+ * nearest within a short reach. Null when the pointer is over nothing listed.
+ */
+export function entryAt(scene: Scene, point: { x: number; y: number }, reach = 40) {
+  const entries = sceneEntries(scene);
+  const inside = entries
+    .filter(
+      (e) =>
+        point.x >= e.box.x &&
+        point.x <= e.box.x + e.box.w &&
+        point.y >= e.box.y &&
+        point.y <= e.box.y + e.box.h,
+    )
+    .sort((a, b) => a.box.w * a.box.h - b.box.w * b.box.h);
+  if (inside[0]) return inside[0];
+  const gap = (e: (typeof entries)[number]) =>
+    Math.hypot(
+      Math.max(e.box.x - point.x, 0, point.x - (e.box.x + e.box.w)),
+      Math.max(e.box.y - point.y, 0, point.y - (e.box.y + e.box.h)),
+    );
+  const near = entries.map((e) => ({ e, d: gap(e) })).sort((a, b) => a.d - b.d)[0];
+  return near && near.d <= reach ? near.e : null;
+}
+
 /** Questions that need the picture itself, whatever the list says. */
 export function wantsPicture(text: string): boolean {
   return /\b(photo|picture|image|pic|colou?rs?|looks? like|design|logo|chart|graph|diagram|drawing|video|face|screenshot)\b/i.test(

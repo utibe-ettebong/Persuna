@@ -156,6 +156,7 @@ const workField = z.object({
   image: screenField,
   trail: z.array(z.string().max(300)).max(8).default([]),
   mayInterrupt: z.boolean(),
+  pointer: z.object({ x: z.number(), y: z.number(), still: z.number().min(0).max(3600) }).nullish(),
 });
 
 /** Work mode: one look at what you're doing, and whether Persona should step in. */
@@ -172,6 +173,7 @@ export async function personaWorkAction(
       image: look.image ?? null,
       trail: look.trail,
       mayInterrupt: look.mayInterrupt,
+      pointer: look.pointer ?? null,
     });
   });
 }

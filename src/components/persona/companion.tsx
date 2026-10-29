@@ -37,10 +37,11 @@ import { PersonaOrb, type OrbState } from "./orb";
 import { MAX_LOOKS, startWatching, watchesWithoutClick, type Watcher } from "./screen-watch";
 import { TaskComposer } from "./task-composer";
 import { MadeFileCard } from "./made-file";
+import { WorkDot, type DotTone } from "./work-dot";
 import { CircleLayer, CircledMark, DrawingLayer, cropPicture, type Area } from "./screen-drawing";
 import {
   WORK_EVERY_MS,
-  WORK_QUIET_MS,
+  mayInterrupt,
   extendTrail,
   sceneDigest,
   trailLine,
@@ -125,6 +126,7 @@ type DesktopWindow = Window & {
     askPermission?(kind: Permission): Promise<string>;
     focus?(): void;
     onCircle?(handler: () => void): void;
+    nudge?(): void;
     copy?(text: string): void;
     paste?(text: string): Promise<boolean>;
     saveFile?(file: { name: string; ext: string; data: string }): Promise<string | null>;
@@ -143,6 +145,8 @@ const CUT_IN = "Sorry to cut in. ";
 const noSubscribe = () => () => {};
 /** How long a highlight stays on screen. */
 const POINT_MS = 9000;
+/** Work mode looks again once the pointer has rested on one thing this long. */
+const LINGER_MS = 4000;
 
 /** Things Persona Desktop needs the Mac's permission for, asked for in the island. */
 type Permission = "mic" | "screen" | "keyboard";
@@ -277,6 +281,12 @@ export function Companion(props: CompanionProps) {
     steps: number;
   } | null>(null);
   const [drawPace, setDrawPace] = useState(1100);
+  // Work mode's dot: its colour, whether it's looking, and what it's saying.
+  const [dotTone, setDotTone] = useState<DotTone>("new");
+  const [dotLooking, setDotLooking] = useState(false);
+  const [dotBubble, setDotBubble] = useState<string | null>(null);
+  // When you last talked or typed to Persuna (moving the pointer doesn't count).
+  const lastTalked = useRef(0);
   const circledRef = useRef<Area | null>(null);
   // A file handed to Persuna, waiting for what to do with it.
   const [attached, setAttached] = useState<File | null>(null);
@@ -526,6 +536,7 @@ export function Companion(props: CompanionProps) {
     async (message: string, lead = "") => {
       const body = message.trim();
       if (!body || live.current.busy === "thinking") return;
+      lastTalked.current = Date.now();
       stopSpeaking();
       talkingNow.current = false;
       if (!setupRef.current.done) return setupReply(body);
@@ -676,6 +687,8 @@ export function Companion(props: CompanionProps) {
 
   function setWork(on: boolean) {
     setAskWork(false);
+    // Turning it on is an invitation: it may help straight away.
+    if (on) lastTalked.current = 0;
     setWorkMode(on);
     store("persona.workMode", on);
     if (!on) {
@@ -868,6 +881,7 @@ export function Companion(props: CompanionProps) {
 
   function holdStart() {
     if (holdRec.current) return;
+    lastTalked.current = Date.now();
     // No microphone yet: the island asks for it instead of recording silence.
     if (perms.current && perms.current.mic !== "granted") {
       setNeed("mic");
@@ -1030,32 +1044,58 @@ export function Companion(props: CompanionProps) {
     let last = "";
     let trail: string[] = [];
     let spokeAt = 0;
-    const tick = async () => {
+    let failures = 0;
+    let bubbleTimer = 0;
+    // Where the pointer is, and since when it has stayed there.
+    const pointer = { x: -1, y: -1, since: Date.now(), askedAbout: -1 };
+    const onMove = (e: MouseEvent) => {
+      if (Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) < 12) return;
+      pointer.x = e.clientX;
+      pointer.y = e.clientY;
+      pointer.since = Date.now();
+    };
+    window.addEventListener("mousemove", onMove, { passive: true });
+
+    const tick = async (lingering = false) => {
       // Not while you're talking to Persuna, or it's busy, speaking or you're circling.
       if (running || stopped || live.current.busy !== "idle" || talkingNow.current) return;
       if (holdRec.current || circledRef.current) return;
       running = true;
+      setDotLooking(true);
       try {
         const sight = await desktop.look!().catch(() => null);
-        if (!sight?.scene || stopped) return;
+        if (stopped) return;
+        if (!sight?.scene) return failed();
         const digest = sceneDigest(sight.scene);
-        if (digest === last) return;
+        // Nothing changed and the pointer isn't lingering: nothing to look at.
+        if (digest === last && !lingering) return;
         last = digest;
         const before = trail;
         trail = extendTrail(trail, trailLine(sight.scene));
-        const quietSince = Math.max(spokeAt, lastInput.current);
+        // Quiet for a while after it spoke up, or after you talked to it
+        // (moving the pointer doesn't count).
+        const now = Date.now();
         const res = await personaWorkAction(
           {
             scene: sight.scene,
             // The picture only when the list can't say enough (a canvas, a photo).
             image: sceneIsThin(sight.scene) ? sight.image : null,
             trail: before,
-            mayInterrupt: Date.now() - quietSince > WORK_QUIET_MS,
+            mayInterrupt: mayInterrupt(now, spokeAt, lastTalked.current),
+            pointer:
+              pointer.x >= 0
+                ? { x: pointer.x, y: pointer.y, still: (Date.now() - pointer.since) / 1000 }
+                : null,
           },
           clock(),
         );
-        if (!res.ok || stopped) return;
-        const { message, point, offer: next, switchTo, teachOffer: teach } = res.value;
+        if (stopped) return;
+        if (!res.ok) return failed(res.error);
+        failures = 0;
+        const { message, point, offer: next, switchTo, teachOffer: teach, mode, fit } = res.value;
+        setDotTone(
+          mode === "explain" ? "explain" : mode === "correct" ? "off" : (fit ?? "on_track"),
+        );
         if (teach) setTeachOffer(teach);
         if (switchTo && !offFocusAsked.current) {
           // Once per session: the work looks like another of their skills.
@@ -1076,20 +1116,60 @@ export function Companion(props: CompanionProps) {
         if (message) {
           spokeAt = Date.now();
           setMessages((all) => [...all, { ...message, role: "assistant" }]);
+          // Right where you are: beside the dot, with a tap on the trackpad,
+          // a soft chime, and said out loud.
+          window.clearTimeout(bubbleTimer);
+          setDotBubble(message.content);
+          bubbleTimer = window.setTimeout(
+            () => setDotBubble(null),
+            Math.min(20_000, 5000 + message.content.length * 70),
+          );
+          desktop.nudge?.();
+          chime(true);
           express(message.content);
         }
         if (point) showPoint(point);
         if (next) setOffer(next);
       } finally {
         running = false;
+        if (!stopped) setDotLooking(false);
       }
     };
+
+    /** Three looks in a row that couldn't see the screen: say why, once. */
+    function failed(reason?: string) {
+      failures += 1;
+      if (failures !== 3) return;
+      void checkPerms().then((now) => {
+        if (now && now.screen !== "granted") setNeed("screen");
+        else
+          setError(
+            reason ??
+              "Work mode can't read your screen right now. I'll keep trying; check Screen Recording for Persuna in System Settings.",
+          );
+      });
+    }
+
     const timer = window.setInterval(() => void tick(), WORK_EVERY_MS);
+    // A pointer resting on one thing for a few seconds is a good moment to help.
+    const linger = window.setInterval(() => {
+      const still = Date.now() - pointer.since;
+      if (pointer.x >= 0 && still >= LINGER_MS && pointer.askedAbout !== pointer.since) {
+        pointer.askedAbout = pointer.since;
+        void tick(true);
+      }
+    }, 1000);
+    void tick(true);
     return () => {
       stopped = true;
       window.clearInterval(timer);
+      window.clearInterval(linger);
+      window.clearTimeout(bubbleTimer);
+      window.removeEventListener("mousemove", onMove);
+      setDotLooking(false);
+      setDotBubble(null);
     };
-    // express, showPoint and the refs read live state.
+    // express, showPoint, checkPerms and the refs read live state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workMode, setupDone, props.overlay]);
 
@@ -2021,6 +2101,14 @@ export function Companion(props: CompanionProps) {
           />
         )}
         {circled && !circling && <CircledMark path={circled.path} />}
+        {workMode && setupDone && desktop?.look && (
+          <WorkDot
+            tone={dotTone}
+            looking={dotLooking}
+            bubble={dotBubble}
+            hint={holdLabel ? `Hold ${holdLabel} to answer` : null}
+          />
+        )}
 
         {/* The island: on the notch (or hanging from the top centre), solid black.
             Click it for Persuna, right-click for more, drop a file on it. */}

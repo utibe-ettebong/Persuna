@@ -799,9 +799,12 @@ export async function workLook(
     image: string | null;
     trail: string[];
     mayInterrupt: boolean;
+    pointer?: { x: number; y: number; still: number } | null;
   },
 ): Promise<{
-  mode: "quiet" | "follow" | "guide" | "lead" | "ask" | "explain";
+  mode: "quiet" | "follow" | "guide" | "lead" | "ask" | "explain" | "correct";
+  /** How the work compares with their usual way: the colour of the dot. */
+  fit: "on_track" | "unsure" | "off" | null;
   message: PersonaMessage | null;
   point: Spot | null;
   offer: string | null;
@@ -824,6 +827,7 @@ export async function workLook(
     trail: input.trail,
     recentSteps,
     mayInterrupt: input.mayInterrupt,
+    pointer: input.pointer ?? null,
   });
 
   let noteId = note?.id ?? null;
@@ -863,6 +867,7 @@ export async function workLook(
       : null;
   return {
     mode: seen.mode,
+    fit: seen.fit ?? null,
     message,
     point: seen.point ? spotOf(input.scene, seen.point) : null,
     offer: seen.offer ?? null,

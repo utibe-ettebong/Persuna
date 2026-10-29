@@ -537,9 +537,25 @@ function mockWork(user: string, system: string) {
   const trail = (blocks(user, "work_trail")[0] ?? "").split("\n");
   const search = screen.split("\n").find((l) => /^e\d+ search /.test(l));
   const interrupt = !system.includes("don't interrupt again now");
+  // Hovering still on one thing for a while reads as hesitation: ask about it.
+  const pointer = blocks(user, "work_pointer")[0] ?? "";
+  const still = Number(/Still for (\d+) s/.exec(pointer)?.[1] ?? 0);
+  const over = /Over: ([et]\d+) /.exec(pointer)?.[1] ?? null;
+  if (interrupt && still >= 4 && over) {
+    return {
+      mode: "ask",
+      fit: "unsure",
+      skill: null,
+      say: "Not sure about this one? Tell me what you're after and I'll help.",
+      point: over,
+      offer: null,
+      step: null,
+    };
+  }
   if (interrupt && search && trail.length >= 2) {
     return {
       mode: "guide",
+      fit: "unsure",
       skill: null,
       say: "Looking for something? Try the search here with fewer words.",
       point: search.split(" ")[0],
@@ -551,6 +567,7 @@ function mockWork(user: string, system: string) {
   const seen = recent.startsWith("(none") ? 0 : recent.split("\n").length;
   return {
     mode: "follow",
+    fit: "on_track",
     skill: null,
     say: null,
     point: null,

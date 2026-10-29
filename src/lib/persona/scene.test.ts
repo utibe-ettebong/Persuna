@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  entryAt,
   parseSamBox,
   samSpot,
   sceneEntries,
@@ -75,5 +76,22 @@ describe("SAM 3.1 boxes", () => {
     expect(samSpot(box!, scene, "Reply")).toEqual({ x: 90, y: 450, w: 180, h: 56, label: "Reply" });
     expect(parseSamBox("")).toBeNull();
     expect(parseSamBox("<|box;x1=5;y1=5;x2=1;y2=9;w=10;h=10|>")).toBeNull();
+  });
+});
+
+describe("entryAt", () => {
+  const scene = sceneSchema.parse({
+    screen: { w: 1440, h: 900 },
+    items: [
+      { role: "row", label: "Inbox row", x: 0, y: 100, w: 800, h: 40 },
+      { role: "button", label: "Reply", x: 700, y: 105, w: 60, h: 30 },
+    ],
+  });
+
+  it("finds the smallest thing under the pointer, or the nearest close by", () => {
+    expect(entryAt(scene, { x: 720, y: 120 })?.label).toBe("Reply");
+    expect(entryAt(scene, { x: 100, y: 120 })?.label).toBe("Inbox row");
+    expect(entryAt(scene, { x: 100, y: 160 })?.label).toBe("Inbox row");
+    expect(entryAt(scene, { x: 100, y: 600 })).toBeNull();
   });
 });
