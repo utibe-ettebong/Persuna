@@ -40,6 +40,14 @@ const bridge = {
   focus: () => ipcRenderer.send("persuna:focus"),
   // A light tap on the trackpad when Work mode nudges you.
   nudge: () => ipcRenderer.send("persuna:nudge"),
+  // Updates: { status: "idle" | "checking" | "downloading" | "ready" | "manual" |
+  // "error", version?, progress? }, now and as it changes; and restart into it.
+  updateState: () => ipcRenderer.invoke("persuna:update-state"),
+  onUpdate: (handler) => {
+    ipcRenderer.removeAllListeners("persuna:update");
+    ipcRenderer.on("persuna:update", (_event, state) => handler(state));
+  },
+  installUpdate: () => ipcRenderer.send("persuna:install-update"),
   // ⌃⌥C: circle something to ask about it.
   onCircle: (handler) => {
     ipcRenderer.removeAllListeners("persuna:circle");

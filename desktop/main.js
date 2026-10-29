@@ -335,6 +335,14 @@ ipcMain.on("persuna:focus", (event) => {
  * Work mode nudged you (a question, a correction): a light tap on a Mac's
  * trackpad, felt while your finger is on it. Nothing on Windows.
  */
+// Updates, shown in the island: where it stands now, and "Restart" from there.
+ipcMain.handle("persuna:update-state", (event) =>
+  fromOverlay(event) ? (updater?.state ?? null) : null,
+);
+ipcMain.on("persuna:install-update", (event) => {
+  if (fromOverlay(event)) updater?.installNow();
+});
+
 ipcMain.on("persuna:nudge", (event) => {
   if (fromOverlay(event) && MAC) void runEyes(["haptic"], 1500);
 });
@@ -1019,6 +1027,8 @@ function updateMenu() {
 
 function onUpdate(state) {
   rebuildTray();
+  // The island shows it too: a progress line while it downloads, then Restart.
+  overlay?.webContents.send("persuna:update", state);
   // An end-to-end update test (see updater.js) restarts as soon as it's ready.
   if (state.status === "ready" && process.env.PERSUNA_UPDATES_FROM) updater.installNow();
   if (state.status !== "ready" && state.status !== "manual") return;
