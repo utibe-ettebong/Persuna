@@ -222,6 +222,31 @@ textarea.outline-none:focus-visible {
     color-mix(in oklab, var(--background) 88%, transparent);
 }
 /* Electron: drag the window by Persona; controls stay clickable. */
+/*
+ * Persona Desktop's island and everything that grows out of it: solid black,
+ * like the notch, whatever the system theme. Cards inside (tasks, examples,
+ * jobs) use the same tokens, so they turn black too.
+ */
+.island-ink {
+  --background: #000000;
+  --card: #000000;
+  --foreground: #f4f1f6;
+  --muted: #a59cab;
+  --faint: #6f6675;
+  --line: #1f1c22;
+  --line-strong: #34303a;
+  --subtle: #111013;
+  --ink: #ffffff;
+  --ink-foreground: #000000;
+  --accent: #b794ff;
+  --accent-soft: #1d1529;
+  --accent-ink: #000000;
+  --danger: #ff8f87;
+  --good: #5cc98f;
+  --warn: #e0a83a;
+  color: var(--foreground);
+}
+
 .persona-drag {
   -webkit-app-region: drag;
 }
@@ -238,6 +263,19 @@ textarea.outline-none:focus-visible {
   }
   .persona-dot {
     animation: persona-dot 1s ease-in-out infinite;
+  }
+  /* Persuna's drawings draw themselves in. */
+  .persona-draw-line {
+    stroke-dasharray: 1200;
+    animation: persona-draw 1.2s ease-out both;
+  }
+  @keyframes persona-draw {
+    from {
+      stroke-dashoffset: 1200;
+    }
+    to {
+      stroke-dashoffset: 0;
+    }
   }
   @keyframes persona-float {
     0%,

@@ -6,6 +6,28 @@ const interviewKey = z.enum(
   INTERVIEW_QUESTIONS.map((q) => q.key) as [InterviewKey, ...InterviewKey[]],
 );
 
+/** A small diagram: boxes and the arrows between them. */
+export const flowSchema = z.object({
+  direction: z.enum(["down", "right"]).default("down"),
+  nodes: z
+    .array(
+      z.object({ id: z.string().trim().min(1).max(20), label: z.string().trim().min(1).max(60) }),
+    )
+    .min(1)
+    .max(14),
+  edges: z
+    .array(
+      z.object({
+        from: z.string().trim().max(20),
+        to: z.string().trim().max(20),
+        label: z.string().trim().max(40).nullish(),
+      }),
+    )
+    .max(24)
+    .default([]),
+});
+export type Flow = z.infer<typeof flowSchema>;
+
 /** Something Persona does besides talking. The service applies each one. */
 export const personaAction = z.discriminatedUnion("type", [
   z.object({ type: z.literal("remember"), fact: z.string().trim().min(1).max(240) }),
@@ -52,6 +74,37 @@ export const personaAction = z.discriminatedUnion("type", [
   }),
   /** The list wasn't enough: answer again with the picture itself. */
   z.object({ type: z.literal("look_closer") }),
+  /**
+   * Copy text for the user, or paste it where their cursor is (in Persona
+   * Desktop; elsewhere it's copied and they paste it).
+   */
+  z.object({
+    type: z.literal("clipboard"),
+    op: z.enum(["copy", "paste"]),
+    text: z.string().min(1).max(8000),
+  }),
+  /**
+   * Draw over the screen: numbered notes on things in the list of what's on
+   * screen (a walkthrough), and/or a small diagram of a flow or process.
+   */
+  z.object({
+    type: z.literal("draw"),
+    title: z.string().trim().max(80).nullish(),
+    marks: z
+      .array(z.object({ item: z.string().trim().max(10), note: z.string().trim().min(1).max(120) }))
+      .max(8)
+      .nullish(),
+    flow: flowSchema.nullish(),
+  }),
+  /** Make a file the user can preview, copy and save: a document, a table or a diagram. */
+  z.object({
+    type: z.literal("make_file"),
+    kind: z.enum(["document", "table", "flow"]),
+    title: z.string().trim().min(1).max(100),
+    /** Markdown for a document, CSV for a table; a short caption for a flow. */
+    body: z.string().max(20_000).default(""),
+    flow: flowSchema.nullish(),
+  }),
   /** The user wants to see a page: Persona takes them there. */
   z.object({
     type: z.literal("open_page"),
@@ -113,6 +166,24 @@ export const personaObservation = z.object({
   offFocus: z.string().trim().max(200).nullish(),
 });
 export type PersonaObservation = z.infer<typeof personaObservation>;
+
+/**
+ * Work mode: one look at what the user is doing, and whether to step in.
+ * "follow" learns a step quietly; "guide" helps when they seem stuck or are
+ * searching; "lead" offers to do the next bit for them; "quiet" does nothing.
+ */
+export const personaWork = z.object({
+  mode: z.enum(["quiet", "follow", "guide", "lead"]),
+  /** What to say when guiding or leading (short, in their tone); else null. */
+  say: z.string().trim().max(300).nullish(),
+  /** When guiding: the entry to point at (e12, t3), or null. */
+  point: z.string().trim().max(10).nullish(),
+  /** When leading: what Persuna would do, as the user would ask for it ("Draft a reply to Sam"). */
+  offer: z.string().trim().max(200).nullish(),
+  /** One method step seen (follow, or alongside the others), or null. */
+  step: z.string().trim().max(300).nullish(),
+});
+export type PersonaWork = z.infer<typeof personaWork>;
 
 /** What Persona knows going into a turn. Built by the service, read by the prompt. */
 export interface PersonaState {

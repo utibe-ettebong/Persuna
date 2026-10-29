@@ -22,6 +22,7 @@ const {
   app,
   BrowserWindow,
   Menu,
+  clipboard,
   Tray,
   desktopCapturer,
   dialog,
@@ -72,6 +73,12 @@ const DEFAULT_HOLD = "right-option";
 let overlay = null;
 let setup = null;
 let tray = null;
+/**
+ * How high Persuna's layer sits: above apps and the menu bar. On a Mac the
+ * layer is also a panel, which macOS lets float over full-screen apps.
+ */
+const ISLAND_LEVEL = MAC ? "status" : "screen-saver";
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /* ---------- Settings (a small JSON file in the app's data folder) ---------- */
 
@@ -130,6 +137,9 @@ function createOverlay() {
     // Lets a frameless window cover the menu bar (macOS keeps others below it).
     enableLargerThanScreen: true,
     title: "Persuna",
+    // A panel floats over full-screen apps, and takes typing without pulling
+    // you out of the app (or full-screen space) you're in.
+    ...(MAC ? { type: "panel" } : {}),
     transparent: true,
     frame: false,
     hasShadow: false,
@@ -153,8 +163,13 @@ function createOverlay() {
   });
   // Above your apps and the menu bar, on every desktop and over full-screen
   // apps. macOS's own prompts still come first (see stepAside).
-  overlay.setAlwaysOnTop(true, MAC ? "status" : "screen-saver");
-  overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  overlay.setAlwaysOnTop(true, ISLAND_LEVEL);
+  overlay.setVisibleOnAllWorkspaces(true, {
+    visibleOnFullScreen: true,
+    // A panel joins full-screen spaces by itself; switching the app to an
+    // accessory and back (Electron's other way) makes the Dock icon flicker.
+    skipTransformProcessType: MAC,
+  });
   // Clicks go through to the apps underneath until the pointer is over Persona.
   overlay.setIgnoreMouseEvents(true, { forward: true });
   // Persuna shows in your screenshots and recordings; it hides itself only
@@ -270,6 +285,81 @@ ipcMain.on("persona:watching", (event, on) => {
 });
 ipcMain.handle("persona:island", () => islandShape());
 
+/* ---------- Copying, pasting and saving for you ---------- */
+
+const fromOverlay = (event) => Boolean(overlay) && event.sender === overlay.webContents;
+const MAX_CLIP = 20_000;
+
+ipcMain.on("persona:copy", (event, text) => {
+  if (fromOverlay(event) && typeof text === "string") clipboard.writeText(text.slice(0, MAX_CLIP));
+});
+
+/**
+ * Puts text where your cursor is, in whatever app you're in: it goes on the
+ * clipboard, Persuna hands the keyboard back to that app, then presses
+ * ⌘V (Ctrl+V). Pressing keys needs the same permission as the talk key
+ * (Accessibility); without it the text is only copied. Returns whether it pasted.
+ */
+ipcMain.handle("persona:paste", async (event, text) => {
+  if (!fromOverlay(event) || typeof text !== "string") return false;
+  clipboard.writeText(text.slice(0, MAX_CLIP));
+  if (!keyListener) return false;
+  if (overlay.isFocused()) {
+    // Hiding the layer for a moment gives the keyboard back to your app.
+    overlay.hide();
+    await delay(140);
+    overlay.showInactive();
+    await delay(60);
+  }
+  const { UiohookKey } = require("uiohook-napi");
+  keyListener.keyTap(UiohookKey.V, [MAC ? UiohookKey.Meta : UiohookKey.Ctrl]);
+  return true;
+});
+
+/** A free name in Downloads: "Plan.pdf", then "Plan (2).pdf"… */
+function downloadPath(name, ext) {
+  const base =
+    String(name || "Persuna")
+      .replace(/[\\/:*?"<>|\x00-\x1f]+/g, " ")
+      .trim()
+      .slice(0, 80) || "Persuna";
+  const dir = app.getPath("downloads");
+  for (let n = 1; ; n++) {
+    const file = path.join(dir, `${base}${n > 1 ? ` (${n})` : ""}.${ext}`);
+    if (!fs.existsSync(file)) return file;
+  }
+}
+const SAVE_TYPES = new Set(["md", "txt", "csv", "svg", "png"]);
+
+/** Saves a file Persuna made (a note, a table, a diagram) to Downloads and shows it. */
+ipcMain.handle("persona:save-file", (event, file) => {
+  if (!fromOverlay(event) || !file || !SAVE_TYPES.has(file.ext)) return null;
+  const target = downloadPath(file.name, file.ext);
+  const data = file.ext === "png" ? Buffer.from(String(file.data), "base64") : String(file.data);
+  fs.writeFileSync(target, data);
+  shell.showItemInFolder(target);
+  return path.basename(target);
+});
+
+/** Prints a document Persuna made to a PDF in Downloads (no scripts run while printing). */
+ipcMain.handle("persona:save-pdf", async (event, doc) => {
+  if (!fromOverlay(event) || typeof doc?.html !== "string") return null;
+  const printer = new BrowserWindow({
+    show: false,
+    webPreferences: { javascript: false, sandbox: true, contextIsolation: true },
+  });
+  try {
+    await printer.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(doc.html)}`);
+    const pdf = await printer.webContents.printToPDF({ printBackground: true, pageSize: "A4" });
+    const target = downloadPath(doc.name, "pdf");
+    fs.writeFileSync(target, pdf);
+    shell.showItemInFolder(target);
+    return path.basename(target);
+  } finally {
+    printer.destroy();
+  }
+});
+
 let watching = false;
 function setWatching(on) {
   watching = on;
@@ -317,7 +407,7 @@ function runEyes(args, timeout = 2500) {
 /** The front app's elements, in points from the top-left of the main display. */
 async function readElements(display) {
   const tree = await runEyes(MAC ? ["ax", String(process.pid)] : ["-SkipPid", String(process.pid)]);
-  if (!tree) return { app: "", window: "", items: [] };
+  if (!tree) return { app: "", window: "", selection: "", items: [] };
   const toLocal = (r) => {
     // Windows reports physical pixels; Electron works in scaled points.
     const dip = MAC ? r : screen.screenToDipRect(null, r);
@@ -331,6 +421,7 @@ async function readElements(display) {
   return {
     app: tree.app ?? "",
     window: tree.window ?? "",
+    selection: tree.selection ?? "",
     items: (tree.items ?? []).map((i) =>
       Object.assign(
         { role: i.role, label: i.label },
@@ -583,10 +674,11 @@ function onHoldKey(phase) {
     rebuildTray();
   }
   if (phase === "type") {
-    // Typing needs the keyboard: bring Persuna forward.
+    // Typing needs the keyboard. On a Mac the panel takes it without
+    // activating Persuna, so a full-screen app stays where it is.
     overlay.show();
     overlay.focus();
-    app.focus({ steal: true });
+    if (!MAC) app.focus({ steal: true });
   }
   overlay.webContents.send("persona:hold", phase);
 }
@@ -603,7 +695,7 @@ const SCREEN_SETTINGS = MAC
 function stepAside(aside) {
   if (!overlay) return;
   if (aside) overlay.setAlwaysOnTop(false);
-  else overlay.setAlwaysOnTop(true, "floating");
+  else overlay.setAlwaysOnTop(true, ISLAND_LEVEL);
 }
 
 /** Bring a dialog to the front: Persuna lives in the menu bar, so it isn't the active app. */

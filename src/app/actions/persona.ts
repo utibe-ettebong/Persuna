@@ -37,6 +37,7 @@ import {
   deleteNote,
   forgetFact,
   observe,
+  workLook,
   teachFromNote,
   updateProfile,
 } from "@/lib/persona/service";
@@ -82,11 +83,19 @@ const screenField = z
 
 /** What Persona may see with a message (Persona Desktop): a screenshot and the list of the screen. */
 const sightField = z
-  .object({ image: screenField, scene: sceneSchema.nullish() })
+  .object({ image: screenField, scene: sceneSchema.nullish(), circled: z.boolean().optional() })
   .nullish()
   .transform((s) =>
-    s && (s.image || s.scene) ? { image: s.image ?? null, scene: s.scene ?? null } : null,
+    s && (s.image || s.scene)
+      ? { image: s.image ?? null, scene: s.scene ?? null, circled: Boolean(s.circled) }
+      : null,
   );
+
+/** Pictures handed to Persona are looked at as they are; other files are read into text. */
+const PICTURE_FILE = /\.(png|jpe?g|webp|gif)$/i;
+const MAX_PICTURE_BYTES = 8 * 1024 * 1024;
+/** Enough of a long document for one turn. */
+const MAX_FILE_CHARS = 24_000;
 
 export async function personaChatAction(
   text: string,
@@ -101,6 +110,67 @@ export async function personaChatAction(
       clock: clockField.parse(clock),
       actor: actorOf(user),
       sight: sightField.parse(sight),
+    });
+  });
+}
+
+/**
+ * A message with a file (a picture, PDF, Word document or text file) dropped
+ * on Persona or chosen in its panel. The file is read for this turn only; just
+ * its name is kept in the conversation.
+ */
+export async function personaFileAction(form: FormData, clock: z.input<typeof clockField>) {
+  return run(async () => {
+    const user = await requireUser();
+    const upload = form.get("file");
+    if (!(upload instanceof File) || upload.size === 0) throw new Error("Choose a file first");
+    const said = z
+      .string()
+      .trim()
+      .max(4000)
+      .parse(form.get("text") ?? "");
+    const client = createModelClient(user);
+    let file: { name: string; text: string | null; image: string | null };
+    if (PICTURE_FILE.test(upload.name)) {
+      if (upload.size > MAX_PICTURE_BYTES) throw new Error(`${upload.name} is larger than 8 MB`);
+      const type = upload.type && upload.type.startsWith("image/") ? upload.type : "image/png";
+      const data = Buffer.from(await upload.arrayBuffer()).toString("base64");
+      file = { name: upload.name, text: null, image: `data:${type};base64,${data}` };
+    } else {
+      const text = await readTaskInput(upload, client, createFileStore());
+      if (!text) throw new Error(`Nothing readable in ${upload.name}`);
+      file = { name: upload.name, text: text.slice(0, MAX_FILE_CHARS), image: null };
+    }
+    return chat(client, user.id, {
+      text: said || `Here's ${upload.name}. What's in it?`,
+      clock: clockField.parse(clock),
+      actor: actorOf(user),
+      file,
+    });
+  });
+}
+
+const workField = z.object({
+  scene: sceneSchema,
+  image: screenField,
+  trail: z.array(z.string().max(300)).max(8).default([]),
+  mayInterrupt: z.boolean(),
+});
+
+/** Work mode: one look at what you're doing, and whether Persona should step in. */
+export async function personaWorkAction(
+  input: z.input<typeof workField>,
+  clock: z.input<typeof clockField>,
+) {
+  return run(async () => {
+    const user = await requireUser();
+    const look = workField.parse(input);
+    return workLook(createModelClient(user), user.id, {
+      clock: clockField.parse(clock),
+      scene: look.scene,
+      image: look.image ?? null,
+      trail: look.trail,
+      mayInterrupt: look.mayInterrupt,
     });
   });
 }
@@ -257,6 +327,7 @@ export async function personaVoiceAction(form: FormData, clock: z.input<typeof c
       sight: sightField.parse({
         image: typeof image === "string" ? image : null,
         scene: typeof scene === "string" ? JSON.parse(scene) : null,
+        circled: form.get("circled") === "1",
       }),
     });
   });

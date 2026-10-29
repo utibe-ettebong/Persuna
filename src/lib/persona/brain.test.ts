@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ModelClient } from "@/lib/models/gateway";
 import { sceneSchema } from "./scene";
 import { createMockClient } from "@/lib/models/mock";
-import { personaObserve, personaTurn, tidyReply } from "./brain";
+import { personaObserve, personaTurn, personaWorkLook, tidyReply } from "./brain";
 import type { PersonaState } from "./types";
 
 const state = (over: Partial<PersonaState> = {}): PersonaState => ({
@@ -340,5 +340,129 @@ describe("pointing at the screen", () => {
     expect(tidyReply(reply, state(), { scene, image: "data:," }).actions).toEqual([
       { type: "point", item: null, thing: "red icon" },
     ]);
+  });
+});
+
+describe("drawing, files and the clipboard", () => {
+  const scene = sceneSchema.parse({
+    screen: { w: 1440, h: 900 },
+    app: "Mail",
+    selection: "ada@example.com",
+    items: [
+      { role: "button", label: "Reply", x: 100, y: 80, w: 60, h: 24 },
+      { role: "search", label: "invoices", x: 300, y: 20, w: 200, h: 24 },
+    ],
+  });
+
+  it("keeps notes only on things on screen, and drops a drawing left with nothing", () => {
+    const draw = (marks: { item: string; note: string }[], flow = null) => ({
+      reply: "Here.",
+      actions: [{ type: "draw" as const, title: null, marks, flow }],
+    });
+    const kept = tidyReply(
+      draw([
+        { item: "e1", note: "1. Reply" },
+        { item: "e9", note: "2. Gone" },
+      ]),
+      state(),
+      {
+        scene,
+        image: null,
+      },
+    );
+    expect(kept.actions).toEqual([
+      { type: "draw", title: null, marks: [{ item: "e1", note: "1. Reply" }], flow: null },
+    ]);
+    expect(tidyReply(draw([{ item: "e9", note: "Gone" }]), state(), null).actions).toEqual([]);
+  });
+
+  it("drops empty files and diagrams without boxes", () => {
+    const reply = {
+      reply: "Made.",
+      actions: [
+        {
+          type: "make_file" as const,
+          kind: "document" as const,
+          title: "Plan",
+          body: " ",
+          flow: null,
+        },
+        { type: "make_file" as const, kind: "flow" as const, title: "Flow", body: "", flow: null },
+        {
+          type: "make_file" as const,
+          kind: "table" as const,
+          title: "T",
+          body: "a,b\n1,2",
+          flow: null,
+        },
+      ],
+    };
+    expect(tidyReply(reply, state()).actions.map((a) => a.type === "make_file" && a.kind)).toEqual([
+      "table",
+    ]);
+  });
+
+  it("copies what's selected, and makes files and drawings, with the offline mock", async () => {
+    const client = createMockClient();
+    const copied = await personaTurn(client, state(), [], "copy this", { scene, image: null });
+    expect(copied.actions).toEqual([{ type: "clipboard", op: "copy", text: "ada@example.com" }]);
+    const drawn = await personaTurn(client, state(), [], "Draw how it works", {
+      scene,
+      image: null,
+    });
+    expect(drawn.actions[0]).toMatchObject({
+      type: "draw",
+      marks: [{ item: "e1" }, { item: "e2" }],
+    });
+    const doc = await personaTurn(client, state(), [], "Make me a document for the plan");
+    expect(doc.actions[0]).toMatchObject({ type: "make_file", kind: "document", title: "Plan" });
+  });
+
+  it("reads a file handed over with the message", async () => {
+    const calls: string[] = [];
+    const mock = createMockClient();
+    const client: ModelClient = {
+      ...mock,
+      complete: async (role, messages, options) => {
+        calls.push(JSON.stringify(messages));
+        return mock.complete(role, messages, options);
+      },
+    };
+    await personaTurn(client, state(), [], "Summarise it", null, {
+      name: "notes.txt",
+      text: "Agenda: budget",
+      image: null,
+    });
+    expect(calls[0]).toContain("<persona_file>");
+    expect(calls[0]).toContain("Agenda: budget");
+  });
+});
+
+describe("Work mode", () => {
+  const scene = sceneSchema.parse({
+    screen: { w: 1440, h: 900 },
+    app: "Safari",
+    window: "Search",
+    items: [{ role: "search", label: "export pdf", x: 300, y: 20, w: 200, h: 24 }],
+  });
+  const look = (mayInterrupt: boolean, trail = ["Safari — Search", "Safari — Results"]) =>
+    personaWorkLook(createMockClient(), {
+      state: state(),
+      scene,
+      image: null,
+      trail,
+      recentSteps: [],
+      mayInterrupt,
+    });
+
+  it("guides someone who keeps searching, pointing at the search box", async () => {
+    expect(await look(true)).toMatchObject({ mode: "guide", point: "e1" });
+  });
+
+  it("only follows quietly right after speaking up", async () => {
+    const quiet = await look(false);
+    expect(quiet.mode).toBe("follow");
+    expect(quiet.say).toBeNull();
+    expect(quiet.step).toBeTruthy();
   });
 });

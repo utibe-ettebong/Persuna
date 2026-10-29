@@ -32,6 +32,12 @@ contextBridge.exposeInMainWorld("personaDesktop", {
     ipcRenderer.removeAllListeners("persona:island");
     ipcRenderer.on("persona:island", (_event, shape) => handler(shape));
   },
+  // Copying and pasting for you: paste resolves true once it pressed ⌘V in your app.
+  copy: (text) => ipcRenderer.send("persona:copy", String(text)),
+  paste: (text) => ipcRenderer.invoke("persona:paste", String(text)),
+  // Files Persuna made, saved to Downloads: their file name, or null.
+  saveFile: (file) => ipcRenderer.invoke("persona:save-file", file),
+  savePdf: (doc) => ipcRenderer.invoke("persona:save-pdf", doc),
   onHoldKey: (handler) => {
     ipcRenderer.removeAllListeners("persona:hold-key");
     ipcRenderer.on("persona:hold-key", (_event, label) => handler(label));

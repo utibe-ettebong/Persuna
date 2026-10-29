@@ -2,7 +2,8 @@
 //
 //   persuna-eyes ax <skip-pid>   The app in front (skipping Persuna's own pid):
 //                                its buttons, fields, links and text, with
-//                                exact frames, from the accessibility tree.
+//                                exact frames, from the accessibility tree,
+//                                and the text you've selected in it.
 //   persuna-eyes ocr <image>     The text in a screenshot, with boxes, from
 //                                Apple's on-device text recognition.
 //
@@ -73,6 +74,16 @@ struct Tree: Encodable {
   let app: String
   let window: String
   let items: [Item]
+  var selection = ""
+}
+
+/// The text selected in the app's focused field or page ("" when none, or it's a password field).
+func selectedText(_ app: AXUIElement) -> String {
+  guard let focused = attr(app, kAXFocusedUIElementAttribute),
+        CFGetTypeID(focused) == AXUIElementGetTypeID(),
+        (text(focused as! AXUIElement, kAXSubroleAttribute) ?? "") != "AXSecureTextField",
+        let s = attr(focused as! AXUIElement, kAXSelectedTextAttribute) as? String else { return "" }
+  return String(s.trimmingCharacters(in: .whitespacesAndNewlines).prefix(4000))
 }
 
 func readTree(skip: pid_t) -> Tree {
@@ -108,7 +119,8 @@ func readTree(skip: pid_t) -> Tree {
     }
     if let kids = attr(el, kAXChildrenAttribute) as? [AXUIElement] { queue.append(contentsOf: kids.prefix(120)) }
   }
-  return Tree(trusted: true, app: name, window: text(root, kAXTitleAttribute) ?? "", items: items)
+  return Tree(trusted: true, app: name, window: text(root, kAXTitleAttribute) ?? "", items: items,
+              selection: selectedText(app))
 }
 
 // ---------- Text recognition ----------

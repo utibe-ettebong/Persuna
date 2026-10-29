@@ -13,6 +13,8 @@ export const sceneSchema = z.object({
   screen: z.object({ w: z.number().positive(), h: z.number().positive() }),
   app: z.string().max(200).default(""),
   window: z.string().max(300).default(""),
+  /** The text selected in the front app, if any. */
+  selection: z.string().max(4000).default(""),
   items: z
     .array(z.object({ role: z.string().max(30), label: z.string().max(300), ...box }))
     .max(400)
@@ -68,7 +70,11 @@ export function sceneForModel(scene: Scene): string {
     const h = cx < 0.33 ? "left" : cx > 0.66 ? "right" : "centre";
     return `${v} ${h}`;
   };
-  const head = [scene.app && `App: ${scene.app}`, scene.window && `Window: ${scene.window}`]
+  const head = [
+    scene.app && `App: ${scene.app}`,
+    scene.window && `Window: ${scene.window}`,
+    scene.selection && `Selected text: "${scene.selection.replace(/\s+/g, " ")}"`,
+  ]
     .filter(Boolean)
     .join("\n");
   const lines = sceneEntries(scene).map(
@@ -93,6 +99,23 @@ export function spotOf(scene: Scene, id: string): Spot | null {
   if (!entry) return null;
   const { x, y, w, h } = entry.box;
   return { x, y, w, h, label: entry.label };
+}
+
+/**
+ * The part of the screen the user circled: only the entries that overlap it,
+ * so the model talks about that part and nothing else.
+ */
+export function sceneWithin(
+  scene: Scene,
+  area: { x: number; y: number; w: number; h: number },
+): Scene {
+  const overlaps = (b: { x: number; y: number; w: number; h: number }) =>
+    b.x < area.x + area.w && b.x + b.w > area.x && b.y < area.y + area.h && b.y + b.h > area.y;
+  return {
+    ...scene,
+    items: scene.items.filter(overlaps),
+    text: scene.text.filter(overlaps),
+  };
 }
 
 /** Questions that need the picture itself, whatever the list says. */
