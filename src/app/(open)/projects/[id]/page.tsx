@@ -95,8 +95,13 @@ export default async function ProjectPage({ params, searchParams }: Params) {
               {project.status === "open" || project.status === "in_progress"
                 ? ` (${left > 0 ? `${left} day(s) left` : "due now"})`
                 : ""}{" "}
-              · posted by {view.posterName}
-              {view.sellerName && ` · seller ${view.sellerName}`}
+              · posted by <PersonLink person={view.poster} />
+              {view.seller && (
+                <>
+                  {" "}
+                  · seller <PersonLink person={view.seller} />
+                </>
+              )}
             </span>
           </span>
         }
@@ -323,7 +328,8 @@ export default async function ProjectPage({ params, searchParams }: Params) {
                     <Card className="space-y-3 p-5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="font-medium">
-                          {p.sellerName} · {formatUsd(p.priceCents)} · {p.days} day(s)
+                          <PersonLink person={{ name: p.sellerName, handle: p.sellerHandle }} /> ·{" "}
+                          {formatUsd(p.priceCents)} · {p.days} day(s)
                         </p>
                         <Badge
                           tone={
@@ -672,5 +678,16 @@ function DraftEditor({
         ))}
       </ActionForm>
     </Card>
+  );
+}
+
+/** A person's name, linking to their public profile when they have one. */
+function PersonLink({ person }: { person: { name: string; handle: string | null } }) {
+  return person.handle ? (
+    <Link href={`/personas/${person.handle}`} className="text-accent hover:underline">
+      {person.name}
+    </Link>
+  ) : (
+    <>{person.name}</>
   );
 }

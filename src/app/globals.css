@@ -26,6 +26,8 @@
   --warn: #8f5d00;
   --danger: #b4322b;
   --hatch: #e7e4e7;
+  /* Single-series chart marks (validated against the card surface). */
+  --chart-bar: #6a2f8d;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -51,6 +53,7 @@
     --warn: #e0a83a;
     --danger: #f07a72;
     --hatch: #241d25;
+    --chart-bar: #a77bd0;
   }
 }
 
@@ -249,6 +252,14 @@ textarea.outline-none:focus-visible {
 
 .persona-drag {
   -webkit-app-region: drag;
+}
+
+/* Scrolls sideways (the studio nav on a phone) without showing a scrollbar. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 .persona-no-drag,
 .persona-drag button {

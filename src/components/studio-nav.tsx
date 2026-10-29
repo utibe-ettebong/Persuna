@@ -3,23 +3,22 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+/** The main sections. Earnings, the audit log and settings live in the account menu. */
 const NAV = [
+  { href: "/dashboard", label: "Dashboard" },
   { href: "/persona", label: "My Persuna" },
   { href: "/skills", label: "Skills" },
   { href: "/jobs", label: "Jobs" },
   { href: "/market", label: "Marketplace" },
   { href: "/projects", label: "Projects" },
-  { href: "/earnings", label: "Earnings" },
-  { href: "/audit", label: "Audit log" },
-  { href: "/settings", label: "Models & keys" },
 ];
 
 /** Studio section links, with the current section marked. */
-export function StudioNav({ isAdmin }: { isAdmin: boolean }) {
+export function StudioNav() {
   const path = usePathname();
   return (
-    <ul className="flex items-center gap-x-1">
-      {NAV.filter((item) => isAdmin || item.href !== "/settings").map((item) => {
+    <ul className="flex items-center gap-x-0.5">
+      {NAV.map((item) => {
         const current =
           path === item.href ||
           path.startsWith(`${item.href}/`) ||
@@ -29,7 +28,7 @@ export function StudioNav({ isAdmin }: { isAdmin: boolean }) {
             <Link
               href={item.href}
               aria-current={current ? "page" : undefined}
-              className={`label-mono block whitespace-nowrap px-3 py-2 transition-colors ${
+              className={`label-mono block whitespace-nowrap px-2.5 py-2 transition-colors ${
                 current ? "text-accent" : "text-muted hover:text-foreground"
               }`}
             >

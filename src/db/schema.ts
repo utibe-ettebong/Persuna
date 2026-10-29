@@ -441,6 +441,15 @@ export const personaProfiles = pgTable("persona_profiles", {
   tone: jsonb("tone").$type<Tone>().notNull().default({}),
   /** Keys of notices Persona already raised, newest last, so each is said once. */
   noticeKeys: jsonb("notice_keys").$type<string[]>().notNull().default([]),
+  /**
+   * The person's public profile (at /personas/<handle>), for clients posting
+   * projects and for people renting their skills. Their own words; null until set.
+   */
+  publicName: text("public_name"),
+  headline: text("headline"),
+  bio: text("bio"),
+  location: text("location"),
+  website: text("website"),
   createdAt: createdAt(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -819,3 +828,29 @@ export type Project = typeof projects.$inferSelect;
 export type ProjectMilestone = typeof projectMilestones.$inferSelect;
 export type ProjectProposal = typeof projectProposals.$inferSelect;
 export type ProjectUpdate = typeof projectUpdates.$inferSelect;
+
+/**
+ * Work a person shows on their public profile: what it was, what they did,
+ * and a link to see it. Written by them; never copied from jobs or projects.
+ */
+export const portfolioItems = pgTable(
+  "portfolio_items",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    /** Where to see the work (https). */
+    link: text("link"),
+    /** A picture of it (https). */
+    imageUrl: text("image_url"),
+    /** The skill it shows, if any. */
+    skillId: uuid("skill_id").references(() => skills.id, { onDelete: "set null" }),
+    position: integer("position").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [index().on(t.userId, t.position)],
+);
+export type PortfolioItem = typeof portfolioItems.$inferSelect;

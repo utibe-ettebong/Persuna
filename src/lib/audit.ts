@@ -23,7 +23,9 @@ export interface AuditInput {
     | "agent_import"
     | "project"
     | "milestone"
-    | "proposal";
+    | "proposal"
+    | "profile"
+    | "portfolio_item";
   entityId?: string | null;
   skillId?: string | null;
   /** Small facts only (ids, scores, statuses). Never job text or pair content. */

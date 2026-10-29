@@ -18,7 +18,7 @@ export const metadata: Metadata = {
     "Persuna on your desktop: your assistant over your whole screen, for Mac (Apple silicon and Intel) and Windows.",
 };
 
-export const revalidate = 600;
+export const revalidate = 120;
 
 function DownloadButton({
   file,
