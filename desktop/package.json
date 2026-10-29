@@ -1,6 +1,6 @@
 {
   "name": "persuna-desktop",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "private": true,
   "description": "Persuna, your AI assistant, over your whole screen.",
   "main": "main.js",
@@ -23,7 +23,7 @@
   "build": {
     "appId": "app.persuna.persuna",
     "productName": "Persuna",
-    "copyright": "\u00a9 Persuna. MIT licensed.",
+    "copyright": "© Persuna. MIT licensed.",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -33,6 +33,8 @@
       "preload.js",
       "setup-preload.js",
       "hold-key.js",
+      "update-info.js",
+      "updater.js",
       "package.json",
       "build/tray*.png",
       "!node_modules/uiohook-napi/prebuilds/linux-*",
@@ -109,9 +111,18 @@
           "persuna"
         ]
       }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "utibe-ettebong",
+        "repo": "Persuna",
+        "releaseType": "release"
+      }
     ]
   },
   "dependencies": {
-    "uiohook-napi": "1.5.5"
+    "uiohook-napi": "1.5.5",
+    "electron-updater": "6.8.10"
   }
 }

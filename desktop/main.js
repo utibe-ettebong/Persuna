@@ -41,6 +41,7 @@ const { randomBytes } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { createHoldKey } = require("./hold-key");
+const { createUpdater } = require("./updater");
 
 const APP_URL = process.env.PERSUNA_URL || "https://persuna-production.up.railway.app";
 const ORIGIN = new URL(APP_URL).origin;
@@ -334,6 +335,14 @@ ipcMain.on("persuna:focus", (event) => {
  * Work mode nudged you (a question, a correction): a light tap on a Mac's
  * trackpad, felt while your finger is on it. Nothing on Windows.
  */
+// Updates, shown in the island: where it stands now, and "Restart" from there.
+ipcMain.handle("persuna:update-state", (event) =>
+  fromOverlay(event) ? (updater?.state ?? null) : null,
+);
+ipcMain.on("persuna:install-update", (event) => {
+  if (fromOverlay(event)) updater?.installNow();
+});
+
 ipcMain.on("persuna:nudge", (event) => {
   if (fromOverlay(event) && MAC) void runEyes(["haptic"], 1500);
 });
@@ -900,6 +909,7 @@ function rebuildTray() {
   const visible = Boolean(overlay?.isVisible());
   tray.setContextMenu(
     Menu.buildFromTemplate([
+      ...updateMenu(),
       ...(restartOffered
         ? [
             { label: "Restart Persuna to finish screen access", click: restart },
@@ -979,9 +989,72 @@ function rebuildTray() {
       { label: "Open PERSUNA in the browser", click: () => void shell.openExternal(ORIGIN) },
       { label: "Reload Persuna", click: () => overlay?.reload() },
       { type: "separator" },
+      {
+        label: `Persuna ${app.getVersion()} · Check for updates`,
+        enabled: Boolean(updater) && !["checking", "downloading"].includes(updater.state.status),
+        click: () => void updater?.check(),
+      },
       { label: "Quit Persuna", role: "quit" },
     ]),
   );
+}
+
+/* ---------- Updates (see updater.js) ---------- */
+
+let updater = null;
+let announcedUpdate = null;
+
+/** The top of the menu while an update is on its way or waiting. */
+function updateMenu() {
+  const s = updater?.state;
+  if (!s) return [];
+  const item =
+    s.status === "ready"
+      ? { label: `Restart to update to Persuna ${s.version}`, click: () => updater.installNow() }
+      : s.status === "downloading"
+        ? {
+            label: `Downloading Persuna ${s.version ?? ""} (${Math.round((s.progress ?? 0) * 100)}%)`,
+            enabled: false,
+          }
+        : s.status === "manual"
+          ? {
+              label: `Persuna ${s.version} is out: download it…`,
+              click: () => void shell.openExternal(`${ORIGIN}/download`),
+            }
+          : null;
+  return item ? [item, { type: "separator" }] : [];
+}
+
+function onUpdate(state) {
+  rebuildTray();
+  // The island shows it too: a progress line while it downloads, then Restart.
+  overlay?.webContents.send("persuna:update", state);
+  // An end-to-end update test (see updater.js) restarts as soon as it's ready.
+  if (state.status === "ready" && process.env.PERSUNA_UPDATES_FROM) updater.installNow();
+  if (state.status !== "ready" && state.status !== "manual") return;
+  if (announcedUpdate === state.version || !Notification.isSupported()) return;
+  announcedUpdate = state.version;
+  const note = new Notification({
+    title: `Persuna ${state.version} is ready`,
+    body:
+      state.status === "ready"
+        ? "It installs when Persuna restarts. Click to restart now."
+        : MAC
+          ? "Move Persuna to Applications so it can update itself; or click to download it."
+          : "Click to download it.",
+    silent: true,
+  });
+  note.on("click", () =>
+    state.status === "ready" ? updater.installNow() : void shell.openExternal(`${ORIGIN}/download`),
+  );
+  note.show();
+}
+
+function startUpdates() {
+  // Only the installed app updates: not `npm start`, not CI's launch test.
+  if (!app.isPackaged || SMOKE) return;
+  updater = createUpdater({ onChange: onUpdate });
+  updater.start();
 }
 
 function createTray() {
@@ -1116,6 +1189,7 @@ if (!app.requestSingleInstanceLock()) {
     startKeyListener();
     warmEyes();
     createTray();
+    startUpdates();
     if (!readSettings().setupDone) openSetup();
     else sayRunning();
     if (SMOKE) {
@@ -1134,6 +1208,8 @@ if (!app.requestSingleInstanceLock()) {
   app.on("will-quit", () => {
     globalShortcut.unregisterAll();
     keyListener?.stop();
+    // A downloaded update installs on the way out (it's there next launch).
+    updater?.installOnQuit();
   });
   // Closing every window keeps Persuna in the menu bar; Quit is in its menu.
   app.on("window-all-closed", () => {});

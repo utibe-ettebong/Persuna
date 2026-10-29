@@ -3,9 +3,9 @@ import { z } from "zod";
 /**
  * Persuna Desktop downloads, read from the repository's latest GitHub
  * release (published by .github/workflows/desktop.yml). Cached for two
- * minutes; when GitHub can't be reached the page links to the releases list.
+ * minutes; when GitHub can't be reached the page says downloads are briefly
+ * unavailable. Visitors only ever see /download/<slug> links.
  */
-export const RELEASES_URL = "https://github.com/utibe-ettebong/Persuna/releases/latest";
 const API_URL = "https://api.github.com/repos/utibe-ettebong/Persuna/releases/latest";
 
 const release = z.object({
@@ -18,6 +18,20 @@ const release = z.object({
 });
 
 export type DesktopPlatform = "macArm" | "macIntel" | "winX64" | "winArm";
+
+/** The addresses the download page links to (/download/<slug>), one per installer. */
+export const DOWNLOAD_SLUGS = {
+  "mac-arm64": "macArm",
+  "mac-x64": "macIntel",
+  "win-x64": "winX64",
+  "win-arm64": "winArm",
+} as const satisfies Record<string, DesktopPlatform>;
+
+/** /download/<slug> for a platform. */
+export function downloadPath(platform: DesktopPlatform): string {
+  const slug = Object.entries(DOWNLOAD_SLUGS).find(([, p]) => p === platform)![0];
+  return `/download/${slug}`;
+}
 
 export interface DesktopFile {
   name: string;
@@ -56,11 +70,17 @@ export function pickDesktopFiles(
   return files;
 }
 
-export async function latestDesktopRelease(): Promise<DesktopRelease | null> {
+/**
+ * The newest release. `fresh` asks GitHub now instead of using the cached
+ * answer (download links use it, so nobody is sent an older version).
+ */
+export async function latestDesktopRelease(
+  options: { fresh?: boolean } = {},
+): Promise<DesktopRelease | null> {
   try {
     const res = await fetch(API_URL, {
       headers: { accept: "application/vnd.github+json" },
-      next: { revalidate: 120 },
+      ...(options.fresh ? { cache: "no-store" as const } : { next: { revalidate: 120 } }),
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return null;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pickDesktopFiles, platformFromUserAgent } from "./releases";
+import { DOWNLOAD_SLUGS, downloadPath, pickDesktopFiles, platformFromUserAgent } from "./releases";
 
 const asset = (name: string, mb: number) => ({
   name,
@@ -37,5 +37,15 @@ describe("platformFromUserAgent", () => {
     expect(platformFromUserAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)")).toBe(
       "other",
     );
+  });
+});
+
+describe("download links", () => {
+  it("are Persuna's own addresses, one per installer", () => {
+    expect(downloadPath("macArm")).toBe("/download/mac-arm64");
+    expect(downloadPath("macIntel")).toBe("/download/mac-x64");
+    expect(downloadPath("winX64")).toBe("/download/win-x64");
+    expect(downloadPath("winArm")).toBe("/download/win-arm64");
+    expect(Object.keys(DOWNLOAD_SLUGS)).toHaveLength(4);
   });
 });

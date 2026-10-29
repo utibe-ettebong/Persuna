@@ -132,6 +132,9 @@ type DesktopBridge = {
   focus?(): void;
   onCircle?(handler: () => void): void;
   nudge?(): void;
+  updateState?(): Promise<UpdateState | null>;
+  onUpdate?(handler: (state: UpdateState) => void): void;
+  installUpdate?(): void;
   copy?(text: string): void;
   paste?(text: string): Promise<boolean>;
   saveFile?(file: { name: string; ext: string; data: string }): Promise<string | null>;
@@ -168,6 +171,13 @@ const POINT_MS = 9000;
 const LINGER_MS = 4000;
 
 /** Things Persuna Desktop needs the Mac's permission for, asked for in the island. */
+/** Persuna Desktop's updater, as the island shows it (see desktop/updater.js). */
+interface UpdateState {
+  status: "idle" | "checking" | "downloading" | "ready" | "manual" | "error";
+  version?: string;
+  progress?: number;
+}
+
 type Permission = "mic" | "screen" | "keyboard";
 const NEEDS: Record<Permission, string> = {
   mic: "I need your microphone to hear you.",
@@ -302,6 +312,10 @@ export function Companion(props: CompanionProps) {
   const [circled, setCircled] = useState<{ area: Area; path: string } | null>(null);
   // A permission the island is asking for (only when you use what needs it).
   const [need, setNeed] = useState<Permission | null>(null);
+  // A new Persuna Desktop downloading or ready (shown in the island), and
+  // the version you said "Later" to.
+  const [update, setUpdate] = useState<UpdateState | null>(null);
+  const [updateLater, setUpdateLater] = useState<string | null>(null);
   const perms = useRef<Record<string, string> | null>(null);
   // Work mode learned enough steps to teach today's skill.
   const [teachOffer, setTeachOffer] = useState<{
@@ -1205,6 +1219,8 @@ export function Companion(props: CompanionProps) {
     void desktop?.island?.().then((shape) => shape && setIsland(shape));
     desktop?.onIsland?.(setIsland);
     desktop?.onCircle?.(() => void startCircle());
+    void desktop?.updateState?.().then((state) => state && setUpdate(state));
+    desktop?.onUpdate?.(setUpdate);
     void checkPerms();
     desktop?.onHoldKey?.(setHoldLabel);
     void desktop?.shortcut?.().then(setDesktopShortcut);
@@ -2240,7 +2256,10 @@ export function Companion(props: CompanionProps) {
     const desktop = desktopBridge() ?? null;
     // The island grows from the notch: wider while it's doing something, and
     // down into a card for a reply, an error or Persuna itself.
-    const grown = (panel && setupDone) || Boolean(islandCaption) || Boolean(islandError);
+    const updateReady = update?.status === "ready" && update.version !== updateLater && setupDone;
+    const updating = update?.status === "downloading";
+    const grown =
+      (panel && setupDone) || Boolean(islandCaption) || Boolean(islandError) || updateReady;
     // Taller than the one strip: something shows in a row below it.
     const tall = grown || Boolean(need) || (island.notch && active);
     const wide = Math.min(480, Math.round(window.innerWidth * 0.94));
@@ -2464,19 +2483,32 @@ export function Companion(props: CompanionProps) {
                 {barStatus}
               </span>
             )}
+            {updating && (
+              <span className="sr-only" role="status">
+                Downloading Persuna {update?.version}: {Math.round((update?.progress ?? 0) * 100)}%
+              </span>
+            )}
             <span aria-hidden className="flex h-4 shrink-0 items-center justify-end gap-[3px]">
-              {indicator}
+              {/* A new version downloading: a small ring fills up where the dot sits. */}
+              {updating && !holding && !["listening", "thinking", "speaking"].includes(orbState) ? (
+                <UpdateRing version={update?.version} progress={update?.progress ?? 0} />
+              ) : (
+                indicator
+              )}
             </span>
           </button>
 
-          {island.notch && (active || grown) && !(panel && setupDone) && !quiet && (
-            <p
-              aria-hidden
-              className="label-mono flex h-7 items-center justify-center px-4 text-[10px] text-white/80"
-            >
-              {barStatus}
-            </p>
-          )}
+          {island.notch &&
+            (active || Boolean(islandCaption) || Boolean(islandError)) &&
+            !(panel && setupDone) &&
+            !quiet && (
+              <p
+                aria-hidden
+                className="label-mono flex h-7 items-center justify-center px-4 text-[10px] text-white/80"
+              >
+                {barStatus}
+              </p>
+            )}
 
           {islandCaption && !(panel && setupDone) && (
             <button
@@ -2489,6 +2521,30 @@ export function Companion(props: CompanionProps) {
           )}
           {islandError && (
             <p className="px-5 pb-3 pt-1 text-[12px] leading-snug text-[#ff8f87]">{islandError}</p>
+          )}
+
+          {/* The new version is downloaded: restart into it now, or later (it installs on quit). */}
+          {updateReady && (
+            <div className="flex items-center gap-2 px-5 pb-3.5 pt-1 text-[12.5px] leading-snug">
+              <span className="flex-1 text-white/90">
+                Persuna {update?.version} is ready to install.
+              </span>
+              <button
+                type="button"
+                onClick={() => desktopBridge()?.installUpdate?.()}
+                className="rounded-full bg-white px-3 py-1 text-[11px] font-medium text-black"
+              >
+                Restart now
+              </button>
+              <button
+                type="button"
+                onClick={() => setUpdateLater(update?.version ?? null)}
+                title="It installs next time Persuna quits"
+                className="rounded-full px-2 py-1 text-[11px] text-white/60 hover:text-white"
+              >
+                Later
+              </button>
+            </div>
           )}
 
           {/* A permission it needs, asked for only when you use what needs it. */}
@@ -3089,6 +3145,34 @@ function ToolGlyph({ icon }: { icon: ToolIcon }) {
         strokeWidth="1.7"
         strokeLinecap="round"
         strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/**
+ * A new Persuna Desktop downloading: a ring that fills as it comes in. It's
+ * drawn for the eye; screen readers hear the progress from the island itself.
+ */
+function UpdateRing({ version, progress }: { version?: string; progress: number }) {
+  const pct = Math.round(Math.min(1, Math.max(0, progress)) * 100);
+  const r = 6.5;
+  const around = 2 * Math.PI * r;
+  return (
+    <svg viewBox="0 0 18 18" width={18} height={18} data-update-ring={pct} className="-rotate-90">
+      <title>{`Downloading Persuna ${version ?? ""}: ${pct}%`}</title>
+      <circle cx={9} cy={9} r={r} fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth={2.2} />
+      <circle
+        cx={9}
+        cy={9}
+        r={r}
+        fill="none"
+        stroke="#b794ff"
+        strokeWidth={2.2}
+        strokeLinecap="round"
+        strokeDasharray={around}
+        strokeDashoffset={around * (1 - Math.max(0.04, pct / 100))}
+        className="transition-[stroke-dashoffset] duration-500"
       />
     </svg>
   );
