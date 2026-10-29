@@ -14,6 +14,14 @@ if (speech?.api !== "elevenlabs" || !appUrl || !llmSecret) {
   );
   process.exit(1);
 }
+// ElevenLabs calls APP_URL from its own servers: a local address can't work.
+const host = new URL(appUrl).hostname;
+if (!appUrl.startsWith("https://") || /^(localhost|127\.|0\.0\.0\.0|\[::1\])/.test(host)) {
+  console.error(
+    `ElevenLabs can't reach APP_URL=${appUrl}. Run this with the deployed app's settings, for example:\n  railway run --service Persuna npm run voice:agent`,
+  );
+  process.exit(1);
+}
 const agentId = await setUpAgent({
   appUrl,
   apiKey: speech.apiKey,

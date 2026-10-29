@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  AGENT_TTS_MODEL,
   SESSION_TTL_MS,
   lastUserText,
   readSession,
   rememberTurn,
+  setUpAgent,
   signSession,
   streamReply,
   takeTurns,
@@ -56,5 +58,37 @@ describe("the brain endpoint's plumbing", () => {
     expect(takeTurns("u", 1000)).toEqual([]);
     rememberTurn("u", result, 0);
     expect(takeTurns("u", 120_000)).toEqual([]);
+  });
+});
+
+describe("setting up the ElevenLabs agent", () => {
+  it("uses a speech model English agents accept, and Persuna's own brain", async () => {
+    const sent: { url: string; body: Record<string, unknown> }[] = [];
+    const fakeFetch = (async (url: string, init: RequestInit) => {
+      sent.push({ url, body: JSON.parse(String(init.body)) });
+      return new Response(JSON.stringify({ secret_id: "s1", agent_id: "a1" }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const id = await setUpAgent(
+      {
+        appUrl: "https://persuna.example/",
+        apiKey: "k",
+        baseUrl: "https://api.elevenlabs.io/v1",
+        voice: "v",
+        llmSecret: "x".repeat(24),
+      },
+      fakeFetch,
+    );
+    expect(id).toBe("a1");
+    const create = sent.find((s) => s.url.endsWith("/convai/agents/create"))!.body as {
+      conversation_config: {
+        tts: { model_id: string };
+        agent: { prompt: { custom_llm: { url: string } } };
+      };
+    };
+    expect(AGENT_TTS_MODEL).toBe("eleven_flash_v2");
+    expect(create.conversation_config.tts.model_id).toBe(AGENT_TTS_MODEL);
+    expect(create.conversation_config.agent.prompt.custom_llm.url).toBe(
+      "https://persuna.example/api/persuna/llm",
+    );
   });
 });
