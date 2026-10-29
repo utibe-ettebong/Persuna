@@ -15,6 +15,8 @@ import { readAudio } from "@/lib/models/transcribe";
 import { takeTurns } from "@/lib/persuna/voice-agent";
 import { PROVIDER_IDS } from "@/lib/connections/providers";
 import { disconnect } from "@/lib/connections/service";
+import { connectMcpServer, disconnectMcpServer, refreshMcpTools } from "@/lib/mcp/service";
+import { confirmMcpFromChat } from "@/lib/persuna/service";
 import {
   AVATARS,
   addExampleFromChat,
@@ -526,6 +528,47 @@ export async function persunaAppConfirmAction(token: string) {
   return run(async () => {
     const user = await requireUser();
     return confirmAppFromChat(user.id, z.string().min(10).max(20_000).parse(token), actorOf(user));
+  });
+}
+
+/** The user OK'd a proposed MCP tool call on one of their servers. */
+export async function persunaMcpConfirmAction(token: string) {
+  return run(async () => {
+    const user = await requireUser();
+    return confirmMcpFromChat(user.id, z.string().min(10).max(20_000).parse(token), actorOf(user));
+  });
+}
+
+const mcpServerForm = z.object({
+  name: z.string().trim().min(1).max(80),
+  url: z.string().trim().url().max(500),
+  token: z.string().trim().max(2000).optional(),
+});
+
+/** Connects a remote MCP server: tools are discovered before it is stored. */
+export async function connectMcpServerAction(input: z.input<typeof mcpServerForm>) {
+  return run(async () => {
+    const user = await requireUser();
+    const server = await connectMcpServer(user.id, mcpServerForm.parse(input), actorOf(user));
+    revalidatePath("/persuna");
+    return server;
+  });
+}
+
+export async function disconnectMcpServerAction(serverId: string) {
+  return run(async () => {
+    const user = await requireUser();
+    await disconnectMcpServer(user.id, uuidField.parse(serverId), actorOf(user));
+    revalidatePath("/persuna");
+  });
+}
+
+export async function refreshMcpServerAction(serverId: string) {
+  return run(async () => {
+    const user = await requireUser();
+    const tools = await refreshMcpTools(user.id, uuidField.parse(serverId));
+    revalidatePath("/persuna");
+    return tools;
   });
 }
 

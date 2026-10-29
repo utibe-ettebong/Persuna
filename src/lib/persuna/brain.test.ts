@@ -13,6 +13,7 @@ const state = (over: Partial<PersunaState> = {}): PersunaState => ({
   focus: null,
   focusSkill: null,
   skills: [{ slug: "meeting-minutes", name: "Meeting minutes", published: true }],
+  mcpServers: [],
   todos: [],
   tone: {},
   lastAsked: null,
@@ -62,6 +63,38 @@ describe("tidyReply", () => {
     );
     expect(reply.actions.map((a) => a.type)).toEqual(["remember"]);
     expect(reply.asked).toBeNull();
+  });
+
+  it("keeps an mcp call only for a connected server and tool", () => {
+    const withMcp = state({
+      mcpServers: [
+        { name: "Linear", tools: [{ name: "list_issues", description: "List issues" }] },
+      ],
+    });
+    const good = tidyReply(
+      {
+        reply: "ok",
+        actions: [{ type: "mcp", server: "Linear", tool: "list_issues", arguments: {} }],
+      },
+      withMcp,
+    );
+    expect(good.actions).toHaveLength(1);
+    const badTool = tidyReply(
+      {
+        reply: "ok",
+        actions: [{ type: "mcp", server: "Linear", tool: "delete_all", arguments: {} }],
+      },
+      withMcp,
+    );
+    expect(badTool.actions).toEqual([]);
+    const noServers = tidyReply(
+      {
+        reply: "ok",
+        actions: [{ type: "mcp", server: "Linear", tool: "list_issues", arguments: {} }],
+      },
+      state(),
+    );
+    expect(noServers.actions).toEqual([]);
   });
 
   it("keeps a question only if it is still unanswered", () => {

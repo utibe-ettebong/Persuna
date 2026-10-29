@@ -19,6 +19,7 @@ export interface AuditInput {
     | "listing"
     | "transaction"
     | "connection"
+    | "mcp_server"
     | "agent_key"
     | "agent_import"
     | "project"

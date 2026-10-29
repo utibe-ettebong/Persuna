@@ -1,0 +1,27 @@
+# Persuna as an MCP server, hosted on a Cloudflare Worker.
+# Deploy: npx wrangler deploy   (from this folder, signed in to Cloudflare)
+# Then point Claude / Cursor / ChatGPT at https://<this-worker>/mcp with
+# header: Authorization: Bearer [REDACTED]
+name = "persuna-mcp"
+main = "src/worker.js"
+compatibility_date = "2025-09-01"
+
+[vars]
+# The Persuna app whose agent API does auth, trust checks and drafting.
+PERSUNA_API_URL = "https://persuna-production.up.railway.app"
+
+# Code mode sandbox: a Dynamic Worker Loader binding mints a throwaway
+# Worker per execute call with no outbound network. Enable "Dynamic Worker
+# Loader" on the account, then uncomment:
+# [[worker_loaders]]
+# binding = "CODE_LOADER"
+#
+# Self-binding used to deliver the typed persuna API into sandboxes without
+# handing them the raw agent key (props carry it instead):
+# [[services]]  # not used; the class is exported from this same worker
+#
+# A future read-through cache of published skills can read Postgres directly
+# via Hyperdrive instead of the API:
+# [[hyperdrive]]
+# binding = "DB"
+# id = "<hyperdrive-config-id>"

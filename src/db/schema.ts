@@ -567,6 +567,40 @@ export const appConnections = pgTable(
 );
 export type AppConnection = typeof appConnections.$inferSelect;
 
+/** One tool a connected MCP server offers, cached at connect/refresh time. */
+export interface McpToolInfo {
+  name: string;
+  description: string;
+}
+
+/**
+ * Remote MCP servers the user connected for Persuna to use (Slack, Linear,
+ * GitHub, Figma, databases…). The access token is sealed with CONNECTIONS_KEY
+ * exactly like app-connection tokens and never leaves the server; v1 speaks
+ * remote streamable HTTP only — no local/stdio servers.
+ */
+export const mcpServers = pgTable(
+  "mcp_servers",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    /** The user's label for this server, shown in chat and confirm cards. */
+    name: text("name").notNull(),
+    /** Streamable-HTTP MCP endpoint. */
+    url: text("url").notNull(),
+    /** Sealed bearer token, or empty when the server needs no auth. */
+    token: text("token").notNull().default(""),
+    /** Tools found at connect time; refreshed on demand. */
+    tools: jsonb("tools").$type<McpToolInfo[]>().notNull().default([]),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique().on(t.userId, t.url)],
+);
+export type McpServer = typeof mcpServers.$inferSelect;
+
 /**
  * Earlier versions of a renter's order and the changes they asked for, one row
  * per round. Job text like the rest of the job: deleted with it.

@@ -1,6 +1,11 @@
 import { after } from "next/server";
 import { bearerToken, MAX_BODY_BYTES, SKILL_IMPORT_SCHEMA } from "@/lib/agents/rules";
-import { authenticateAgent, processImport, receiveImport } from "@/lib/agents/service";
+import {
+  authenticateAgent,
+  listRunnableSkills,
+  processImport,
+  receiveImport,
+} from "@/lib/agents/service";
 
 export const dynamic = "force-dynamic";
 // Training and testing run after the response; give them room.
@@ -45,6 +50,13 @@ export async function POST(request: Request) {
     { id, status: result.import.status, statusUrl: `/api/agents/skills/${id}` },
     { status: 202, headers: { location: `/api/agents/skills/${id}` } },
   );
+}
+
+/** The key owner's published skills, runnable via POST /api/agents/run. */
+export async function GET(request: Request) {
+  const key = await authenticateAgent(bearerToken(request.headers.get("authorization")));
+  if (!key) return error(401, ["Send a valid agent key: Authorization: Bearer [REDACTED]…"]);
+  return Response.json({ skills: await listRunnableSkills(key) });
 }
 
 function error(status: number, errors: string[], headers: HeadersInit = {}) {

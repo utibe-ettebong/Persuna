@@ -11,6 +11,7 @@ import { audit, type Actor } from "@/lib/audit";
 import type { ModelClient } from "@/lib/models/gateway";
 import type { Transcriber } from "@/lib/models/transcribe";
 import { confirmAppAction, doAppTask, type AppConfirm } from "@/lib/connections/service";
+import { confirmMcpCall, listMcpServers, proposeMcpCall, type McpConfirm } from "@/lib/mcp/service";
 import { UsageLimitError } from "@/lib/models/usage";
 import { findNames } from "@/lib/skill/engine";
 import { INTERVIEW_QUESTIONS, type InterviewAnswers } from "@/lib/skill/interview";
@@ -213,6 +214,13 @@ async function stateFor(userId: string, clock: Clock): Promise<PersunaState> {
       published: Boolean(s.publishedVersionId),
     })),
     todos: todos.slice(0, 20).map((t) => t.text),
+    mcpServers: (await listMcpServers(userId).catch(() => [])).slice(0, 8).map((s) => ({
+      name: s.name,
+      tools: s.tools.slice(0, 12).map((t) => ({
+        name: t.name,
+        description: t.description.slice(0, 120),
+      })),
+    })),
     lastAsked:
       last?.role === "assistant" && last.askedKey && !last.askedKey.startsWith(SWITCH)
         ? (last.askedKey as PersunaState["lastAsked"])
@@ -250,6 +258,8 @@ export interface ChatResult {
   watch: "start" | "stop" | null;
   /** A send or create in the user's apps, waiting for their OK. */
   appConfirm: AppConfirm | null;
+  /** A tool call on one of the user's MCP servers, waiting for their OK. */
+  mcpConfirm: McpConfirm | null;
   /** Where on screen to show the user something (Persuna Desktop draws it). */
   point: Spot | null;
   /** Text to copy, or to paste where the user's cursor is. */
@@ -411,6 +421,7 @@ export async function chat(
   let navigate: string | null = null;
   let watch: ChatResult["watch"] = null;
   let appConfirm: ChatResult["appConfirm"] = null;
+  let mcpConfirm: ChatResult["mcpConfirm"] = null;
   let point: ChatResult["point"] = null;
   let clipboard: ChatResult["clipboard"] = null;
   let drawing: ChatResult["drawing"] = null;
@@ -587,6 +598,13 @@ export async function chat(
       extra.push(`\n\n${done.reply}`);
       appConfirm = done.confirm;
       if (done.needsConnecting) link = { href: "/persuna#apps", label: "Connect your apps" };
+    } else if (action.type === "mcp") {
+      // Propose only: the call runs when the user approves the card.
+      const servers = await listMcpServers(userId).catch(() => []);
+      const server = servers.find((s) => s.name === action.server);
+      if (server?.tools.some((t) => t.name === action.tool)) {
+        mcpConfirm = proposeMcpCall(userId, server, action.tool, action.arguments ?? {});
+      }
     } else if (action.type === "point" && sight?.scene) {
       if (action.item) point = spotOf(sight.scene, action.item);
       else if (action.thing && sight.image) {
@@ -686,6 +704,7 @@ export async function chat(
     switchTo,
     watch,
     appConfirm,
+    mcpConfirm,
     point,
     clipboard,
     drawing,
@@ -1664,6 +1683,17 @@ export async function confirmAppFromChat(userId: string, token: string, actor: A
     .values({ userId, role: "assistant", content: done.message })
     .returning();
   return { message, link: done.href ? { href: done.href, label: "Open it" } : null };
+}
+
+/** The user OK'd a tool call on one of their MCP servers: run it, and say so in the conversation. */
+export async function confirmMcpFromChat(userId: string, token: string, actor: Actor) {
+  const done = await confirmMcpCall(userId, token, actor);
+  const output = done.output.length > 2000 ? `${done.output.slice(0, 2000)}…` : done.output;
+  const [message] = await db()
+    .insert(persunaMessages)
+    .values({ userId, role: "assistant", content: `${done.message}\n\n${output}` })
+    .returning();
+  return { message, link: null };
 }
 
 export async function publishFromChat(
