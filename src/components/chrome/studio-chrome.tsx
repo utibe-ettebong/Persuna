@@ -1,13 +1,17 @@
 import Link from "next/link";
 import { Logo } from "@/components/brand";
+import { AccountMenu } from "@/components/account-menu";
+import { MobileNav } from "@/components/chrome/mobile-nav";
 import { CompanionMount } from "@/components/persona/companion-mount";
 import { StudioNav } from "@/components/studio-nav";
-import { AccountMenu } from "@/components/account-menu";
 import { modelProvider } from "@/env";
 import type { SessionUser } from "@/lib/auth/session";
 import { ensureHandle } from "@/lib/persona/service";
 
-/** The signed-in studio frame: framed page, mono navigation, mock-model notice, the companion. */
+/**
+ * The signed-in app: a sidebar with every section (a drawer on phones), a
+ * slim top bar with the account menu, the page, and the companion.
+ */
 export async function StudioChrome({
   user,
   children,
@@ -20,19 +24,32 @@ export async function StudioChrome({
   const handle = await ensureHandle(user.id).catch(() => null);
   const profileHref = handle ? `/personas/${handle}` : null;
   return (
-    <>
-      <header className="sticky top-0 z-20 border-b border-line bg-background/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 border-x border-line px-4 sm:px-6">
-          <div className="py-2.5">
+    <div className="flex min-h-screen flex-1">
+      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-line bg-card lg:flex">
+        <div className="flex h-14 items-center px-6">
+          <Logo href="/dashboard" />
+        </div>
+        <nav aria-label="Studio" className="flex-1 overflow-y-auto px-3 py-4">
+          <StudioNav isAdmin={user.isAdmin} />
+        </nav>
+        <div className="border-t border-line p-4">
+          <Link
+            href="/download"
+            className="block rounded-md bg-accent-soft p-3 text-sm hover:bg-accent-soft/70"
+          >
+            <span className="font-medium text-accent">Persuna Desktop</span>
+            <span className="block text-xs text-muted">Hold a key and talk, from any app.</span>
+          </Link>
+        </div>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-line bg-background/90 px-4 backdrop-blur sm:px-8">
+          <MobileNav isAdmin={user.isAdmin} logo={<Logo href="/dashboard" />} />
+          <div className="lg:hidden">
             <Logo href="/dashboard" />
           </div>
-          <nav
-            aria-label="Studio"
-            className="no-scrollbar order-last -mx-4 w-[calc(100%+2rem)] overflow-x-auto border-t border-line px-1 sm:-mx-6 sm:w-[calc(100%+3rem)] lg:order-none lg:mx-0 lg:w-auto lg:flex-1 lg:overflow-visible lg:border-t-0 lg:px-0"
-          >
-            <StudioNav />
-          </nav>
-          <div className="ml-auto flex items-center gap-3 py-2.5">
+          <div className="ml-auto flex items-center gap-3">
             {mock && (
               <Link
                 href={user.isAdmin ? "/settings" : "/skills"}
@@ -42,13 +59,6 @@ export async function StudioChrome({
                 Mock models
               </Link>
             )}
-            <Link
-              href="/download"
-              className="label-mono hidden whitespace-nowrap rounded-sm border border-accent/40 bg-accent-soft px-2 py-1 text-accent hover:bg-accent-soft/70 xl:inline"
-              title="Persuna Desktop for Mac and Windows"
-            >
-              Get the app
-            </Link>
             <AccountMenu
               name={user.name}
               email={user.email}
@@ -56,16 +66,10 @@ export async function StudioChrome({
               profileHref={profileHref}
             />
           </div>
-        </div>
-      </header>
-      <div className="flex flex-1">
-        <div aria-hidden className="hatch hidden flex-1 lg:block" />
-        <main className="w-full max-w-6xl flex-1 border-x border-line bg-background px-4 py-10 sm:px-8 lg:flex-none">
-          {children}
-        </main>
-        <div aria-hidden className="hatch hidden flex-1 lg:block" />
+        </header>
+        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-8">{children}</main>
       </div>
       <CompanionMount userId={user.id} userName={user.name} />
-    </>
+    </div>
   );
 }

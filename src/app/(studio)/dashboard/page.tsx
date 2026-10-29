@@ -40,7 +40,7 @@ function Panel({
   className?: string;
 }) {
   return (
-    <Card className={`flex flex-col p-5 ${className}`}>
+    <Card className={`flex flex-col rounded-lg p-5 ${className}`}>
       <div className="mb-3 flex items-baseline justify-between gap-3">
         <h2 className="font-display text-lg font-medium tracking-[-0.01em]">{title}</h2>
         {href && (
@@ -87,8 +87,7 @@ export default async function DashboardPage() {
     <div className="space-y-8">
       <header className="flex flex-wrap items-center justify-between gap-6">
         <div>
-          <p className="label-mono text-faint">Dashboard</p>
-          <h1 className="mt-1 font-display text-3xl font-medium tracking-[-0.03em] sm:text-4xl">
+          <h1 className="font-display text-2xl font-medium tracking-[-0.02em] sm:text-3xl">
             <Greeting name={first} />
           </h1>
           <p className="mt-1 text-muted">
@@ -110,14 +109,18 @@ export default async function DashboardPage() {
         </div>
       </header>
 
-      <dl className="grid gap-px overflow-hidden rounded-md border border-line bg-line sm:grid-cols-2 lg:grid-cols-5">
+      <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         {tiles.map(([label, value, hint, href]) => (
-          <Link key={label} href={href ?? "#"} className="group bg-card p-5 hover:bg-subtle">
-            <dt className="label-mono text-faint">{label}</dt>
-            <dd className="mt-1 font-display text-2xl font-medium tracking-[-0.02em] group-hover:text-accent">
+          <Link
+            key={label}
+            href={href ?? "#"}
+            className="group rounded-lg border border-line bg-card p-5 shadow-[0_1px_2px_rgba(29,22,29,0.04)] transition-colors hover:border-accent/40"
+          >
+            <dt className="text-sm text-muted">{label}</dt>
+            <dd className="mt-2 font-display text-3xl font-medium tracking-[-0.02em] group-hover:text-accent">
               {value}
             </dd>
-            <dd className="text-xs text-muted">{hint}</dd>
+            <dd className="mt-1 text-xs text-faint">{hint}</dd>
           </Link>
         ))}
       </dl>
@@ -153,7 +156,7 @@ export default async function DashboardPage() {
           )}
         </Panel>
 
-        <Card className="flex items-center gap-4 p-5">
+        <Card className="flex items-center gap-4 rounded-lg p-5">
           <PersonaOrb look={d.persona.avatar} size={64} animate={false} />
           <div className="min-w-0 flex-1">
             <p className="label-mono text-faint">Your Persuna</p>
