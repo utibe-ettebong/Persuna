@@ -44,6 +44,6 @@ export const config = {
   // agent's brain (checked by shared secret and signed session), the agent
   // import API (checked by agent key) and static assets.
   matcher: [
-    "/((?!api/health|api/webhooks/paystack|api/persuna/llm|api/agents/|_next/static|_next/image|favicon.ico).*)",
+    "/((?!api/health|api/webhooks/paystack|api/persuna/llm|api/persona/llm|api/agents/|_next/static|_next/image|favicon.ico).*)",
   ],
 };
