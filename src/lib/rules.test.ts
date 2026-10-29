@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { markdownToDocx } from "./docs/docx";
 import { changeRatio, classifyEdit } from "./jobs/edit-size";
-import { MAX_REVISIONS, listingRequirements, revisionAllowed, splitPayment } from "./market/rules";
+import {
+  MAX_REVISIONS,
+  assertListable,
+  confidentialListingMessage,
+  listingRequirements,
+  revisionAllowed,
+  splitPayment,
+} from "./market/rules";
 import { checkPublish, publishCheckMessage } from "./skill/publish";
 import { redact, scanForIdentifiers } from "./skill/redact";
 
@@ -125,6 +132,23 @@ describe("listingRequirements", () => {
       listingRequirements({ ...base, ownershipDeclared: false }).find((r) => r.key === "ownership")
         ?.met,
     ).toBe(false);
+  });
+
+  it("blocks company know-how with a clear message, however good the skill is", () => {
+    const base = {
+      hasPublishedVersion: true,
+      publishedScore: 95,
+      ownershipDeclared: true,
+      minScore: 80,
+    };
+    const blocked = listingRequirements({ ...base, confidentialTo: "Acme" });
+    expect(blocked.every((r) => r.met)).toBe(false);
+    const reason = blocked.find((r) => r.key === "confidential");
+    expect(reason?.met).toBe(false);
+    expect(reason?.label).toMatch(/part of your job at Acme.*confidential/);
+    expect(listingRequirements({ ...base, confidentialTo: null }).every((r) => r.met)).toBe(true);
+    expect(() => assertListable("Acme")).toThrow(confidentialListingMessage("Acme"));
+    expect(() => assertListable(null)).not.toThrow();
   });
 });
 

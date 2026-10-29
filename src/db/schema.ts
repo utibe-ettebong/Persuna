@@ -19,6 +19,7 @@ import type { JobFlag } from "@/lib/jobs/self-check";
 import type { Tone } from "@/lib/persona/tone";
 import type { FitReport, MilestoneCheck, ProjectPlan } from "@/lib/projects/types";
 import type { InterviewAnswers } from "@/lib/skill/interview";
+import type { OnboardingPlan, OnboardingProgress, Playbook } from "@/lib/teams/types";
 import type { RuleOp, ScoreBreakdown, SkillSheet } from "@/lib/skill/types";
 
 const id = () => uuid("id").primaryKey().defaultRandom();
@@ -854,3 +855,204 @@ export const portfolioItems = pgTable(
   (t) => [index().on(t.userId, t.position)],
 );
 export type PortfolioItem = typeof portfolioItems.$inferSelect;
+
+/* ---------- Teams: a company's roles, its confidential know-how, and onboarding ---------- */
+
+export const orgMemberStatus = pgEnum("org_member_status", ["active", "left"]);
+export const orgSkillOrigin = pgEnum("org_skill_origin", ["member", "playbook"]);
+export const playbookStatus = pgEnum("playbook_status", ["draft", "published"]);
+export const onboardingStatus = pgEnum("onboarding_status", ["active", "completed", "cancelled"]);
+
+/** A company using Persuna together. Everything under it is confidential to its members. */
+export const organisations = pgTable("organisations", {
+  id: id(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  createdBy: text("created_by").references(() => authUsers.id, { onDelete: "set null" }),
+  createdAt: createdAt(),
+});
+
+/** A job at the company ("Designer"). Its playbook is built from the skills attached to it. */
+export const orgRoles = pgTable(
+  "org_roles",
+  {
+    id: id(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    createdAt: createdAt(),
+  },
+  (t) => [unique().on(t.orgId, t.title)],
+);
+
+/**
+ * A person at the company. Pending invitations live in org_invites; a row
+ * here is someone who joined (active) or has since left (kept, so the skills
+ * they attached still count as the role's know-how).
+ */
+export const orgMembers = pgTable(
+  "org_members",
+  {
+    id: id(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    roleId: uuid("role_id").references(() => orgRoles.id, { onDelete: "set null" }),
+    admin: boolean("admin").notNull().default(false),
+    status: orgMemberStatus("status").notNull().default("active"),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
+    leftAt: timestamp("left_at", { withTimezone: true }),
+  },
+  (t) => [unique().on(t.orgId, t.userId), index().on(t.userId), index().on(t.roleId)],
+);
+
+/**
+ * An invitation to join, for one email address and role. Only the SHA-256 of
+ * the token is stored; the link is shown to the admin once.
+ */
+export const orgInvites = pgTable(
+  "org_invites",
+  {
+    id: id(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    roleId: uuid("role_id").references(() => orgRoles.id, { onDelete: "set null" }),
+    admin: boolean("admin").notNull().default(false),
+    /** Start onboarding for the role as soon as they join (a new hire). */
+    onboard: boolean("onboard").notNull().default(false),
+    tokenHash: text("token_hash").notNull().unique(),
+    invitedBy: text("invited_by").references(() => authUsers.id, { onDelete: "set null" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    acceptedBy: text("accepted_by").references(() => authUsers.id, { onDelete: "set null" }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index().on(t.orgId), index().on(t.email)],
+);
+
+/**
+ * "This skill is part of my job at Acme." An attached skill is confidential:
+ * it can't be listed on the marketplace or shown on a public profile, and only
+ * the company's admins and people in the same role see its method. A skill
+ * belongs to at most one role.
+ */
+export const orgRoleSkills = pgTable(
+  "org_role_skills",
+  {
+    id: id(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+    roleId: uuid("role_id")
+      .notNull()
+      .references(() => orgRoles.id, { onDelete: "cascade" }),
+    skillId: uuid("skill_id")
+      .notNull()
+      .unique()
+      .references(() => skills.id, { onDelete: "cascade" }),
+    /** The member whose skill it is (a current or former holder of the role). */
+    memberId: uuid("member_id").references(() => orgMembers.id, { onDelete: "set null" }),
+    /** member: they attached it. playbook: a starter skill Persuna made from the playbook. */
+    origin: orgSkillOrigin("origin").notNull().default("member"),
+    createdAt: createdAt(),
+  },
+  (t) => [index().on(t.roleId)],
+);
+
+/** How the company works, in the admins' words: values, tools, processes. Confidential. */
+export const orgHandbookNotes = pgTable(
+  "org_handbook_notes",
+  {
+    id: id(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+    /** values, tools, process or other. */
+    kind: text("kind").notNull().default("other"),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    position: integer("position").notNull().default(0),
+    updatedBy: text("updated_by").references(() => authUsers.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.orgId, t.position)],
+);
+
+/**
+ * The role's workflows, step by step, built from the method of its skills and
+ * the handbook. Each generation is a new version; admins edit a draft, then
+ * publish it to recruits. Method only: no job text.
+ */
+export const rolePlaybooks = pgTable(
+  "role_playbooks",
+  {
+    id: id(),
+    roleId: uuid("role_id")
+      .notNull()
+      .references(() => orgRoles.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    content: jsonb("content").$type<Playbook>().notNull(),
+    status: playbookStatus("status").notNull().default("draft"),
+    /** The skills whose rule sheets it was built from. */
+    sourceSkillIds: uuid("source_skill_ids")
+      .array()
+      .notNull()
+      .default(sql`'{}'::uuid[]`),
+    model: text("model").notNull(),
+    createdBy: text("created_by").references(() => authUsers.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+  },
+  (t) => [unique().on(t.roleId, t.version)],
+);
+
+/**
+ * A new hire working through their role's onboarding: the plan Persuna made
+ * from the published playbook, and how far they've got. Their answers are the
+ * company's material: they stay here and never go into a skill.
+ */
+export const onboardings = pgTable(
+  "onboardings",
+  {
+    id: id(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organisations.id, { onDelete: "cascade" }),
+    memberId: uuid("member_id")
+      .notNull()
+      .references(() => orgMembers.id, { onDelete: "cascade" }),
+    roleId: uuid("role_id")
+      .notNull()
+      .references(() => orgRoles.id, { onDelete: "cascade" }),
+    playbookId: uuid("playbook_id").references(() => rolePlaybooks.id, { onDelete: "set null" }),
+    plan: jsonb("plan").$type<OnboardingPlan>().notNull(),
+    progress: jsonb("progress").$type<OnboardingProgress>().notNull().default({}),
+    status: onboardingStatus("status").notNull().default("active"),
+    startedBy: text("started_by").references(() => authUsers.id, { onDelete: "set null" }),
+    /** When the recruit took the starter skills made from the playbook. */
+    starterSkillsAt: timestamp("starter_skills_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [index().on(t.memberId), index().on(t.orgId, t.status)],
+);
+
+export type Organisation = typeof organisations.$inferSelect;
+export type OrgRole = typeof orgRoles.$inferSelect;
+export type OrgMember = typeof orgMembers.$inferSelect;
+export type OrgInvite = typeof orgInvites.$inferSelect;
+export type OrgRoleSkill = typeof orgRoleSkills.$inferSelect;
+export type OrgHandbookNote = typeof orgHandbookNotes.$inferSelect;
+export type RolePlaybook = typeof rolePlaybooks.$inferSelect;
+export type Onboarding = typeof onboardings.$inferSelect;

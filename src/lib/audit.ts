@@ -25,7 +25,15 @@ export interface AuditInput {
     | "milestone"
     | "proposal"
     | "profile"
-    | "portfolio_item";
+    | "portfolio_item"
+    | "organisation"
+    | "org_member"
+    | "org_invite"
+    | "org_role"
+    | "org_skill"
+    | "handbook_note"
+    | "playbook"
+    | "onboarding";
   entityId?: string | null;
   skillId?: string | null;
   /** Small facts only (ids, scores, statuses). Never job text or pair content. */

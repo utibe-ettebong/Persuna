@@ -9,6 +9,8 @@ import { db, schema } from "@/db/client";
 import { audit, type Actor } from "@/lib/audit";
 import { NotFoundError } from "@/lib/skill/service";
 import { ensureHandle, getProfile, publicProfile } from "@/lib/persona/service";
+import { confidentialSkills } from "@/lib/teams/confidential";
+import { publicSkillName } from "@/lib/teams/rules";
 import {
   MAX_PORTFOLIO,
   displayName,
@@ -197,6 +199,11 @@ export async function personProfile(handle: string) {
     .where(and(eq(projectProposals.sellerId, profile.userId), isNotNull(projects.chosenProposalId)))
     .orderBy(desc(projects.createdAt));
 
+  const portfolio = await portfolioOf(profile.userId);
+  const confidential = await confidentialSkills(
+    portfolio.map((p) => p.item.skillId).filter((id): id is string => Boolean(id)),
+  );
+
   // On a project, the poster rates the seller (posterRating) and the seller rates the poster.
   const asSeller = won.map((w) => w.project);
   const sellerReviews = asSeller
@@ -225,13 +232,17 @@ export async function personProfile(handle: string) {
     website: profile.website,
     memberSince: user?.createdAt ?? profile.createdAt,
     persona: persona,
-    portfolio: (await portfolioOf(profile.userId)).map(({ item, skill }) => ({
+    portfolio: portfolio.map(({ item, skill }) => ({
       id: item.id,
       title: item.title,
       description: item.description,
       link: item.link,
       imageUrl: item.imageUrl,
-      skill: skill?.name ?? null,
+      // A piece tagged with company know-how shows, but never names the skill.
+      skill: publicSkillName(
+        skill?.name ?? null,
+        Boolean(item.skillId && confidential.has(item.skillId)),
+      ),
     })),
     asClient: {
       posted: posted.length,

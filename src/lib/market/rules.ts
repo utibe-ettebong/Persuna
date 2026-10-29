@@ -20,9 +20,22 @@ export function splitPayment(amountCents: number, feePercent: number, employerPe
 }
 
 export interface ListingRequirement {
-  key: "published" | "score" | "ownership" | "employer";
+  key: "confidential" | "published" | "score" | "ownership" | "employer";
   label: string;
   met: boolean;
+}
+
+/**
+ * Why a skill that's part of a company role can't be listed: company know-how
+ * is confidential to the company (see lib/teams).
+ */
+export function confidentialListingMessage(orgName: string): string {
+  return `This skill is part of your job at ${orgName}. Company know-how stays confidential, so it can't be listed on the marketplace. To list it, it must first be detached from your role there.`;
+}
+
+/** Throws the clear message when the skill is company know-how. */
+export function assertListable(confidentialTo: string | null | undefined) {
+  if (confidentialTo) throw new Error(confidentialListingMessage(confidentialTo));
 }
 
 /** What a skill needs before its listing can go live. */
@@ -33,7 +46,18 @@ export function listingRequirements(input: {
   minScore: number;
   /** Set for employee listings: whether the employer has approved. */
   employerApproved?: boolean;
+  /** The organisation the skill is confidential to, when it's part of a company role. */
+  confidentialTo?: string | null;
 }): ListingRequirement[] {
+  const confidential: ListingRequirement[] = input.confidentialTo
+    ? [
+        {
+          key: "confidential",
+          label: confidentialListingMessage(input.confidentialTo),
+          met: false,
+        },
+      ]
+    : [];
   const employer: ListingRequirement[] =
     input.employerApproved === undefined
       ? []
@@ -45,6 +69,7 @@ export function listingRequirements(input: {
           },
         ];
   return [
+    ...confidential,
     ...employer,
     {
       key: "published",

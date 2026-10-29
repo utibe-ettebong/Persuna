@@ -17,6 +17,12 @@ import {
   mockProposalFit,
   mockWrapup,
 } from "./mock-projects";
+import {
+  mockOnboardingAsk,
+  mockOnboardingGrade,
+  mockOnboardingPlan,
+  mockPlaybook,
+} from "./mock-teams";
 
 export const MOCK_MODEL = "mock";
 
@@ -27,7 +33,15 @@ export function createMockClient(): ModelClient {
       const user = lastUser ? textOf(lastUser.content) : "";
       const system = textOf(messages.find((m) => m.role === "system")?.content ?? "");
       let text: string;
-      if (user.includes("<project_brief>")) text = JSON.stringify(mockProjectPlan(user));
+      // Team prompts first: their tagged blocks hold company material that may contain any text.
+      if (user.includes("<role_playbook_skills>")) text = JSON.stringify(mockPlaybook(user));
+      else if (user.includes("<onboarding_playbook>"))
+        text = JSON.stringify(mockOnboardingPlan(user));
+      else if (user.includes("<onboarding_answers>"))
+        text = JSON.stringify(mockOnboardingGrade(user));
+      else if (user.includes("<onboarding_question>"))
+        text = JSON.stringify(mockOnboardingAsk(user));
+      else if (user.includes("<project_brief>")) text = JSON.stringify(mockProjectPlan(user));
       else if (user.includes("<proposal_fit>")) text = JSON.stringify(mockProposalFit(user));
       else if (user.includes("<milestone_delivery>"))
         text = JSON.stringify(mockMilestoneCheck(user));
@@ -97,6 +111,7 @@ interface MockPersonaState {
   pendingSwitch?: { slug: string; name: string } | null;
   skills: { slug: string; name: string; published: boolean }[];
   lastAsked: string | null;
+  onboarding?: { org: string; role: string; next: string | null } | null;
 }
 
 /** Stand-in for Persona's chat. A "short" tone keeps only the first sentence, as asked. */
@@ -118,6 +133,16 @@ function mockPersonaTurn(user: string): {
   const state = JSON.parse(blocks(user, "persona_state")[0] ?? "{}") as MockPersonaState;
   const text = blocks(user, "persona_user")[0] ?? "";
   const lower = text.toLowerCase();
+  // A new hire asking about their onboarding.
+  if (state.onboarding && /\b(onboarding|what'?s next|next module|new job)\b/.test(lower)) {
+    const { org, role, next } = state.onboarding;
+    return {
+      reply: next
+        ? `You're onboarding as ${role} at ${org}; next: ${next}.`
+        : `You've finished your onboarding as ${role} at ${org}. Nice work.`,
+      actions: [],
+    };
+  }
   // Persona Desktop sent the list of what's on screen: "where's X" points at the matching entry.
   const screen = blocks(user, "persona_screen")[0];
   const where = /\b(?:where(?:'s| is)|point (?:at|to)|show me)\s+(?:the\s+)?(.+?)[?.!]*$/i.exec(

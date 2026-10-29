@@ -66,6 +66,9 @@ import {
 import type { Flow, PersonaReply, PersonaState } from "./types";
 import { createLocator } from "@/lib/models/sam";
 import { samSpot, sceneIsThin, spotOf, wantsPicture, type Scene, type Spot } from "./scene";
+import { confidentialSkills } from "@/lib/teams/confidential";
+import { withoutConfidential } from "@/lib/teams/rules";
+import { activeOnboardingNote } from "@/lib/teams/service";
 
 /** What Persona may see with a message: the list of the screen, and a screenshot. */
 export interface Sight {
@@ -219,6 +222,7 @@ async function stateFor(userId: string, clock: Clock): Promise<PersonaState> {
       const other = owned.find((s) => s.slug === last.askedKey!.slice(SWITCH.length));
       return other ? { slug: other.slug, name: other.name } : null;
     })(),
+    onboarding: await activeOnboardingNote(userId),
   };
 }
 
@@ -1316,7 +1320,7 @@ export async function publicProfile(handle: string) {
   const owner = await db().query.authUsers.findFirst({
     where: eq(schema.authUsers.id, profile.userId),
   });
-  const listed = await db()
+  const live = await db()
     .select({ skill: skills, listing: listings })
     .from(listings)
     .innerJoin(skills, eq(listings.skillId, skills.id))
@@ -1327,6 +1331,12 @@ export async function publicProfile(handle: string) {
         eq(listings.visibility, "public"),
       ),
     );
+  // Company know-how never appears on a public profile.
+  const listed = withoutConfidential(
+    live,
+    (l) => l.skill.id,
+    await confidentialSkills(live.map((l) => l.skill.id)),
+  );
   const skillIds = listed.map((l) => l.skill.id);
   const since = new Date(Date.now() - 30 * 86_400_000);
   const renterJobs = skillIds.length

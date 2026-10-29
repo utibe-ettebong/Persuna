@@ -18,8 +18,11 @@ import { createPaystack, paymentMatches } from "@/lib/payments/paystack";
 import { NotFoundError, publishedScore } from "@/lib/skill/service";
 import { normalizeText } from "@/lib/text";
 import { browse, typeOptions, type BrowseQuery } from "./browse";
+import { confidentialSkills, confidentialTo } from "@/lib/teams/confidential";
+import { withoutConfidential } from "@/lib/teams/rules";
 import {
   MAX_REVISIONS,
+  assertListable,
   isVerified,
   listingRequirements,
   ratingSummary,
@@ -51,6 +54,7 @@ export async function getListingForSkill(skillId: string) {
 }
 
 export async function saveListing(skillId: string, input: ListingInput) {
+  assertListable(await confidentialTo(skillId));
   const existing = await getListingForSkill(skillId);
   const ownershipDeclaredAt = input.declareOwnership
     ? (existing?.ownershipDeclaredAt ?? new Date())
@@ -142,6 +146,7 @@ export async function readiness(skillId: string) {
   const listing = await getListingForSkill(skillId);
   const score = await publishedScore(skill);
   const requirements = listingRequirements({
+    confidentialTo: await confidentialTo(skillId),
     hasPublishedVersion: Boolean(skill.publishedVersionId),
     publishedScore: score,
     ownershipDeclared: Boolean(listing?.ownershipDeclaredAt),
@@ -277,7 +282,9 @@ export async function browseListings(query: BrowseQuery) {
     .innerJoin(skills, eq(listings.skillId, skills.id))
     .where(and(eq(listings.active, true), eq(listings.visibility, "public")))
     .orderBy(desc(listings.updatedAt));
-  const all = (await withMarketFacts(rows)).filter((r) => r.verified);
+  const confidential = await confidentialSkills(rows.map((r) => r.skill.id));
+  const open = withoutConfidential(rows, (r) => r.skill.id, confidential);
+  const all = (await withMarketFacts(open)).filter((r) => r.verified);
   const asItem = (r: MarketListing) => ({
     ...r,
     title: r.listing.title,
@@ -301,7 +308,10 @@ export async function getActiveListing(listingId: string) {
     .from(listings)
     .innerJoin(skills, eq(listings.skillId, skills.id))
     .where(and(eq(listings.id, listingId), eq(listings.active, true)));
-  if (!row) throw new NotFoundError("This listing isn't available");
+  // Company know-how is never shown, even by link.
+  if (!row || (await confidentialTo(row.skill.id))) {
+    throw new NotFoundError("This listing isn't available");
+  }
   const [facts] = await withMarketFacts([row]);
   const reviews = await db()
     .select({

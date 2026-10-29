@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { INTERVIEW_QUESTIONS, type InterviewKey } from "@/lib/skill/interview";
+import type { OnboardingNote } from "@/lib/teams/types";
 import type { Tone } from "./tone";
 
 const interviewKey = z.enum(
@@ -217,6 +218,8 @@ export interface PersonaState {
   lastAsked: InterviewKey | null;
   /** The skill Persona just offered to switch to (it asked "switch?"), if any. */
   pendingSwitch: { slug: string; name: string } | null;
+  /** A company onboarding they're working through, if any: role, company, next module. */
+  onboarding?: OnboardingNote | null;
 }
 
 export interface PersonaTurn {
