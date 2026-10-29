@@ -1892,6 +1892,8 @@ export function Companion(props: CompanionProps) {
     // The island grows from the notch: wider while it's doing something, and
     // down into a card for a reply, an error or Persuna itself.
     const grown = (panel && setupDone) || Boolean(caption) || Boolean(error);
+    // Taller than the one strip: something shows in a row below it.
+    const tall = grown || Boolean(need) || (island.notch && active);
     const wide = Math.min(480, Math.round(window.innerWidth * 0.94));
     const width = grown
       ? wide
@@ -2023,18 +2025,27 @@ export function Companion(props: CompanionProps) {
         {/* The island: on the notch (or hanging from the top centre), solid black.
             Click it for Persuna, right-click for more, drop a file on it. */}
         <div
-          style={{ width }}
+          style={{
+            width,
+            // Like the notch it sits on: tight corners while it's a strip,
+            // rounder only once it has grown down into a card.
+            borderBottomLeftRadius: tall ? 22 : 11,
+            borderBottomRightRadius: tall ? 22 : 11,
+          }}
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
             pickFile(e.dataTransfer.files?.[0]);
           }}
-          className={`pointer-events-auto overflow-hidden rounded-b-[26px] bg-black text-white transition-[width] duration-300 ease-out ${
+          className={`island pointer-events-auto relative bg-black text-white transition-[width,border-radius] duration-300 ease-out ${
             holding
               ? "shadow-[0_8px_30px_-6px_rgba(139,92,246,0.8)]"
               : "shadow-[0_10px_30px_-12px_rgba(0,0,0,0.7)]"
           }`}
         >
+          {/* The notch's shoulders: it flares into the menu bar instead of hanging below it. */}
+          <span aria-hidden className="island-shoulder island-shoulder-left" />
+          <span aria-hidden className="island-shoulder island-shoulder-right" />
           <button
             type="button"
             aria-label={`${name}: ${panel ? "close" : "open"} (${barStatus})`}

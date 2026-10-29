@@ -250,6 +250,26 @@ textarea.outline-none:focus-visible {
   color: var(--foreground);
 }
 
+/*
+ * The island's top corners curve outwards into the menu bar, like the
+ * MacBook notch's, so it reads as part of the screen's edge.
+ */
+.island-shoulder {
+  position: absolute;
+  top: 0;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+}
+.island-shoulder-left {
+  left: -10px;
+  background: radial-gradient(circle at 0 100%, transparent 10px, #000 10.5px);
+}
+.island-shoulder-right {
+  right: -10px;
+  background: radial-gradient(circle at 100% 100%, transparent 10px, #000 10.5px);
+}
+
 .persona-drag {
   -webkit-app-region: drag;
 }
