@@ -48,6 +48,8 @@ export const ownerType = pgEnum("owner_type", ["freelancer", "employee", "organi
 export const employerDecision = pgEnum("employer_decision", ["pending", "approved", "declined"]);
 export const escrowStatus = pgEnum("escrow_status", ["pending", "held", "released", "refunded"]);
 export const paymentProvider = pgEnum("payment_provider", ["mock", "paystack"]);
+/** public: in the marketplace and on the owner's profile. unlisted: only people with the link. */
+export const listingVisibility = pgEnum("listing_visibility", ["public", "unlisted"]);
 
 /* ---------- Accounts (Better Auth). Columns follow Better Auth's core schema. ---------- */
 
@@ -332,6 +334,10 @@ export const listings = pgTable(
     employerDecision: employerDecision("employer_decision"),
     employerDecidedAt: timestamp("employer_decided_at", { withTimezone: true }),
     active: boolean("active").notNull().default(false),
+    visibility: listingVisibility("visibility").notNull().default("public"),
+    /** Set when Persuna took the listing down by itself (e.g. its score fell below the minimum). */
+    pausedAt: timestamp("paused_at", { withTimezone: true }),
+    pausedReason: text("paused_reason"),
     createdAt: createdAt(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -374,9 +380,16 @@ export const transactions = pgTable(
     status: escrowStatus("status").notNull().default("held"),
     createdAt: createdAt(),
     settledAt: timestamp("settled_at", { withTimezone: true }),
+    /**
+     * The renter's rating when they accepted, copied from the job so the
+     * listing's reviews outlive the job's retention period.
+     */
+    rating: integer("rating"),
+    ratingComment: text("rating_comment"),
   },
   (t) => [
     check("amount_cents_positive", sql`${t.amountCents} > 0`),
+    check("txn_rating_range", sql`${t.rating} is null or ${t.rating} between 1 and 5`),
     check("currency_known", sql`${t.currency} in ('USD', 'NGN')`),
   ],
 );

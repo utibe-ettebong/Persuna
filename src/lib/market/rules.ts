@@ -88,3 +88,42 @@ export function revisionAllowed(order: {
     };
   return { ok: true };
 }
+
+/* ---------- Persuna Verified ---------- */
+
+/** What Persuna checked: the published version's latest test run on held-back examples. */
+export interface Verification {
+  score: number;
+  /** Held-back examples the score was measured on. */
+  examples: number;
+  verifiedAt: Date;
+  version: number;
+}
+
+/** "Persuna Verified": tested on at least one held-back example and scoring at least the minimum. */
+export function isVerified(v: Verification | null, minScore: number): v is Verification {
+  return v !== null && v.examples > 0 && v.score >= minScore;
+}
+
+/**
+ * A live listing is paused when its published version no longer meets the
+ * listing minimum (a lower-scoring version was published, or a re-test scored lower).
+ */
+export function shouldPauseListing(active: boolean, score: number | null, minScore: number) {
+  return active && (score === null || score < minScore);
+}
+
+/* ---------- Ratings ---------- */
+
+export function ratingSummary(ratings: number[]) {
+  const valid = ratings.filter((r) => Number.isInteger(r) && r >= 1 && r <= 5);
+  const stars = [1, 2, 3, 4, 5].map((n) => valid.filter((r) => r === n).length);
+  return {
+    count: valid.length,
+    average: valid.length
+      ? Math.round((valid.reduce((a, b) => a + b, 0) / valid.length) * 10) / 10
+      : null,
+    /** How many ratings gave 1, 2, 3, 4 and 5 stars. */
+    stars,
+  };
+}

@@ -35,6 +35,7 @@ const listingForm = z.object({
     .transform((v) => v ?? null),
   employerName: z.string().trim().max(120).optional(),
   employerEmail: z.union([z.literal(""), z.email("Enter a valid employer email")]).optional(),
+  visibility: z.enum(["public", "unlisted"]).default("public"),
 });
 
 export async function saveListingAction(_: ActionState, form: FormData): Promise<ActionState> {

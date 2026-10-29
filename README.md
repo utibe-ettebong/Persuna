@@ -77,6 +77,9 @@ The design follows a framed, rule-drawn system: an off-white page inside vertica
 - When the result arrives they can **ask for changes** in plain words ("put the action items in a table", "fix the date in item 3"), up to 2 rounds (`MAX_REVISIONS`). Persuna revises the version they saw, keeping the rest, and checks every statement against the input and their request. The new version goes through the same review gate (the owner sees the request and the earlier version), and the payment stays held until the renter accepts.
 - Earlier versions and the requests made against them stay on the order for both sides, and are deleted with the job after the retention period.
 
+- **The marketplace is public.** Anyone can browse `/market` and open a listing; renting needs an account (signed-out visitors are sent to sign in and come back to the listing). Search, filter (output type, price range, minimum score, turnaround) and sort (best score, most rented, top rated, price, newest) live in the URL, so results can be shared. Listing pages carry Open Graph metadata. Owners choose **public** (in the marketplace and on their profile) or **unlisted** (link only, not indexed).
+- **Persuna Verified:** each card and listing shows the published version's score on held-back examples, how many examples, and when it was last verified. It is re-checked on every publish and every re-test of the published version, and a live listing whose score drops below `LISTING_MIN_SCORE` is **paused automatically** (audited as `listing.paused`); the owner puts it live again once a qualifying version is published.
+- Listing pages also show a **fair-deal guarantee** (escrow, review, revisions, refunds) and a **ratings summary** with recent reviews. Ratings are copied onto the payment record when a renter accepts, so they outlive the job's retention period.
 - **Prices are in US dollars**, held as integer cents everywhere (`src/lib/money.ts`). Payments made in naira before the switch keep their naira amounts and are shown in naira on the Earnings page.
 - A listing has a price, turnaround, sample output, owner type and an ownership declaration. It can only go live with a published version that scores at least `LISTING_MIN_SCORE` (80 by default) and with ownership declared.
 - **Employer approval:** an employee listing names their employer and gets a private approval link (`/approvals/<token>`, open without the app password). The employer approves and sets their share of earnings, or declines. The listing can't go live until approved, and changing the employer starts the approval again.
@@ -134,7 +137,8 @@ src/lib/docs/                    .docx export and .md/.txt/.docx upload reading
 src/lib/models/gateway.ts        live model client: retries, timeouts, usage tracking
 src/lib/models/mock.ts           offline mock models
 src/app/actions/                 server actions (skills, jobs, market)
-src/app/(site)/                  public pages: landing, employer approvals
+src/app/(site)/                  public pages: landing, employer approvals, persona profiles
+src/app/(open)/                  open to everyone, framed as studio when signed in: marketplace, projects board
 src/app/(studio)/                studio pages: skills, examples, rules, runs, corrections, jobs, market, earnings, audit
 src/lib/auth/                    accounts (Better Auth), sessions, ownership checks
 src/proxy.ts                     sends signed-out visitors to /sign-in

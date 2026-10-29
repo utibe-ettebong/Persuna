@@ -9,6 +9,12 @@ const PUBLIC = [
   /^\/sign-(in|up)$/,
   /^\/approvals\//,
   /^\/personas\//,
+  // The marketplace and the projects board are open to browse. Renting,
+  // posting and proposing need an account (the pages and actions check).
+  /^\/market$/,
+  /^\/market\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+  /^\/projects$/,
+  /^\/projects\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
   /^\/api\/auth\//,
   // Persona Desktop's setup window, which starts signed out, and its sign-in hand-off.
   /^\/desktop\/setup$/,
@@ -35,8 +41,9 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   // Skips the healthcheck, the Paystack webhook (signature-checked), the voice
-  // agent's brain (checked by shared secret and signed session) and static assets.
+  // agent's brain (checked by shared secret and signed session), the agent
+  // import API (checked by agent key) and static assets.
   matcher: [
-    "/((?!api/health|api/webhooks/paystack|api/persona/llm|_next/static|_next/image|favicon.ico).*)",
+    "/((?!api/health|api/webhooks/paystack|api/persona/llm|api/agents/|_next/static|_next/image|favicon.ico).*)",
   ],
 };

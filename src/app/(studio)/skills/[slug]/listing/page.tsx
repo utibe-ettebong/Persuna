@@ -93,6 +93,16 @@ export default async function ListingPage({ params }: Params) {
                 />
               </Field>
             </div>
+            <Field label="Who can find it">
+              <select
+                name="visibility"
+                defaultValue={listing?.visibility ?? "public"}
+                className={inputClass}
+              >
+                <option value="public">Public: in the marketplace and on your profile</option>
+                <option value="unlisted">Unlisted: only people you send the link to</option>
+              </select>
+            </Field>
             <Field label="Sample output" hint="anonymised; shown on the listing">
               <textarea
                 name="sampleOutput"
@@ -180,8 +190,24 @@ export default async function ListingPage({ params }: Params) {
               <div className="mt-4 border-t border-line pt-4">
                 <p className="mb-3 flex items-center gap-2">
                   Status:{" "}
-                  {listing.active ? <Badge tone="good">live</Badge> : <Badge>not listed</Badge>}
+                  {listing.active ? (
+                    <Badge tone="good">
+                      live{listing.visibility === "unlisted" && ", unlisted"}
+                    </Badge>
+                  ) : listing.pausedAt ? (
+                    <Badge tone="warn">paused by Persuna</Badge>
+                  ) : (
+                    <Badge>not listed</Badge>
+                  )}
                 </p>
+                {!listing.active && listing.pausedReason === "score_below_minimum" && (
+                  <p className="mb-3 text-muted">
+                    Persuna paused this listing on{" "}
+                    {listing.pausedAt?.toLocaleDateString("en-GB", { dateStyle: "medium" })} because
+                    the published version scored below the listing minimum. Improve the skill,
+                    publish a version that scores enough, then put it live again.
+                  </p>
+                )}
                 <ActionForm
                   action={toggleListingAction}
                   pendingLabel="…"

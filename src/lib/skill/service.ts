@@ -8,6 +8,7 @@ import { db, schema } from "@/db/client";
 import type { Example, SkillVersion } from "@/db/schema";
 import { env } from "@/env";
 import { audit, type Actor } from "@/lib/audit";
+import { enforceListingScore } from "@/lib/market/verification";
 import type { ModelClient } from "@/lib/models/gateway";
 import { normalizeText } from "@/lib/text";
 import {
@@ -363,6 +364,8 @@ export async function runEval(client: ModelClient, versionId: string) {
       skillId: version.skillId,
       details: { version: version.version, score: done.meanScore, cases: results.length },
     });
+    // A re-test of the published version can drop a live listing below the minimum.
+    await enforceListingScore(version.skillId);
     return done;
   } catch (error) {
     await db()
@@ -607,6 +610,8 @@ export async function publishVersion(skillId: string, versionId: string, confirm
       tx,
     );
   });
+  // Re-verify the listing against the newly published version; pause it if it no longer qualifies.
+  await enforceListingScore(skillId);
 }
 
 /** Points the working version back at an earlier one. Versions themselves never change. */

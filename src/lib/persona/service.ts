@@ -1111,7 +1111,13 @@ export async function publicProfile(handle: string) {
     .select({ skill: skills, listing: listings })
     .from(listings)
     .innerJoin(skills, eq(listings.skillId, skills.id))
-    .where(and(eq(skills.ownerId, profile.userId), eq(listings.active, true)));
+    .where(
+      and(
+        eq(skills.ownerId, profile.userId),
+        eq(listings.active, true),
+        eq(listings.visibility, "public"),
+      ),
+    );
   const skillIds = listed.map((l) => l.skill.id);
   const since = new Date(Date.now() - 30 * 86_400_000);
   const renterJobs = skillIds.length

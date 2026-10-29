@@ -8,7 +8,7 @@
  * owners are recorded here and settled from the Paystack dashboard.
  */
 import { randomBytes } from "node:crypto";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import { env, paystackConfig } from "@/env";
 import { audit } from "@/lib/audit";
@@ -17,7 +17,16 @@ import type { ModelClient } from "@/lib/models/gateway";
 import { createPaystack, paymentMatches } from "@/lib/payments/paystack";
 import { NotFoundError, publishedScore } from "@/lib/skill/service";
 import { normalizeText } from "@/lib/text";
-import { MAX_REVISIONS, listingRequirements, revisionAllowed, splitPayment } from "./rules";
+import { browse, typeOptions, type BrowseQuery } from "./browse";
+import {
+  MAX_REVISIONS,
+  isVerified,
+  listingRequirements,
+  ratingSummary,
+  revisionAllowed,
+  splitPayment,
+} from "./rules";
+import { verificationFor } from "./verification";
 
 const { listings, skills, jobs, transactions } = schema;
 
@@ -33,6 +42,8 @@ export interface ListingInput {
   premiumReviewCents?: number | null;
   employerName?: string;
   employerEmail?: string;
+  /** public (default): in the marketplace. unlisted: only people with the link. */
+  visibility?: "public" | "unlisted";
 }
 
 export async function getListingForSkill(skillId: string) {
@@ -91,6 +102,7 @@ export async function saveListing(skillId: string, input: ListingInput) {
     ownerType: input.ownerType,
     ownershipDeclaredAt,
     premiumReviewCents: input.premiumReviewCents ?? null,
+    visibility: input.visibility ?? existing?.visibility ?? "public",
     ...employer,
     updatedAt: new Date(),
   };
@@ -114,6 +126,7 @@ export async function saveListing(skillId: string, input: ListingInput) {
     skillId,
     details: {
       priceCents: row.priceCents,
+      visibility: row.visibility,
       ownerType: row.ownerType,
       ownershipDeclared: Boolean(ownershipDeclaredAt),
       employerApprovalRequested:
@@ -145,7 +158,11 @@ export async function setListingActive(skillId: string, active: boolean) {
   if (active && !ready) throw new Error("The listing doesn't meet every requirement yet");
   await db()
     .update(listings)
-    .set({ active, updatedAt: new Date() })
+    .set({
+      active,
+      updatedAt: new Date(),
+      ...(active ? { pausedAt: null, pausedReason: null } : {}),
+    })
     .where(eq(listings.id, listing.id));
   await audit({
     actor: "owner",
@@ -205,16 +222,79 @@ export async function decideEmployerRequest(
 
 /* ---------- Browsing ---------- */
 
-export async function listActiveListings() {
+type ListingRow = { listing: typeof listings.$inferSelect; skill: typeof skills.$inferSelect };
+
+/** Paid rentals and ratings per listing, from the payment records (they outlive jobs). */
+async function marketStats(listingIds: string[]) {
+  if (!listingIds.length) return new Map<string, { rentals: number; ratings: number[] }>();
+  const rows = await db()
+    .select({
+      listingId: transactions.listingId,
+      status: transactions.status,
+      rating: transactions.rating,
+    })
+    .from(transactions)
+    .where(inArray(transactions.listingId, listingIds));
+  const stats = new Map<string, { rentals: number; ratings: number[] }>();
+  for (const r of rows) {
+    const s = stats.get(r.listingId) ?? { rentals: 0, ratings: [] };
+    if (r.status === "held" || r.status === "released") s.rentals += 1;
+    if (r.rating !== null) s.ratings.push(r.rating);
+    stats.set(r.listingId, s);
+  }
+  return stats;
+}
+
+async function withMarketFacts(rows: ListingRow[]) {
+  const stats = await marketStats(rows.map((r) => r.listing.id));
+  const minScore = env().LISTING_MIN_SCORE;
+  return Promise.all(
+    rows.map(async (r) => {
+      const verification = await verificationFor(r.skill.publishedVersionId);
+      const s = stats.get(r.listing.id) ?? { rentals: 0, ratings: [] };
+      return {
+        ...r,
+        verification,
+        verified: isVerified(verification, minScore),
+        score: verification?.score ?? null,
+        rentals: s.rentals,
+        ratings: ratingSummary(s.ratings),
+      };
+    }),
+  );
+}
+
+export type MarketListing = Awaited<ReturnType<typeof withMarketFacts>>[number];
+
+/**
+ * Live public listings that still meet the minimum score, searched, filtered
+ * and sorted. Unlisted listings never appear here: only their link opens them.
+ */
+export async function browseListings(query: BrowseQuery) {
   const rows = await db()
     .select({ listing: listings, skill: skills })
     .from(listings)
     .innerJoin(skills, eq(listings.skillId, skills.id))
-    .where(eq(listings.active, true))
+    .where(and(eq(listings.active, true), eq(listings.visibility, "public")))
     .orderBy(desc(listings.updatedAt));
-  return Promise.all(rows.map(async (r) => ({ ...r, score: await publishedScore(r.skill) })));
+  const all = (await withMarketFacts(rows)).filter((r) => r.verified);
+  const asItem = (r: MarketListing) => ({
+    ...r,
+    title: r.listing.title,
+    description: r.listing.description,
+    skillName: r.skill.name,
+    inputType: r.skill.inputType,
+    outputType: r.skill.outputType,
+    priceCents: r.listing.priceCents,
+    turnaroundHours: r.listing.turnaroundHours,
+    rating: r.ratings.average,
+    updatedAt: r.listing.updatedAt,
+  });
+  const items = all.map(asItem);
+  return { results: browse(items, query), total: items.length, types: typeOptions(items) };
 }
 
+/** A live listing, public or unlisted, with its verification, ratings and recent reviews. */
 export async function getActiveListing(listingId: string) {
   const [row] = await db()
     .select({ listing: listings, skill: skills })
@@ -222,7 +302,28 @@ export async function getActiveListing(listingId: string) {
     .innerJoin(skills, eq(listings.skillId, skills.id))
     .where(and(eq(listings.id, listingId), eq(listings.active, true)));
   if (!row) throw new NotFoundError("This listing isn't available");
-  return { ...row, score: await publishedScore(row.skill) };
+  const [facts] = await withMarketFacts([row]);
+  const reviews = await db()
+    .select({
+      rating: transactions.rating,
+      comment: transactions.ratingComment,
+      renterName: transactions.renterName,
+      at: transactions.settledAt,
+    })
+    .from(transactions)
+    .where(and(eq(transactions.listingId, listingId), isNotNull(transactions.rating)))
+    .orderBy(desc(transactions.settledAt))
+    .limit(8);
+  return {
+    ...facts,
+    reviews: reviews.map((r) => ({
+      rating: r.rating!,
+      comment: r.comment,
+      // First name only: renters are never fully named in public.
+      renter: r.renterName.split(/\s+/)[0] || "A renter",
+      at: r.at,
+    })),
+  };
 }
 
 /* ---------- Renting and payment ---------- */
@@ -444,7 +545,12 @@ export async function acceptOrder(jobId: string, rating: number, comment: string
     if (!job) throw new Error("Only delivered orders can be accepted");
     const [txn] = await tx
       .update(transactions)
-      .set({ status: "released", settledAt: new Date() })
+      .set({
+        status: "released",
+        settledAt: new Date(),
+        rating,
+        ratingComment: comment.trim().slice(0, 1000) || null,
+      })
       .where(and(eq(transactions.jobId, jobId), eq(transactions.status, "held")))
       .returning({
         id: transactions.id,
