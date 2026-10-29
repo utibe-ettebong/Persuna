@@ -280,3 +280,25 @@ describe("tasks in connected apps", () => {
     }
   });
 });
+
+describe("seeing the screen", () => {
+  it("sends a typed turn with a screenshot to the seeing model, with the image attached", async () => {
+    const calls: { role: string; content: unknown }[] = [];
+    const client: ModelClient = {
+      async complete(role, messages) {
+        calls.push({ role, content: messages.at(-1)?.content });
+        const reply = { reply: "That's your inbox.", actions: [] };
+        return { text: JSON.stringify(reply), model: "fake", promptTokens: 0, completionTokens: 0 };
+      },
+    };
+    await personaTurn(client, state(), [], "What's on my screen?", "data:image/jpeg;base64,AAAA");
+    await personaTurn(client, state(), [], "Hello");
+    expect(calls[0].role).toBe("listen");
+    expect(calls[0].content).toEqual(
+      expect.arrayContaining([
+        { type: "image_url", image_url: { url: "data:image/jpeg;base64,AAAA" } },
+      ]),
+    );
+    expect(calls[1].role).toBe("draft");
+  });
+});

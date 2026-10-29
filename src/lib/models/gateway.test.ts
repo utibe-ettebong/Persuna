@@ -156,6 +156,40 @@ describe("createGateway", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("sends a call to the DRAFT provider when Meta has no model at all, but never audio", async () => {
+    const meta = { ...config, baseUrl: "https://api.meta.ai/v1", model: "muse-spark-1.3" };
+    const backup = { ...config, baseUrl: "https://inference.baseten.co/v1", model: "open" };
+    const resolve = (role: string) => (role === "draft" ? backup : meta);
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.startsWith("https://api.meta.ai")
+        ? new Response('{"error":{"code":"model_not_found"}}', { status: 404 })
+        : ok(reply),
+    );
+    const client = createGateway(resolve as never, fetchImpl as unknown as typeof fetch);
+    const image = [
+      {
+        role: "user" as const,
+        content: [{ type: "image_url" as const, image_url: { url: "data:," } }],
+      },
+    ];
+    const pending = client.complete("extract", image);
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toMatchObject({ text: "hello" });
+    expect(fetchImpl.mock.calls.at(-1)![0]).toMatch(/^https:\/\/inference\.baseten\.co/);
+
+    const audio = [
+      {
+        role: "user" as const,
+        content: [
+          { type: "input_audio" as const, input_audio: { data: "x", format: "wav" as const } },
+        ],
+      },
+    ];
+    const spoken = client.complete("listen", audio).catch((e) => e);
+    await vi.runAllTimersAsync();
+    expect(await spoken).toMatchObject({ modelMissing: true });
+  });
+
   it("asks again without the reasoning setting when the fallback model refuses it", async () => {
     const missing = () => new Response('{"error":{"code":"model_not_found"}}', { status: 404 });
     const noMax = new Response(

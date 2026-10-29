@@ -13,6 +13,8 @@ const CHANGE_THRESHOLD = 6;
 
 export interface Watcher {
   stop(): void;
+  /** What the watched screen or window shows right now (a JPEG data URL). */
+  latest(): string | null;
 }
 
 /** What Persona Desktop offers: the screen or app chosen there, with no click needed. */
@@ -90,7 +92,7 @@ export async function startWatching(handlers: {
     handlers.onEnded();
   };
   stream.getVideoTracks()[0]?.addEventListener("ended", stop);
-  return { stop };
+  return { stop, latest: () => (stopped || !video.videoWidth ? null : frameOf(video)) };
 }
 
 function frameOf(video: HTMLVideoElement): string {

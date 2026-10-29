@@ -102,6 +102,27 @@ export function createGateway(
       try {
         return await callOnce(own, role, messages, options, fetchImpl);
       } catch (error) {
+        // Meta's API sometimes answers "model not found" for every model for a few
+        // minutes. Calls that don't carry audio go to the DRAFT provider meanwhile.
+        const backup = role === "draft" ? null : resolve("draft");
+        if (
+          error instanceof ModelError &&
+          error.modelMissing &&
+          backup &&
+          backup.baseUrl !== own.baseUrl &&
+          !hasAudio(messages)
+        ) {
+          console.warn(
+            `[models] ${own.baseUrl} has no model right now; using DRAFT_* for this ${role} call.`,
+          );
+          return callOnce(
+            { ...backup, reasoningEffort: undefined },
+            role,
+            messages,
+            options,
+            fetchImpl,
+          );
+        }
         if (!(error instanceof ModelError) || !error.keyRejected || !different) throw error;
         console.warn(
           `[models] ${role} key was rejected by ${own.baseUrl}; using EXTRACT_* for ${role} for the next ${REJECTED_KEY_COOLDOWN_MS / 60_000} minutes. Fix ${role.toUpperCase()}_API_KEY.`,
@@ -112,6 +133,9 @@ export function createGateway(
     },
   };
 }
+
+const hasAudio = (messages: ChatMessage[]) =>
+  messages.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === "input_audio"));
 
 async function callOnce(
   config: ModelRoleConfig,

@@ -93,11 +93,22 @@ type DesktopWindow = Window & {
     /** The desktop's call shortcut, which the user can change from the menu bar. */
     shortcut?(): Promise<string | null>;
     onShortcut?(handler: (label: string | null) => void): void;
+    /**
+     * A screenshot of the screen right now (Persuna itself left out), or null
+     * without Screen Recording. Taken as you speak or send, so it can see what you mean.
+     */
+    look?(): Promise<string | null>;
     /** Hold-to-talk from the desktop's key listener: start, end, cancel, or "type" (double tap). */
     onHold?(handler: (phase: "start" | "end" | "cancel" | "type") => void): void;
     /** The hold-to-talk key's label ("right ⌥"), or null when it's off or not allowed yet. */
     holdKey?(): Promise<string | null>;
     onHoldKey?(handler: (label: string | null) => void): void;
+    /** Tell the app watching started or stopped. */
+    watching?(on: boolean): void;
+    island?(): Promise<{ notch: boolean; height: number; notchWidth: number }>;
+    onIsland?(
+      handler: (shape: { notch: boolean; height: number; notchWidth: number }) => void,
+    ): void;
   };
 };
 /** Gap between Persona and the thing it perches beside. */
@@ -171,6 +182,9 @@ export function Companion(props: CompanionProps) {
   const [panel, setPanel] = useState(false);
   const [holding, setHolding] = useState(false);
   const [holdLabel, setHoldLabel] = useState<string | null>(null);
+  const [seeScreen, setSeeScreen] = useState(true);
+  // Persona Desktop's island: on the notch, or hanging from the top centre.
+  const [island, setIsland] = useState({ notch: false, height: 34, notchWidth: 0 });
   const holdRec = useRef<Promise<HoldRecording | null> | null>(null);
   const panelInput = useRef<HTMLInputElement | null>(null);
   const [setupLater, setSetupLater] = useState(false);
@@ -368,6 +382,7 @@ export function Companion(props: CompanionProps) {
       setSpot(overlayRef.current ? { x: 0, y: 0 } : start);
       setVoiceOn(stored("persona.voice", true));
       setAgentVoice(stored("persona.agentVoice", true));
+      setSeeScreen(stored("persona.seeScreen", true));
       setWakeOn(stored("persona.wake", false) && wakeWordSupported());
     });
     void personaCheckInAction(clock().day).then((res) => {
@@ -465,7 +480,7 @@ export function Companion(props: CompanionProps) {
       };
       setMessages((all) => [...all, pending]);
       setBusy("thinking");
-      const res = await personaChatAction(body, clock());
+      const res = await personaChatAction(body, clock(), await screenNow());
       setBusy("idle");
       if (!res.ok) {
         setMessages((all) => all.filter((m) => m.id !== pending.id));
@@ -543,6 +558,8 @@ export function Companion(props: CompanionProps) {
         }
         // Heard and answered in one go: no separate transcription.
         stopSpeaking();
+        const screen = await screenNow();
+        if (screen) form.append("screen", screen);
         const res = await personaVoiceAction(form, clock());
         setBusy("idle");
         if (!res.ok) return setError(res.error);
@@ -679,6 +696,19 @@ export function Companion(props: CompanionProps) {
     window.setTimeout(() => panelInput.current?.focus(), 50);
   }
 
+  /**
+   * What Persuna sees with your message: on the desktop, the screen as you
+   * speak or send (unless you've said not to look); on the web, the window it's
+   * watching, if any.
+   */
+  async function screenNow(): Promise<string | null> {
+    const desktop = (window as DesktopWindow).personaDesktop;
+    if (desktop?.look && stored("persona.seeScreen", true)) {
+      return desktop.look().catch(() => null);
+    }
+    return watcher.current?.latest() ?? null;
+  }
+
   /** Tap, shortcut or tray: stop Persuna talking, or start (or end) a conversation. */
   function call() {
     setMenu(false);
@@ -732,6 +762,8 @@ export function Companion(props: CompanionProps) {
       else openPanel();
     });
     void desktop?.holdKey?.().then(setHoldLabel);
+    void desktop?.island?.().then((shape) => shape && setIsland(shape));
+    desktop?.onIsland?.(setIsland);
     desktop?.onHoldKey?.(setHoldLabel);
     void desktop?.shortcut?.().then(setDesktopShortcut);
     desktop?.onShortcut?.(setDesktopShortcut);
@@ -1032,10 +1064,8 @@ export function Companion(props: CompanionProps) {
           count += 1;
           setLooks(count);
           const res = await personaObserveAction(frame, note);
-          if (!res.ok) {
-            setError(res.error);
-            return;
-          }
+          // A missed look isn't worth interrupting you for: keep watching, try the next one.
+          if (!res.ok) return;
           note = res.value.noteId;
           setWatchNote(note);
           // What's on screen isn't today's skill: ask once per watching session.
@@ -1059,6 +1089,7 @@ export function Companion(props: CompanionProps) {
         onEnded: () => {
           watcher.current = null;
           setWatching(false);
+          (window as DesktopWindow).personaDesktop?.watching?.(false);
           const line = note
             ? "I've stopped watching. I wrote the steps I saw into a note."
             : "I've stopped watching. Nothing new to note this time.";
@@ -1466,6 +1497,14 @@ export function Companion(props: CompanionProps) {
       onSelect: () => (watching ? watcher.current?.stop() : setAskWatch(true)),
     },
     {
+      label: seeScreen ? "Don't look at my screen when I talk" : "Look at my screen when I talk",
+      onSelect: () => {
+        setSeeScreen(!seeScreen);
+        store("persona.seeScreen", !seeScreen);
+      },
+      hidden: !props.overlay,
+    },
+    {
       label: voiceOn ? "Mute my voice" : "Talk out loud",
       onSelect: () => {
         const next = !voiceOn;
@@ -1510,53 +1549,96 @@ export function Companion(props: CompanionProps) {
           ? "Listening… let go when you're done"
           : status;
     const recent = messages.filter((m) => m.kind === "chat").slice(-2);
+    const active = holding || orbState !== "idle";
     const firstName = props.userName?.split(/\s+/)[0] ?? "";
     return (
       <section
         data-persona
         aria-label={`${name}, your assistant`}
-        className="pointer-events-none fixed inset-x-0 top-2 z-50 flex flex-col items-center gap-2"
+        className="pointer-events-none fixed inset-x-0 top-0 z-50 flex flex-col items-center gap-2"
       >
-        {/* The bar: Persuna and what it's doing. Click for the panel, right-click for more. */}
-        <div
-          className={`pointer-events-auto flex items-center gap-3 rounded-full py-1.5 pl-1.5 pr-5 ${glass} ring-accent/15 ${
-            holding ? "ring-2 ring-accent/50" : ""
-          }`}
+        {/* The island: on the notch (or hanging from the top centre). Persuna's orb on
+            one side, what it's doing on the other. Click for the panel, right-click for more. */}
+        <button
+          type="button"
+          aria-label={`${name}: ${panel ? "close" : "open"} (${barStatus})`}
+          aria-expanded={panel}
+          aria-haspopup="menu"
+          onClick={() => (talkingNow.current ? interrupt() : panel ? setPanel(false) : openPanel())}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setMenu((m) => !m);
+          }}
+          style={{
+            height: island.height,
+            width: island.notch ? island.notchWidth + 2 * (active ? 84 : 44) : undefined,
+          }}
+          className={`pointer-events-auto flex items-center justify-between gap-3 rounded-b-[20px] bg-[#0c0a12] px-2.5 text-white shadow-[0_8px_30px_-10px_rgba(80,40,140,0.55)] outline-none transition-[width,box-shadow] duration-300 ease-out focus-visible:ring-2 focus-visible:ring-accent ${
+            holding ? "shadow-[0_6px_28px_-4px_rgba(139,92,246,0.85)]" : ""
+          } ${island.notch ? "" : "min-w-56 pr-4"}`}
         >
-          <button
-            type="button"
-            aria-label={`${name}: ${panel ? "close" : "open"} (${barStatus})`}
-            aria-expanded={panel}
-            aria-haspopup="menu"
-            onClick={() =>
-              talkingNow.current ? interrupt() : panel ? setPanel(false) : openPanel()
-            }
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setMenu((m) => !m);
-            }}
-            className="flex items-center gap-3 rounded-full text-left outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            <PersonaOrb look={look} state={orbState} level={level} size={38} gaze={null} />
-            <span className="flex min-w-36 flex-col">
-              <span className="font-display text-sm font-medium leading-tight">{name}</span>
-              <span className="label-mono text-[10px] text-muted" role="status">
-                {barStatus}
-              </span>
-            </span>
-          </button>
-          {(holding || orbState === "listening") && (
-            <span aria-hidden className="flex h-5 items-center gap-[3px]">
-              {[0.5, 0.8, 1, 0.8, 0.5].map((w, i) => (
-                <span
-                  key={i}
-                  className="w-[3px] rounded-full bg-accent transition-[height] duration-75"
-                  style={{ height: `${Math.max(3, Math.min(20, level * 26 * w + 3))}px` }}
-                />
-              ))}
+          <span className="flex shrink-0 items-center">
+            <PersonaOrb
+              look={look}
+              state={orbState}
+              level={level}
+              size={Math.min(26, island.height - 8)}
+              gaze={null}
+              animate={orbState !== "sleeping"}
+            />
+          </span>
+          {!island.notch && (
+            <span
+              className="label-mono flex-1 truncate text-left text-[10px] text-white/70"
+              role="status"
+            >
+              {barStatus}
             </span>
           )}
-        </div>
+          {island.notch && (
+            <span className="sr-only" role="status">
+              {barStatus}
+            </span>
+          )}
+          <span aria-hidden className="flex h-4 shrink-0 items-center justify-end gap-[3px]">
+            {holding || orbState === "listening" ? (
+              [0.5, 0.8, 1, 0.8, 0.5].map((w, i) => (
+                <span
+                  key={i}
+                  className="w-[3px] rounded-full bg-[#b794ff] transition-[height] duration-75"
+                  style={{ height: `${Math.max(3, Math.min(16, level * 22 * w + 3))}px` }}
+                />
+              ))
+            ) : orbState === "thinking" ? (
+              [0, 1, 2].map((i) => (
+                <span
+                  key={i}
+                  className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#b794ff]"
+                  style={{ animationDelay: `${i * 160}ms` }}
+                />
+              ))
+            ) : orbState === "speaking" ? (
+              [0.6, 1, 0.7].map((w, i) => (
+                <span
+                  key={i}
+                  className="w-[3px] rounded-full bg-[#ffd27a] transition-[height] duration-75"
+                  style={{ height: `${Math.max(4, Math.min(16, level * 26 * w + 4))}px` }}
+                />
+              ))
+            ) : orbState === "watching" ? (
+              <span className="h-2 w-2 rounded-full bg-[#ff6b6b]" title="Watching" />
+            ) : (
+              <span className="h-1.5 w-1.5 rounded-full bg-white/25" />
+            )}
+          </span>
+        </button>
+
+        {/* On the notch the island has no room for words: say what's happening just below it. */}
+        {island.notch && active && !caption && (
+          <p className="persona-in label-mono rounded-full bg-card/90 px-3 py-1 text-[10px] text-muted shadow-sm backdrop-blur">
+            {barStatus}
+          </p>
+        )}
 
         {caption && (
           <button

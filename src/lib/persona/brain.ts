@@ -28,11 +28,14 @@ export async function personaTurn(
   state: PersonaState,
   history: PersonaTurn[],
   message: string | { audio: string },
+  /** What's on the user's screen right now (a data URL), when Persona may look. */
+  screen: string | null = null,
 ): Promise<PersonaReply> {
   const { value } = await completeJson(
     client,
-    typeof message === "string" ? "draft" : "listen",
-    personaChatMessages(state, history.slice(-HISTORY_TURNS), message),
+    // Hearing and seeing go to Meta's Muse Spark (the LISTEN role); plain text to the drafting model.
+    typeof message === "string" && !screen ? "draft" : "listen",
+    personaChatMessages(state, history.slice(-HISTORY_TURNS), message, screen),
     personaReply,
     // Room for "thinking" models to reason before the short reply.
     { maxTokens: 4096 },

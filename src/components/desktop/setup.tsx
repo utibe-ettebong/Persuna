@@ -1,7 +1,14 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import {
   personaIntroAction,
   personaSetupAction,
@@ -61,15 +68,47 @@ const useBridge = () => useSyncExternalStore(noSubscribe, bridge, () => null);
 
 type Step = "account" | "access" | "mic" | "talk" | "meet" | "about" | "first" | "ready";
 
-const STEP_TITLES: Record<Step, string> = {
-  account: "Your account",
-  access: "Permissions",
-  mic: "Your microphone",
-  talk: "Talking to me",
-  meet: "My name",
-  about: "About you",
-  first: "First skill",
-  ready: "Ready",
+const STEPS: Record<Step, { label: string; title: string; sub: string }> = {
+  account: {
+    label: "Sign in",
+    title: "Let's get you signed in",
+    sub: "Your skills, notes and memory stay with your PERSUNA account.",
+  },
+  access: {
+    label: "Permissions",
+    title: "Three permissions, each for a reason",
+    sub: "macOS asks for each one once. You can change them any time in System Settings.",
+  },
+  mic: {
+    label: "Microphone",
+    title: "Can I hear you?",
+    sub: "Say anything. The wave moves when your voice comes through.",
+  },
+  talk: {
+    label: "Talking",
+    title: "Hold, talk, let go",
+    sub: "That's how you talk to me, from any app.",
+  },
+  meet: {
+    label: "My name",
+    title: "Name me, and pick my look",
+    sub: "This is how I'll appear at the top of your screen.",
+  },
+  about: {
+    label: "About you",
+    title: "Four quick questions",
+    sub: "So I'm useful from the first day. Talk or type, whichever's easier.",
+  },
+  first: {
+    label: "First skill",
+    title: "One thing to learn your way",
+    sub: "I'll learn how you do it, from your examples and your answers.",
+  },
+  ready: {
+    label: "Ready",
+    title: "You're all set",
+    sub: "I'll be at the top of your screen, on the notch.",
+  },
 };
 
 export interface DesktopSetupProps {
@@ -80,8 +119,9 @@ export interface DesktopSetupProps {
 }
 
 /**
- * Persona Desktop's setup, in its own window. A returning user who has met
- * Persuna before only checks permissions and the mic.
+ * Persona Desktop's setup, in its own window: Persuna on a stage at the left
+ * (talking you through it), the step on the right. A returning user who has
+ * met Persuna before only checks permissions, the mic and the talk key.
  */
 export function DesktopSetup(props: DesktopSetupProps) {
   const met = props.persona?.setupDone ?? false;
@@ -98,7 +138,6 @@ export function DesktopSetup(props: DesktopSetupProps) {
   const next = () => setStep(steps[Math.min(at + 1, steps.length - 1)]);
   const back = at > 0 && step !== "ready" ? () => setStep(steps[at - 1]) : null;
 
-  // Shared by the steps: who Persuna is, and its voice.
   const [name, setName] = useState(props.persona?.name ?? "Persuna");
   const [look, setLook] = useState<LookId>(lookOf(props.persona?.avatar ?? "plum"));
   const [orb, setOrb] = useState<OrbState>("idle");
@@ -115,92 +154,148 @@ export function DesktopSetup(props: DesktopSetupProps) {
   }, []);
   useEffect(() => () => stopSpeaking(), []);
 
+  const copy = STEPS[step];
+  const voice = { say, setOrb, setLevel };
+
   return (
-    <main className="persona-backdrop flex min-h-screen flex-col px-8 pb-8 pt-9 text-foreground">
-      {/* Where you are, in words: no dots to count. */}
-      <header className="persona-drag flex items-center gap-3">
-        <span className="label-mono text-[10px] text-muted">
-          {at + 1} / {steps.length} · {STEP_TITLES[step]}
-        </span>
-        <span className="h-px flex-1 bg-line">
-          <span
-            className="block h-px bg-accent transition-[width] duration-500"
-            style={{ width: `${((at + 1) / steps.length) * 100}%` }}
-          />
-        </span>
-        {back && (
-          <button
-            type="button"
-            onClick={back}
-            className="label-mono text-[10px] text-muted hover:text-foreground"
-          >
-            Back
-          </button>
-        )}
-      </header>
-
-      <div className="mt-8 flex items-start gap-4">
-        <div className="shrink-0">
-          <PersonaOrb look={look} state={orb} level={level} size={72} />
-        </div>
-        <p className="min-h-[3.5rem] pt-3 font-display text-xl font-medium leading-snug tracking-[-0.02em]">
-          {line ?? ""}
-        </p>
-      </div>
-
-      <section className="mt-6 flex flex-1 flex-col">
-        {step === "account" && <AccountStep expired={props.signInExpired} say={say} />}
-        {step === "access" && <AccessStep say={say} onDone={next} />}
-        {step === "mic" && <MicStep say={say} setOrb={setOrb} setLevel={setLevel} onDone={next} />}
-        {step === "talk" && (
-          <TalkStep
-            say={say}
-            setOrb={setOrb}
-            setLevel={setLevel}
-            userName={props.user?.name ?? ""}
-            onDone={next}
-          />
-        )}
-        {step === "meet" && (
-          <MeetStep
-            say={say}
-            name={name}
-            look={look}
-            onName={setName}
-            onLook={setLook}
-            onDone={next}
-          />
-        )}
-        {step === "about" && (
-          <AboutStep
-            say={say}
-            setOrb={setOrb}
-            setLevel={setLevel}
-            onDone={(all) => {
-              setAnswers(all);
-              next();
+    <main className="grid min-h-screen grid-cols-[minmax(280px,34%)_1fr] bg-[#faf8fc] text-foreground">
+      {/* The stage: Persuna, what it's saying, and where you are. */}
+      <aside className="persona-drag relative flex flex-col overflow-hidden bg-[linear-gradient(160deg,#1d1131_0%,#2c1650_55%,#43206d_100%)] px-7 pb-7 pt-14 text-white">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -left-24 top-10 h-72 w-72 rounded-full bg-[#8b5cf6]/25 blur-3xl"
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -right-20 bottom-24 h-64 w-64 rounded-full bg-[#ec8fd8]/15 blur-3xl"
+        />
+        <div className="relative flex flex-col items-center text-center">
+          <div
+            className="rounded-full transition-[box-shadow] duration-300"
+            style={{
+              boxShadow: `0 0 ${30 + level * 70}px ${6 + level * 20}px rgba(167,120,255,${0.18 + level * 0.35})`,
             }}
-          />
-        )}
-        {step === "first" && (
-          <FirstSkillStep
-            say={say}
-            name={name}
-            look={look}
-            skills={props.skills}
-            timeSink={answers.timeSink}
-            onDone={next}
-          />
-        )}
-        {step === "ready" && <ReadyStep say={say} name={name} />}
+          >
+            <PersonaOrb look={look} state={orb} level={level} size={124} />
+          </div>
+          <p className="label-mono mt-5 text-[10px] text-white/50">{name}</p>
+          <p
+            aria-live="polite"
+            data-testid="persona-line"
+            className="mt-2 min-h-[5.5rem] font-display text-[19px] font-medium leading-snug tracking-[-0.01em] text-white/95"
+          >
+            {line ?? ""}
+          </p>
+        </div>
+        <ol className="relative mt-auto space-y-2.5 pt-6">
+          {steps.map((s, i) => (
+            <li key={s} className="flex items-center gap-3 text-sm">
+              <span
+                className={`grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] ${
+                  i < at
+                    ? "bg-[#b794ff] text-[#1d1131]"
+                    : i === at
+                      ? "text-white ring-2 ring-[#b794ff]"
+                      : "text-white/40 ring-1 ring-white/25"
+                }`}
+              >
+                {i < at ? "✓" : i + 1}
+              </span>
+              <span
+                aria-current={i === at ? "step" : undefined}
+                className={
+                  i === at ? "font-medium text-white" : i < at ? "text-white/70" : "text-white/40"
+                }
+              >
+                {STEPS[s].label}
+              </span>
+            </li>
+          ))}
+        </ol>
+      </aside>
+
+      {/* The step. */}
+      <section className="flex min-h-screen flex-col px-10 pb-8 pt-14">
+        <header className="persona-drag">
+          <h1 className="font-display text-[28px] font-medium leading-tight tracking-[-0.03em]">
+            {copy.title}
+          </h1>
+          <p className="mt-1.5 max-w-lg text-[15px] text-muted">{copy.sub}</p>
+        </header>
+        <div className="mt-7 flex flex-1 flex-col">
+          {step === "account" && <AccountStep expired={props.signInExpired} say={say} />}
+          {step === "access" && <AccessStep say={say} back={back} onDone={next} />}
+          {step === "mic" && <MicStep {...voice} back={back} onDone={next} />}
+          {step === "talk" && (
+            <TalkStep {...voice} userName={props.user?.name ?? ""} back={back} onDone={next} />
+          )}
+          {step === "meet" && (
+            <MeetStep
+              say={say}
+              name={name}
+              look={look}
+              onName={setName}
+              onLook={setLook}
+              back={back}
+              onDone={next}
+            />
+          )}
+          {step === "about" && (
+            <AboutStep
+              {...voice}
+              back={back}
+              onDone={(all) => {
+                setAnswers(all);
+                next();
+              }}
+            />
+          )}
+          {step === "first" && (
+            <FirstSkillStep
+              say={say}
+              name={name}
+              look={look}
+              skills={props.skills}
+              timeSink={answers.timeSink}
+              back={back}
+              onDone={next}
+            />
+          )}
+          {step === "ready" && <ReadyStep say={say} name={name} />}
+        </div>
       </section>
     </main>
   );
 }
 
 type Say = (text: string) => Promise<void>;
-const primary = "rounded-full bg-accent px-5 py-2.5 text-sm text-accent-ink disabled:opacity-40";
+interface Voice {
+  say: Say;
+  setOrb: (s: OrbState) => void;
+  setLevel: (l: number) => void;
+}
+type Nav = { back: (() => void) | null; onDone: () => void };
+
+const primary =
+  "rounded-full bg-accent px-6 py-2.5 text-sm font-medium text-accent-ink shadow-[0_8px_20px_-8px_rgba(106,47,141,0.7)] transition hover:brightness-110 disabled:opacity-40 disabled:shadow-none";
 const quiet = "rounded-full px-4 py-2.5 text-sm text-muted hover:text-foreground";
+const field =
+  "w-full rounded-xl border border-line-strong bg-card px-3.5 py-2.5 text-sm outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/10 focus-visible:outline-none";
+
+/** The step's buttons, along the bottom. */
+function Footer({ back, children }: { back?: (() => void) | null; children: ReactNode }) {
+  return (
+    <div className="mt-auto flex items-center gap-3 border-t border-line pt-5">
+      {back && (
+        <button type="button" onClick={back} className={`${quiet} px-0`}>
+          ← Back
+        </button>
+      )}
+      <span className="flex-1" />
+      {children}
+    </div>
+  );
+}
 
 /** Runs once when a step opens: Persuna says its line. */
 function useIntro(say: Say, text: string) {
@@ -211,7 +306,33 @@ function useIntro(say: Say, text: string) {
   }, []);
 }
 
-/* ---------- 1. Account ---------- */
+/** Small line icons. */
+function Glyph({ name }: { name: "mic" | "key" | "screen" | "browser" | "mail" }) {
+  const d = {
+    mic: "M12 4a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V7a3 3 0 0 1 3-3zM6 11a6 6 0 0 0 12 0M12 17v3",
+    key: "M4 7h16v10H4zM7 10h1m3 0h1m3 0h1M8 14h8",
+    screen: "M3 5h18v11H3zM8 20h8M12 16v4",
+    browser: "M3 5h18v14H3zM3 9h18M6 7h.01M9 7h.01",
+    mail: "M3 6h18v12H3zM3 7l9 6 9-6",
+  }[name];
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="20"
+      height="20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d={d} />
+    </svg>
+  );
+}
+
+/* ---------- Sign in ---------- */
 
 function AccountStep({ expired, say }: { expired: boolean; say: Say }) {
   const [mode, setMode] = useState<"choose" | "waiting" | "sign-in" | "sign-up">("choose");
@@ -220,34 +341,25 @@ function AccountStep({ expired, say }: { expired: boolean; say: Say }) {
     say,
     expired
       ? "That sign-in link ran out. Let's try once more."
-      : "Hi, I'm Persuna. Let's get you signed in first.",
+      : "Hi, I'm Persuna. First, let's get you signed in.",
   );
   if (mode === "sign-in" || mode === "sign-up") {
     return (
-      <div className="persona-no-drag w-full max-w-sm">
-        <AuthForm
-          key={mode}
-          mode={mode}
-          next="/desktop/setup"
-          onSwitchMode={() => setMode(mode === "sign-in" ? "sign-up" : "sign-in")}
-        />
-        <button type="button" onClick={() => setMode("choose")} className={`${quiet} mt-3 px-0`}>
-          Back
-        </button>
+      <div className="persona-no-drag flex flex-1 flex-col">
+        <div className="max-w-sm">
+          <AuthForm
+            key={mode}
+            mode={mode}
+            next="/desktop/setup"
+            onSwitchMode={() => setMode(mode === "sign-in" ? "sign-up" : "sign-in")}
+          />
+        </div>
+        <Footer back={() => setMode("choose")}>{null}</Footer>
       </div>
     );
   }
   return (
-    <div className="flex max-w-sm flex-col gap-2">
-      {mode === "waiting" ? (
-        <p className="text-sm text-muted">
-          Finish signing in in your browser. I&apos;ll carry on here as soon as you do.
-        </p>
-      ) : (
-        <p className="text-sm text-muted">
-          Your browser is quickest if you&apos;re already signed in to PERSUNA there.
-        </p>
-      )}
+    <div className="flex max-w-lg flex-col gap-3">
       {desktop && (
         <button
           type="button"
@@ -255,29 +367,58 @@ function AccountStep({ expired, say }: { expired: boolean; say: Say }) {
             desktop.signInWithBrowser();
             setMode("waiting");
           }}
-          className={`${primary} mt-2`}
+          className="flex items-start gap-4 rounded-2xl bg-card p-5 text-left ring-1 ring-accent/30 transition hover:ring-accent"
         >
-          {mode === "waiting" ? "Open the browser again" : "Continue in your browser"}
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent-soft text-accent">
+            <Glyph name="browser" />
+          </span>
+          <span className="flex-1">
+            <span className="flex items-center gap-2 font-medium">
+              {mode === "waiting" ? "Waiting for your browser…" : "Continue in your browser"}
+              <span className="label-mono rounded-full bg-accent-soft px-2 py-0.5 text-[9px] text-accent">
+                Quickest
+              </span>
+            </span>
+            <span className="mt-0.5 block text-sm text-muted">
+              {mode === "waiting"
+                ? "Finish there and I'll carry on here. Click to open it again."
+                : "If you're already signed in to PERSUNA there, it's one click."}
+            </span>
+          </span>
         </button>
       )}
-      <button type="button" onClick={() => setMode("sign-in")} className={quiet}>
-        Sign in here instead
+      <button
+        type="button"
+        onClick={() => setMode("sign-in")}
+        className="flex items-start gap-4 rounded-2xl bg-card p-5 text-left ring-1 ring-line transition hover:ring-line-strong"
+      >
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-subtle text-muted">
+          <Glyph name="mail" />
+        </span>
+        <span className="flex-1">
+          <span className="block font-medium">Sign in with email here</span>
+          <span className="mt-0.5 block text-sm text-muted">Your PERSUNA email and password.</span>
+        </span>
       </button>
-      <button type="button" onClick={() => setMode("sign-up")} className={quiet}>
-        New to PERSUNA? Create an account
+      <button
+        type="button"
+        onClick={() => setMode("sign-up")}
+        className={`${quiet} self-start px-0`}
+      >
+        New to PERSUNA? <span className="text-accent">Create an account</span>
       </button>
     </div>
   );
 }
 
-/* ---------- 2. Permissions ---------- */
+/* ---------- Permissions ---------- */
 
-function AccessStep({ say, onDone }: { say: Say; onDone: () => void }) {
+function AccessStep({ say, back, onDone }: { say: Say } & Nav) {
   const desktop = useBridge();
   const [state, setState] = useState<Awaited<ReturnType<SetupBridge["permissions"]>> | null>(null);
   const [icon, setIcon] = useState<string | null>(null);
-  const [screenTried, setScreenTried] = useState(false);
-  useIntro(say, "I need three things from your Mac. Each one has a reason.");
+  const [opened, setOpened] = useState<string | null>(null);
+  useIntro(say, "I need three things from your Mac. I'll say why for each.");
 
   useEffect(() => {
     if (!desktop) return;
@@ -294,151 +435,167 @@ function AccessStep({ say, onDone }: { say: Say; onDone: () => void }) {
 
   if (!desktop) {
     return (
-      <p className="max-w-sm text-sm text-muted">
-        Open this from Persona Desktop to set permissions. In a browser, Persuna asks for the
-        microphone when you first talk.
-        <button type="button" onClick={onDone} className={`${primary} mt-4 block`}>
-          Continue
-        </button>
-      </p>
+      <div className="flex flex-1 flex-col">
+        <p className="max-w-md text-sm text-muted">
+          Open this from Persona Desktop to set permissions. In a browser, Persuna asks for the
+          microphone the first time you talk.
+        </p>
+        <Footer back={back}>
+          <button type="button" onClick={onDone} className={primary}>
+            Continue
+          </button>
+        </Footer>
+      </div>
     );
   }
   const ok = (a?: Access) => a === "granted";
   const rows = [
     {
       key: "mic",
+      glyph: "mic" as const,
       title: "Microphone",
-      why: "So I can hear you while you hold the talk key. Never otherwise.",
+      why: "To hear you while you hold the talk key. Never otherwise.",
       status: state?.mic,
       action: () => void desktop.askMic(),
       drag: false,
     },
     {
       key: "keyboard",
+      glyph: "key" as const,
       title: "Accessibility",
-      why: "So I notice the talk key from any app. I only react to that key.",
+      why: "To notice the talk key from any app. I react to that one key only.",
       status: state?.keyboard,
-      action: () => void desktop.askKeyboard(),
+      action: () => {
+        setOpened("keyboard");
+        void desktop.askKeyboard();
+      },
       drag: true,
     },
     {
       key: "screen",
+      glyph: "screen" as const,
       title: "Screen Recording",
-      why: "So I can watch when you ask me to and learn how you work. Optional.",
+      why: "To see what you mean when you ask about your screen, and to watch when you ask me to.",
       status: state?.screen,
       action: () => {
-        setScreenTried(true);
+        setOpened("screen");
         void desktop.askScreen();
       },
       drag: true,
     },
-  ] as const;
+  ];
   const needed = ok(state?.mic) && (ok(state?.keyboard) || !state?.mac);
 
   return (
-    <div className="flex flex-col gap-3">
-      <ul className="divide-y divide-line rounded-2xl bg-card/80 ring-1 ring-line">
+    <div className="flex flex-1 flex-col">
+      <ul className="max-w-xl space-y-3">
         {rows.map((row) => (
-          <li key={row.key} className="flex items-start gap-3 p-4">
-            <span
-              aria-hidden
-              className={`mt-1 grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px] ${
-                ok(row.status) ? "bg-good text-white" : "ring-1 ring-line-strong"
-              }`}
-            >
-              {ok(row.status) ? "✓" : ""}
-            </span>
-            <span className="flex-1">
-              <span className="block text-sm font-medium">{row.title}</span>
-              <span className="block text-sm text-muted">{row.why}</span>
-              {row.drag && !ok(row.status) && state?.mac && (
-                <span className="mt-2 flex items-center gap-2 text-xs text-muted">
-                  Not in the list? Drag me in:
-                  <span
-                    draggable
-                    onDragStart={(e) => {
-                      e.preventDefault();
-                      desktop.dragApp();
-                    }}
-                    className="persona-no-drag flex cursor-grab items-center gap-1.5 rounded-lg bg-card px-2 py-1 ring-1 ring-line-strong active:cursor-grabbing"
-                  >
-                    {icon ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={icon} alt="" width={18} height={18} />
-                    ) : (
-                      <PersonaOrb look="plum" size={18} animate={false} />
-                    )}
-                    <span className="text-foreground">Persuna</span>
-                  </span>
-                </span>
-              )}
-              {row.key === "screen" && screenTried && !ok(row.status) && state?.mac && (
-                <span className="mt-2 block text-xs text-muted">
-                  Turned it on? macOS needs Persuna to restart before it can see.{" "}
-                  <button
-                    type="button"
-                    onClick={() => desktop.restart()}
-                    className="text-accent underline"
-                  >
-                    Restart now
-                  </button>
-                </span>
-              )}
-            </span>
-            {!ok(row.status) && (
-              <button
-                type="button"
-                onClick={row.action}
-                className="label-mono shrink-0 rounded-full px-3 py-1.5 text-[10px] text-accent ring-1 ring-accent/40 hover:bg-accent-soft"
+          <li
+            key={row.key}
+            className={`rounded-2xl bg-card p-4 ring-1 transition ${
+              ok(row.status) ? "ring-good/30" : "ring-line"
+            }`}
+          >
+            <div className="flex items-center gap-4">
+              <span
+                className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${
+                  ok(row.status) ? "bg-good/10 text-good" : "bg-accent-soft text-accent"
+                }`}
               >
-                Allow
-              </button>
+                <Glyph name={row.glyph} />
+              </span>
+              <span className="flex-1">
+                <span className="block font-medium">{row.title}</span>
+                <span className="block text-sm text-muted">{row.why}</span>
+              </span>
+              {ok(row.status) ? (
+                <span className="label-mono rounded-full bg-good/10 px-3 py-1.5 text-[10px] text-good">
+                  Allowed
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={row.action}
+                  className="rounded-full bg-accent px-4 py-1.5 text-sm text-accent-ink"
+                >
+                  Allow
+                </button>
+              )}
+            </div>
+            {row.drag && opened === row.key && !ok(row.status) && state?.mac && (
+              <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl bg-subtle px-4 py-3 text-sm">
+                <span className="text-muted">
+                  In the list that opened, switch Persuna on. Not there? Drag this in:
+                </span>
+                <span
+                  draggable
+                  onDragStart={(e) => {
+                    e.preventDefault();
+                    desktop.dragApp();
+                  }}
+                  className="persona-no-drag flex cursor-grab items-center gap-2 rounded-lg bg-card px-2.5 py-1.5 shadow-sm ring-1 ring-line-strong active:cursor-grabbing"
+                >
+                  {icon ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={icon} alt="" width={20} height={20} />
+                  ) : (
+                    <PersonaOrb look="plum" size={20} animate={false} />
+                  )}
+                  <span className="font-medium">Persuna</span>
+                </span>
+                {row.key === "screen" && (
+                  <span className="w-full text-xs text-muted">
+                    Switched it on? macOS needs a restart before I can see.{" "}
+                    <button
+                      type="button"
+                      onClick={() => desktop.restart()}
+                      className="text-accent underline"
+                    >
+                      Restart Persuna
+                    </button>
+                  </span>
+                )}
+              </div>
             )}
           </li>
         ))}
       </ul>
-      <div className="mt-auto flex items-center gap-2 pt-4">
-        <button type="button" disabled={!needed} onClick={onDone} className={primary}>
-          Continue
-        </button>
+      <Footer back={back}>
         {!needed && (
           <span className="text-xs text-muted">
             Microphone and Accessibility are needed to talk.
           </span>
         )}
-      </div>
+        <button type="button" disabled={!needed} onClick={onDone} className={primary}>
+          Continue
+        </button>
+      </Footer>
     </div>
   );
 }
 
-/* ---------- 3. Microphone ---------- */
+/* ---------- Microphone ---------- */
 
-function MicStep({
-  say,
-  setOrb,
-  setLevel,
-  onDone,
-}: {
-  say: Say;
-  setOrb: (s: OrbState) => void;
-  setLevel: (l: number) => void;
-  onDone: () => void;
-}) {
+const WAVE_BARS = 36;
+
+function MicStep({ say, setOrb, setLevel, back, onDone }: Voice & Nav) {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const [device, setDevice] = useState<string | null>(preferredMic());
+  const [device, setDevice] = useState<string | null>(() => preferredMic());
   const [heard, setHeard] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useIntro(say, "Say anything out loud. If I light up, I can hear you.");
+  const [wave, setWave] = useState<number[]>(() => Array(WAVE_BARS).fill(0));
+  useIntro(say, "Say anything out loud, like your name or what you're working on.");
 
   useEffect(() => {
     let stop: (() => void) | null = null;
     let alive = true;
-    // Wait for Persuna to finish its line, so it doesn't hear itself.
+    // After Persuna's line, so it doesn't hear itself.
     const start = window.setTimeout(() => {
       meterMic(device, (l) => {
         if (!alive) return;
         setOrb(l > 0.02 ? "listening" : "idle");
         setLevel(l);
+        setWave((w) => [...w.slice(1), l]);
         if (l > 0.12) setHeard(true);
       })
         .then(async (s) => {
@@ -448,7 +605,7 @@ function MicStep({
           setDevices(all.filter((d) => d.kind === "audioinput" && d.deviceId !== "default"));
         })
         .catch(() => setError("I can't reach a microphone. Check the Microphone permission."));
-    }, 2600);
+    }, 2400);
     return () => {
       alive = false;
       clearTimeout(start);
@@ -459,9 +616,32 @@ function MicStep({
   }, [device, setOrb, setLevel]);
 
   return (
-    <div className="flex flex-1 flex-col gap-4">
-      <label className="block max-w-sm text-sm">
-        <span className="label-mono text-[10px] text-muted">Microphone</span>
+    <div className="flex flex-1 flex-col">
+      <div className="max-w-xl rounded-2xl bg-card p-6 ring-1 ring-line">
+        <div className="flex h-24 items-center justify-center gap-[5px]" aria-hidden>
+          {wave.map((l, i) => (
+            <span
+              key={i}
+              className="w-[6px] rounded-full bg-gradient-to-t from-accent to-[#b794ff] transition-[height] duration-75"
+              style={{
+                height: `${Math.max(6, Math.min(96, l * 140))}px`,
+                opacity: 0.35 + (i / WAVE_BARS) * 0.65,
+              }}
+            />
+          ))}
+        </div>
+        <p className="mt-3 text-center text-sm" role="status">
+          {error ? (
+            <span className="text-danger">{error}</span>
+          ) : heard ? (
+            <span className="text-good">I can hear you clearly.</span>
+          ) : (
+            <span className="text-muted">Listening for your voice…</span>
+          )}
+        </p>
+      </div>
+      <label className="mt-5 block max-w-xl text-sm">
+        <span className="text-muted">Microphone</span>
         <select
           value={device ?? ""}
           onChange={(e) => {
@@ -470,7 +650,7 @@ function MicStep({
             setDevice(id);
             setHeard(false);
           }}
-          className="mt-1.5 w-full rounded-md border border-line-strong bg-card px-3 py-2 text-sm"
+          className={`${field} mt-1.5`}
         >
           <option value="">System default</option>
           {devices.map((d) => (
@@ -479,36 +659,37 @@ function MicStep({
             </option>
           ))}
         </select>
+        <span className="mt-1.5 block text-xs text-faint">
+          Your Mac&apos;s built-in mic or a wired headset works best.
+        </span>
       </label>
-      <p className="text-sm text-muted">
-        {error ?? (heard ? "Heard you clearly." : "Waiting to hear you…")} Your Mac&apos;s built-in
-        mic or a wired one works best.
-      </p>
-      <div className="mt-auto flex gap-2">
+      <Footer back={back}>
         <button type="button" onClick={onDone} className={primary}>
           {heard ? "Sounds good" : "Continue anyway"}
         </button>
-      </div>
+      </Footer>
     </div>
   );
 }
 
-/* ---------- Answering by voice or by typing (used by the next steps) ---------- */
+/* ---------- Answering by voice or typing (used by the next steps) ---------- */
 
 /**
- * Hold the desktop's talk key (or the button here) to answer out loud, or
- * type. Calls `onAnswer` with what was said or typed.
+ * Hold the desktop's talk key (or the button) to answer out loud, or type.
+ * Calls `onAnswer` with what was said or typed; `onHolding` while the key is down.
  */
 function Answer({
   setOrb,
   setLevel,
   onAnswer,
-  placeholder = "Or type here",
+  onHolding,
+  placeholder = "Or type your answer",
   disabled = false,
 }: {
   setOrb: (s: OrbState) => void;
   setLevel: (l: number) => void;
   onAnswer: (text: string) => void;
+  onHolding?: (holding: boolean) => void;
   placeholder?: string;
   disabled?: boolean;
 }) {
@@ -518,32 +699,37 @@ function Answer({
   const [note, setNote] = useState<string | null>(null);
   const rec = useRef<Promise<HoldRecording | null> | null>(null);
   const input = useRef<HTMLInputElement>(null);
-  const live = useRef({ disabled, onAnswer });
+  const live = useRef({ disabled, onAnswer, onHolding });
   useEffect(() => {
-    live.current = { disabled, onAnswer };
-  }, [disabled, onAnswer]);
+    live.current = { disabled, onAnswer, onHolding };
+  }, [disabled, onAnswer, onHolding]);
+
+  const hold = useCallback((on: boolean) => {
+    setHolding(on);
+    live.current.onHolding?.(on);
+  }, []);
 
   const start = useCallback(() => {
     if (rec.current || live.current.disabled) return;
     stopSpeaking();
     setNote(null);
-    setHolding(true);
+    hold(true);
     setOrb("listening");
     rec.current = startHoldRecording(setLevel).catch(() => {
       setNote("I can't reach the microphone.");
       return null;
     });
-  }, [setOrb, setLevel]);
+  }, [setOrb, setLevel, hold]);
 
   const end = useCallback(async () => {
     const pending = rec.current;
     rec.current = null;
-    setHolding(false);
+    hold(false);
     if (!pending) return;
     const audio = await (await pending)?.stop();
     if (!audio) {
       setOrb("idle");
-      setNote("That was quick. Hold a little longer while you talk.");
+      setNote("That was quick. Keep holding while you talk.");
       return;
     }
     setOrb("thinking");
@@ -558,7 +744,7 @@ function Answer({
       setWorking(false);
       setOrb("idle");
     }
-  }, [setOrb]);
+  }, [setOrb, hold]);
 
   useEffect(() => {
     bridge()?.onHold((phase) => {
@@ -567,11 +753,11 @@ function Answer({
       else if (phase === "cancel") {
         void rec.current?.then((r) => r?.cancel());
         rec.current = null;
-        setHolding(false);
+        hold(false);
         setOrb("idle");
       } else input.current?.focus();
     });
-  }, [start, end, setOrb]);
+  }, [start, end, setOrb, hold]);
 
   return (
     <div className="space-y-2">
@@ -583,7 +769,7 @@ function Answer({
             setText("");
           }
         }}
-        className="flex max-w-md items-center gap-2 rounded-full bg-card p-1.5 pl-4 ring-1 ring-line-strong focus-within:ring-accent"
+        className="flex max-w-xl items-center gap-2 rounded-2xl bg-card p-2 pl-4 ring-1 ring-line-strong transition focus-within:ring-accent"
       >
         <input
           ref={input}
@@ -592,7 +778,7 @@ function Answer({
           placeholder={placeholder}
           aria-label="Your answer"
           disabled={disabled}
-          className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint focus-visible:outline-none"
+          className="min-w-0 flex-1 bg-transparent py-1.5 text-sm outline-none placeholder:text-faint focus-visible:outline-none"
         />
         <button
           type="button"
@@ -600,91 +786,112 @@ function Answer({
           onPointerDown={start}
           onPointerUp={() => void end()}
           onPointerLeave={() => holding && void end()}
-          className={`label-mono shrink-0 rounded-full px-3 py-2 text-[10px] ${
-            holding ? "bg-accent text-accent-ink" : "text-accent ring-1 ring-accent/40"
+          className={`flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-2 text-sm transition ${
+            holding ? "bg-accent text-accent-ink" : "bg-accent-soft text-accent hover:bg-accent/15"
           }`}
         >
+          <Glyph name="mic" />
           {holding ? "Listening" : working ? "Hearing…" : "Hold to talk"}
         </button>
       </form>
-      {note && <p className="text-xs text-warn">{note}</p>}
+      {note && <p className="text-sm text-warn">{note}</p>}
     </div>
   );
 }
 
-/* ---------- 4. Talking to Persuna ---------- */
+/** A big key that sinks while it's held: "right ⌥" shows ⌥, with "right" under it. */
+function KeyCap({ label, down }: { label: string; down: boolean }) {
+  const side = /^(right|left)\s+/i.exec(label)?.[1];
+  const key = side ? label.slice(side.length).trim() : label;
+  return (
+    <span
+      aria-hidden
+      className={`inline-flex h-24 w-24 shrink-0 flex-col items-center justify-center rounded-2xl bg-gradient-to-b from-white to-[#f1ecf6] ring-1 transition-all duration-100 ${
+        down
+          ? "translate-y-[3px] text-accent shadow-[0_1px_0_#d6cce0,0_0_0_6px_rgba(139,92,246,0.15)] ring-accent/50"
+          : "shadow-[0_5px_0_#d6cce0,0_12px_24px_-12px_rgba(40,20,60,0.4)] ring-line-strong"
+      }`}
+    >
+      <span className="font-display text-4xl leading-none">{key}</span>
+      {side && <span className="label-mono mt-2 text-[9px] text-muted">{side}</span>}
+    </span>
+  );
+}
+
+/* ---------- Talking ---------- */
 
 function TalkStep({
   say,
   setOrb,
   setLevel,
   userName,
+  back,
   onDone,
-}: {
-  say: Say;
-  setOrb: (s: OrbState) => void;
-  setLevel: (l: number) => void;
-  userName: string;
-  onDone: () => void;
-}) {
+}: Voice & Nav & { userName: string }) {
   const [holdKey, setHoldKey] = useState<string | null>(null);
   const [heard, setHeard] = useState<string | null>(null);
+  const [down, setDown] = useState(false);
   useEffect(() => {
-    const plain = "Here's how we talk. Hold the button below, say hello, then let go.";
+    const plain = "Hold the button, say hello, then let go.";
     const desktop = bridge();
     if (!desktop) return void say(plain);
     void desktop.permissions().then((s) => {
       setHoldKey(s.holdKey);
-      void say(
-        s.holdKey ? `Here's how we talk. Hold ${s.holdKey}, say hello, then let go.` : plain,
-      );
+      void say(s.holdKey ? `Hold ${s.holdKey}, say hello, then let go.` : plain);
     });
     // Once, on entering the step.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
-    <div className="flex flex-1 flex-col gap-4">
-      <p className="max-w-md text-sm text-muted">
-        {holdKey ? (
-          <>
-            Hold{" "}
-            <kbd className="label-mono rounded border border-line-strong px-1.5">{holdKey}</kbd>{" "}
-            from any app while you talk, and let go when you&apos;re done. Tap it twice quickly to
-            type instead.
-          </>
-        ) : (
-          "Hold to talk, and let go when you're done."
-        )}
-      </p>
-      <Answer
-        setOrb={setOrb}
-        setLevel={setLevel}
-        onAnswer={(text) => {
-          setHeard(text);
-          const first = userName.split(/\s+/)[0];
-          // Quote it without its own full stop, so the line doesn't end "..”."
-          text = text.replace(/[.!?…\s]+$/, "");
-          void say(
-            `${first ? `Hi ${first}! ` : "Hi! "}I heard “${text.length > 80 ? `${text.slice(0, 80)}…` : text}”. That's all there is to it.`,
-          );
-        }}
-      />
-      <div className="mt-auto flex gap-2">
-        <button type="button" disabled={!heard} onClick={onDone} className={primary}>
-          Continue
-        </button>
+    <div className="flex flex-1 flex-col">
+      {holdKey && (
+        <div className="flex max-w-xl items-center gap-6 rounded-2xl bg-card p-6 ring-1 ring-line">
+          <KeyCap label={holdKey} down={down} />
+          <div className="text-sm">
+            <p className="font-medium">
+              Hold <span className="text-accent">{holdKey}</span>
+            </p>
+            <p className="mt-1 text-muted">
+              Talk while it&apos;s down, let go when you&apos;re done. Works in every app. Tap it
+              twice to type instead.
+            </p>
+          </div>
+        </div>
+      )}
+      <div className="mt-5">
+        <Answer
+          setOrb={setOrb}
+          setLevel={setLevel}
+          onHolding={setDown}
+          placeholder="Or type hello"
+          onAnswer={(text) => {
+            setHeard(text.replace(/[.!?…。！？\s]+$/, ""));
+            const first = userName.split(/\s+/)[0];
+            void say(`${first ? `Hi ${first}! ` : "Hi! "}That's all there is to it.`);
+          }}
+        />
+      </div>
+      {heard && (
+        <blockquote className="persona-in mt-4 max-w-xl rounded-2xl bg-accent-soft/60 px-5 py-4 text-[15px]">
+          <span className="label-mono block text-[10px] text-accent">I heard</span>“{heard}”
+        </blockquote>
+      )}
+      <Footer back={back}>
         {!heard && (
           <button type="button" onClick={onDone} className={quiet}>
             Skip
           </button>
         )}
-      </div>
+        <button type="button" disabled={!heard} onClick={onDone} className={primary}>
+          Continue
+        </button>
+      </Footer>
     </div>
   );
 }
 
-/* ---------- 5. Persuna's name and look ---------- */
+/* ---------- Name and look ---------- */
 
 function MeetStep({
   say,
@@ -692,6 +899,7 @@ function MeetStep({
   look,
   onName,
   onLook,
+  back,
   onDone,
 }: {
   say: Say;
@@ -699,73 +907,73 @@ function MeetStep({
   look: LookId;
   onName: (n: string) => void;
   onLook: (l: LookId) => void;
-  onDone: () => void;
-}) {
+} & Nav) {
   const [draft, setDraft] = useState(name);
-  useIntro(say, "What should I be called? And pick how I look.");
+  useIntro(say, "What should I be called? And how should I look?");
   return (
-    <div className="flex flex-1 flex-col gap-5">
-      <label className="block max-w-sm text-sm">
-        <span className="label-mono text-[10px] text-muted">Name</span>
+    <div className="flex flex-1 flex-col">
+      <label className="block max-w-xl">
+        <span className="text-sm text-muted">My name</span>
         <input
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => onName(parseName(draft) ?? (draft.trim() || "Persuna"))}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            onName(e.target.value.trim() || "Persuna");
+          }}
           maxLength={40}
-          className="mt-1.5 w-full rounded-md border border-line-strong bg-card px-3 py-2 text-sm"
+          aria-label="My name"
+          className="mt-1 w-full border-0 border-b-2 border-line-strong bg-transparent pb-2 font-display text-3xl font-medium tracking-[-0.02em] outline-none transition focus:border-accent focus-visible:outline-none"
         />
       </label>
-      <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Look">
+      <div className="mt-7 grid max-w-xl grid-cols-3 gap-3" role="radiogroup" aria-label="Look">
         {LOOK_IDS.map((id) => (
           <button
             key={id}
             type="button"
             role="radio"
             aria-checked={look === id}
+            aria-label={`${LOOKS[id].label} look`}
             onClick={() => onLook(id)}
-            className={`flex flex-col items-center gap-1 rounded-2xl p-2 ${
-              look === id ? "bg-accent-soft ring-1 ring-accent/40" : "hover:bg-card"
+            className={`flex flex-col items-center gap-2 rounded-2xl bg-card p-4 ring-1 transition ${
+              look === id
+                ? "shadow-[0_10px_24px_-14px_rgba(106,47,141,0.6)] ring-2 ring-accent"
+                : "ring-line hover:ring-line-strong"
             }`}
           >
-            <PersonaOrb look={id} size={44} animate={false} />
-            <span className="label-mono text-[10px] text-muted">{LOOKS[id].label}</span>
+            <PersonaOrb look={id} size={56} animate={look === id} />
+            <span className="text-sm">{LOOKS[id].label}</span>
           </button>
         ))}
       </div>
-      <div className="mt-auto">
+      <Footer back={back}>
         <button
           type="button"
           onClick={() => {
-            const picked = parseName(draft) ?? (draft.trim() || "Persuna");
-            onName(picked);
+            onName(parseName(draft) ?? (draft.trim() || "Persuna"));
             onDone();
           }}
           className={primary}
         >
           Continue
         </button>
-      </div>
+      </Footer>
     </div>
   );
 }
 
-/* ---------- 6. Four questions about you ---------- */
+/* ---------- Four questions ---------- */
 
 function AboutStep({
   say,
   setOrb,
   setLevel,
+  back,
   onDone,
-}: {
-  say: Say;
-  setOrb: (s: OrbState) => void;
-  setLevel: (l: number) => void;
-  onDone: (answers: IntroAnswers) => void;
-}) {
+}: Voice & { back: (() => void) | null; onDone: (answers: IntroAnswers) => void }) {
   const [index, setIndex] = useState(0);
   const [answers, setAnswers] = useState<IntroAnswers>({});
   const [saving, setSaving] = useState(false);
-  useIntro(say, `A few questions so I'm useful from day one. ${INTRO_QUESTIONS[0].ask}`);
+  useIntro(say, INTRO_QUESTIONS[0].ask);
 
   async function answer(text: string) {
     const q = INTRO_QUESTIONS[index];
@@ -783,39 +991,54 @@ function AboutStep({
     onDone(all);
   }
 
+  const q = INTRO_QUESTIONS[index];
   return (
-    <div className="flex flex-1 flex-col gap-4">
-      <ol className="space-y-2 text-sm">
-        {INTRO_QUESTIONS.map((q, i) => (
-          <li key={q.key} className={i === index ? "text-foreground" : "text-muted"}>
-            <span className="label-mono mr-2 text-[10px]">{i + 1}</span>
-            {answers[q.key] ? (
-              <span>
-                {q.ask} <span className="text-foreground">— {answers[q.key]}</span>
-              </span>
-            ) : (
-              q.ask
-            )}
-          </li>
+    <div className="flex flex-1 flex-col">
+      <div className="flex max-w-xl gap-1.5" aria-hidden>
+        {INTRO_QUESTIONS.map((x, i) => (
+          <span
+            key={x.key}
+            className={`h-1 flex-1 rounded-full ${i <= index ? "bg-accent" : "bg-line"}`}
+          />
         ))}
-      </ol>
-      <Answer
-        key={index}
-        setOrb={setOrb}
-        setLevel={setLevel}
-        disabled={saving}
-        onAnswer={(text) => void answer(text)}
-      />
-      <div className="mt-auto">
+      </div>
+      <p className="label-mono mt-5 text-[10px] text-muted">
+        Question {index + 1} of {INTRO_QUESTIONS.length}
+      </p>
+      <p className="mt-1.5 max-w-xl font-display text-2xl font-medium leading-snug tracking-[-0.02em]">
+        {q.ask.replace(/^(First|Last one)(, |: )/, "").replace(/^\w/, (c) => c.toUpperCase())}
+      </p>
+      <div className="mt-5">
+        <Answer
+          key={index}
+          setOrb={setOrb}
+          setLevel={setLevel}
+          disabled={saving}
+          onAnswer={(text) => void answer(text)}
+        />
+      </div>
+      {INTRO_QUESTIONS.slice(0, index).some((x) => answers[x.key]) && (
+        <ul className="mt-6 max-w-xl space-y-2" aria-label="Your answers so far">
+          {INTRO_QUESTIONS.slice(0, index).map((x) =>
+            answers[x.key] ? (
+              <li key={x.key} className="flex gap-3 text-sm">
+                <span className="mt-0.5 text-good">✓</span>
+                <span className="text-muted">{answers[x.key]}</span>
+              </li>
+            ) : null,
+          )}
+        </ul>
+      )}
+      <Footer back={back}>
         <button type="button" disabled={saving} onClick={() => void answer("")} className={quiet}>
           Skip this one
         </button>
-      </div>
+      </Footer>
     </div>
   );
 }
 
-/* ---------- 7. A first skill ---------- */
+/* ---------- First skill ---------- */
 
 function FirstSkillStep({
   say,
@@ -823,6 +1046,7 @@ function FirstSkillStep({
   look,
   skills,
   timeSink,
+  back,
   onDone,
 }: {
   say: Say;
@@ -830,8 +1054,7 @@ function FirstSkillStep({
   look: LookId;
   skills: { slug: string; name: string }[];
   timeSink: string | undefined;
-  onDone: () => void;
-}) {
+} & Nav) {
   const suggestion = suggestedSkill(timeSink);
   const [skillName, setSkillName] = useState(suggestion ?? "");
   const [description, setDescription] = useState(timeSink?.trim() ?? "");
@@ -852,51 +1075,49 @@ function FirstSkillStep({
     if (!res.ok) return setError(res.error);
     onDone();
   }
+  const ready = skillName.trim().length >= 3 && description.trim().length >= 10;
 
   return (
-    <div className="flex flex-1 flex-col gap-4">
-      <div className="max-w-md space-y-3 rounded-2xl bg-card/80 p-4 ring-1 ring-line">
+    <div className="flex flex-1 flex-col">
+      <div className="max-w-xl space-y-4 rounded-2xl bg-card p-5 ring-1 ring-accent/25">
+        {suggestion && (
+          <span className="label-mono inline-block rounded-full bg-accent-soft px-2.5 py-1 text-[9px] text-accent">
+            Suggested from your answers
+          </span>
+        )}
         <label className="block text-sm">
-          <span className="label-mono text-[10px] text-muted">The task</span>
+          <span className="text-muted">The task</span>
           <input
             value={skillName}
             onChange={(e) => setSkillName(e.target.value)}
-            placeholder="For example: Meeting notes into minutes"
+            placeholder="For example: meeting notes into minutes"
             maxLength={120}
-            className="mt-1.5 w-full rounded-md border border-line-strong bg-card px-3 py-2 text-sm"
+            aria-label="The task"
+            className={`${field} mt-1.5`}
           />
         </label>
         <label className="block text-sm">
-          <span className="label-mono text-[10px] text-muted">
-            What goes in, and what comes out
-          </span>
+          <span className="text-muted">What goes in, and what comes out?</span>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={3}
             maxLength={1000}
-            className="mt-1.5 w-full rounded-md border border-line-strong bg-card px-3 py-2 text-sm"
+            aria-label="What goes in, and what comes out"
+            placeholder="For example: rough notes from a client call in, a one-page proposal out."
+            className={`${field} mt-1.5`}
           />
         </label>
-        <button
-          type="button"
-          disabled={saving || skillName.trim().length < 3 || description.trim().length < 10}
-          onClick={() =>
-            void finish({ kind: "new", name: skillName.trim(), description: description.trim() })
-          }
-          className={primary}
-        >
-          {saving ? "Setting it up…" : "Learn this one"}
-        </button>
       </div>
-      <div className="flex flex-wrap gap-2">
+      <p className="mt-6 text-sm text-muted">Or start with:</p>
+      <div className="mt-2 flex max-w-xl flex-wrap gap-2">
         {skills.map((s) => (
           <button
             key={s.slug}
             type="button"
             disabled={saving}
             onClick={() => void finish({ kind: "existing", slug: s.slug })}
-            className="label-mono rounded-full px-3 py-1.5 text-[10px] text-muted ring-1 ring-line-strong hover:text-accent"
+            className="rounded-full bg-card px-3.5 py-1.5 text-sm ring-1 ring-line hover:ring-accent/50"
           >
             {s.name}
           </button>
@@ -905,60 +1126,93 @@ function FirstSkillStep({
           type="button"
           disabled={saving}
           onClick={() => void finish({ kind: "sample" })}
-          className="label-mono rounded-full px-3 py-1.5 text-[10px] text-muted ring-1 ring-line-strong hover:text-accent"
+          className="rounded-full bg-card px-3.5 py-1.5 text-sm ring-1 ring-line hover:ring-accent/50"
         >
-          Try the meeting-minutes sample
+          The meeting-minutes sample
         </button>
+      </div>
+      {error && <p className="mt-3 text-sm text-danger">{error}</p>}
+      <Footer back={back}>
         <button
           type="button"
           disabled={saving}
           onClick={() => void finish({ kind: "skip" })}
-          className="label-mono rounded-full px-3 py-1.5 text-[10px] text-muted hover:text-foreground"
+          className={quiet}
         >
           Later
         </button>
-      </div>
-      {error && <p className="text-sm text-danger">{error}</p>}
+        <button
+          type="button"
+          disabled={saving || !ready}
+          onClick={() =>
+            void finish({ kind: "new", name: skillName.trim(), description: description.trim() })
+          }
+          className={primary}
+        >
+          {saving ? "Setting it up…" : "Learn this one"}
+        </button>
+      </Footer>
     </div>
   );
 }
 
-/* ---------- 8. Ready ---------- */
+/* ---------- Ready ---------- */
 
 function ReadyStep({ say, name }: { say: Say; name: string }) {
   const [openAtLogin, setOpenAtLogin] = useState(true);
   const [holdKey, setHoldKey] = useState<string | null>(null);
   const router = useRouter();
   const desktop = useBridge();
-  useIntro(say, `All set. I'm ${name}, and I'll be at the top of your screen.`);
+  useIntro(say, `That's everything. I'm ${name}, and I'll be right at the top of your screen.`);
   useEffect(() => {
     void desktop?.permissions().then((s) => setHoldKey(s.holdKey));
   }, [desktop]);
+  const tips = [
+    ["Talk", `Hold ${holdKey ?? "the talk key"}, from any app.`],
+    ["Type", `Tap ${holdKey ?? "it"} twice, or click me.`],
+    ["Show me", "Ask about what's on screen: “what's this?”, “reply to this”."],
+    ["Teach me", "Say “teach me”, or “watch my screen” while you work."],
+  ];
   return (
-    <div className="flex flex-1 flex-col gap-4">
-      <ul className="max-w-md space-y-2 text-sm">
-        <li>
-          <strong>Talk:</strong> hold {holdKey ?? "the talk key"} from any app.
-        </li>
-        <li>
-          <strong>Type:</strong> tap {holdKey ?? "it"} twice, or click me.
-        </li>
-        <li>
-          <strong>Teach me:</strong> say &ldquo;teach me&rdquo;, or &ldquo;watch my screen&rdquo;
-          while you work.
-        </li>
+    <div className="flex flex-1 flex-col">
+      <ul className="grid max-w-xl grid-cols-2 gap-3">
+        {tips.map(([title, body]) => (
+          <li key={title} className="rounded-2xl bg-card p-4 ring-1 ring-line">
+            <span className="block font-medium">{title}</span>
+            <span className="mt-0.5 block text-sm text-muted">{body}</span>
+          </li>
+        ))}
       </ul>
       {desktop && (
-        <label className="flex items-center gap-2 text-sm">
+        <label className="mt-6 flex max-w-xl cursor-pointer items-center justify-between rounded-2xl bg-card p-4 ring-1 ring-line">
+          <span>
+            <span className="block font-medium">Open when I log in</span>
+            <span className="block text-sm text-muted">
+              So I&apos;m there whenever you need me.
+            </span>
+          </span>
           <input
             type="checkbox"
+            role="switch"
             checked={openAtLogin}
             onChange={(e) => setOpenAtLogin(e.target.checked)}
+            className="sr-only"
           />
-          Open Persuna when I log in
+          <span
+            aria-hidden
+            className={`relative h-6 w-11 rounded-full transition ${
+              openAtLogin ? "bg-accent" : "bg-line-strong"
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                openAtLogin ? "left-[22px]" : "left-0.5"
+              }`}
+            />
+          </span>
         </label>
       )}
-      <div className="mt-auto">
+      <Footer>
         <button
           type="button"
           onClick={() => {
@@ -968,9 +1222,9 @@ function ReadyStep({ say, name }: { say: Say; name: string }) {
           }}
           className={primary}
         >
-          Start
+          Start using {name}
         </button>
-      </div>
+      </Footer>
     </div>
   );
 }

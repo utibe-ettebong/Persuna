@@ -243,6 +243,8 @@ export function personaChatMessages(
   state: PersonaState,
   history: PersonaTurn[],
   message: string | { audio: string },
+  /** A screenshot of the user's screen right now (a data URL), when Persona may look. */
+  screen: string | null = null,
 ): ChatMessage[] {
   const keys = INTERVIEW_QUESTIONS.map((q) => q.key);
   const spoken = typeof message !== "string";
@@ -280,6 +282,12 @@ Staying on the skill: if state.focusSkill is set and the user asks for work that
 
 Training: when the user wants to teach you their focus skill and it has unanswered questions, ask the next one in your own words and set "asked" to its key. If they say skip or later, move on. Learn the method, never the material: in answers and learn actions, keep the steps and rules but leave out names of people or clients, figures and other client details.
 
+${
+  screen
+    ? `Their screen: a screenshot of it, taken as they spoke, is attached. Use it only when what they say points at something on screen ("what's this", "reply to this email", "what am I looking at", "fix this", "what does this error mean"): then be specific about what you see. Otherwise (a greeting, an introduction, a reminder, a question about their work) answer as you normally would and don't describe or mention the screen at all. Never read out passwords, codes or card numbers you see.`
+    : `You can't see their screen right now. If they ask about it, say so in a few words: in Persona Desktop they can allow Screen Recording; in a browser they can say "watch my screen".`
+}
+
 The user's state is in <persona_state>. ${
         spoken
           ? `Their latest message is the attached recording: they said it out loud. Write exactly what they said in "heard" (their words, not a summary), then answer it.`
@@ -301,12 +309,23 @@ Reply with one JSON object and nothing else:
     ...history.map((m) => ({ role: m.role, content: m.content })),
     {
       role: "user",
-      content: spoken
-        ? [
-            { type: "text", text: fence("persona_state", JSON.stringify(state, null, 1)) },
-            { type: "input_audio", input_audio: { data: message.audio, format: "wav" } },
-          ]
-        : `${fence("persona_state", JSON.stringify(state, null, 1))}\n\n${fence("persona_user", message)}`,
+      content: [
+        {
+          type: "text",
+          text: spoken
+            ? fence("persona_state", JSON.stringify(state, null, 1))
+            : `${fence("persona_state", JSON.stringify(state, null, 1))}\n\n${fence("persona_user", message)}`,
+        },
+        ...(spoken
+          ? [
+              {
+                type: "input_audio" as const,
+                input_audio: { data: message.audio, format: "wav" as const },
+              },
+            ]
+          : []),
+        ...(screen ? [{ type: "image_url" as const, image_url: { url: screen } }] : []),
+      ],
     },
   ];
 }
