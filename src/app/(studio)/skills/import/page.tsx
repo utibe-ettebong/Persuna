@@ -158,6 +158,17 @@ curl ${base}/api/agents/skills/<id> -H "Authorization: Bearer $PERSUNA_AGENT_KEY
           <code>verified</code> or <code>failed</code>, with a report (counts, score, problems). Up
           to {IMPORTS_PER_HOUR} imports an hour per key.
         </p>
+        <p className="text-sm text-muted">
+          The same key can also <em>run</em> your published skills:{" "}
+          <code>GET /api/agents/skills</code> lists them, <code>POST /api/agents/run</code> with{" "}
+          <code>{`{ "skill": "<slug>", "input": "…" }`}</code> runs one, and{" "}
+          <code>GET /api/agents/runs/&lt;jobId&gt;</code> polls it. Output is returned only when
+          your trust level approves the run; until then it waits under Jobs like any other run.
+          Prefer MCP? Point Claude, Cursor or ChatGPT at the Persuna MCP server (see{" "}
+          <code>cloudflare/mcp-worker</code> in the Persuna repo) with this key as the Bearer
+          [REDACTED] — each published skill becomes a tool, and its code-mode <code>execute</code>{" "}
+          tool can chain them in one call.
+        </p>
         <pre className="overflow-x-auto rounded-md bg-subtle p-3 text-xs">{curl}</pre>
         <details>
           <summary className="cursor-pointer text-sm font-medium">skill.json</summary>

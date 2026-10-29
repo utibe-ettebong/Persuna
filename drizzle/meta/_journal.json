@@ -162,6 +162,13 @@
       "when": 1793280000000,
       "tag": "0022_persona-to-persuna",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793298585800,
+      "tag": "0023_mcp-servers",
+      "breakpoints": true
     }
   ]
 }

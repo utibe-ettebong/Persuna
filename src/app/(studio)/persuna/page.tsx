@@ -20,6 +20,8 @@ import { Badge, Card, PageHeader, PanelTitle, Prose } from "@/components/ui";
 import { PersunaOrb } from "@/components/persuna/orb";
 import { requireUser } from "@/lib/auth/session";
 import { listConnections } from "@/lib/connections/service";
+import { McpServers } from "@/components/persuna/mcp-settings";
+import { listMcpServers } from "@/lib/mcp/service";
 import { DESKTOP_DOWNLOAD_URL } from "@/lib/persuna/looks";
 import {
   coachingForAll,
@@ -47,6 +49,7 @@ export default async function PersunaPage({ searchParams }: Props) {
       toneSummary(user.id),
     ]);
   const apps = await listConnections(user.id);
+  const mcpServers = await listMcpServers(user.id).catch(() => []);
 
   return (
     <div className="space-y-10">
@@ -174,6 +177,16 @@ export default async function PersunaPage({ searchParams }: Props) {
                 </li>
               ))}
             </ul>
+          </Card>
+
+          <span id="mcp" className="block scroll-mt-24" />
+          <Card className="p-5">
+            <PanelTitle>Tool servers (MCP)</PanelTitle>
+            <p className="mb-3 text-sm text-muted">
+              Connect any MCP server — Slack, Linear, GitHub, Figma, a database — and just ask:{" "}
+              {profile.name} proposes each call and runs it only when you approve.
+            </p>
+            <McpServers servers={mcpServers} />
           </Card>
 
           <span id="conversation" className="block scroll-mt-24" />

@@ -61,6 +61,17 @@ export const persunaAction = z.discriminatedUnion("type", [
    * calendar, Notion): the goal in their words, with any details they gave.
    */
   z.object({ type: z.literal("app_task"), goal: z.string().trim().min(3).max(1000) }),
+  /**
+   * Use a tool on one of the user's connected MCP servers (state.mcpServers).
+   * Nothing runs on this action alone: the app shows the user exactly what
+   * would run and only calls it when they approve.
+   */
+  z.object({
+    type: z.literal("mcp"),
+    server: z.string().trim().min(1).max(80),
+    tool: z.string().trim().min(1).max(120),
+    arguments: z.record(z.string(), z.unknown()).default({}),
+  }),
   /** The user wants Persuna to start or stop watching their screen (the app asks permission). */
   z.object({ type: z.literal("watch_screen"), on: z.boolean() }),
   /**
@@ -216,6 +227,8 @@ export interface PersunaState {
     unanswered: { key: InterviewKey; question: string }[];
   } | null;
   skills: { slug: string; name: string; published: boolean }[];
+  /** Remote MCP servers the user connected, with the tools each offers. */
+  mcpServers: { name: string; tools: { name: string; description: string }[] }[];
   /** Open to-dos and reminders. */
   todos: string[];
   /** How to talk to this user: their explicit choices, else what Persuna noticed. */

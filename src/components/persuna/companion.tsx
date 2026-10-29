@@ -15,12 +15,14 @@ import {
   persunaVoiceAction,
   persunaAgentTurnsAction,
   persunaAppConfirmAction,
+  persunaMcpConfirmAction,
   persunaFileAction,
   persunaWorkAction,
 } from "@/app/actions/persuna";
 import { toTranscribableWav } from "@/lib/audio/convert";
 import type { ChatJob, ChatResult, Drawing, MadeFile, PublishConfirm } from "@/lib/persuna/service";
 import type { AppConfirm } from "@/lib/connections/service";
+import type { McpConfirm } from "@/lib/mcp/service";
 import { parseFastIntent } from "@/lib/persuna/intents";
 import { sceneIsThin, sceneWithin, type Scene, type Spot } from "@/lib/persuna/scene";
 import { LOOKS, LOOK_IDS, lookOf } from "@/lib/persuna/looks";
@@ -247,6 +249,8 @@ export function Companion(props: CompanionProps) {
   const [confirmLower, setConfirmLower] = useState(false);
   // A send or create in the user's apps, waiting for their OK.
   const [appConfirm, setAppConfirm] = useState<AppConfirm | null>(null);
+  // A tool call on one of the user's MCP servers, waiting for their OK.
+  const [mcpConfirm, setMcpConfirm] = useState<McpConfirm | null>(null);
   const offFocusAsked = useRef(false);
   const [dismissedJob, setDismissedJob] = useState<string | null>(null);
   const [setupDone, setSetupDone] = useState(props.setupDone);
@@ -754,6 +758,7 @@ export function Companion(props: CompanionProps) {
     }
     if (value.example) setExample(value.example.skill);
     if (value.appConfirm) setAppConfirm(value.appConfirm);
+    if (value.mcpConfirm) setMcpConfirm(value.mcpConfirm);
     // Showing something on screen: the island folds up so it doesn't cover it.
     if (value.point || value.drawing) setPanel(false);
     if (value.point) showPoint(value.point);
@@ -1882,6 +1887,21 @@ export function Companion(props: CompanionProps) {
     express(res.value.message.content);
   }
 
+  /** Runs the MCP tool call the user just OK'd. */
+  async function mcpConfirmed() {
+    if (!mcpConfirm) return;
+    setBusy("thinking");
+    const res = await persunaMcpConfirmAction(mcpConfirm.token);
+    setBusy("idle");
+    setMcpConfirm(null);
+    if (!res.ok) return setError(res.error);
+    setMessages((all) => [
+      ...all,
+      { ...res.value.message, role: "assistant", link: res.value.link },
+    ]);
+    express(res.value.message.content);
+  }
+
   /** Does the send or create the user just OK'd. */
   async function appConfirmed() {
     if (!appConfirm) return;
@@ -1970,6 +1990,31 @@ export function Companion(props: CompanionProps) {
               className="rounded-full px-3 py-1.5 text-muted hover:text-foreground"
             >
               Not yet
+            </button>
+          </div>
+        </div>
+      )}
+      {mcpConfirm && (
+        <div className={`persuna-in space-y-3 rounded-[22px] p-4 text-sm ${card}`}>
+          <p className="label-mono text-muted">
+            {mcpConfirm.server} · {mcpConfirm.tool}
+          </p>
+          <p className="max-h-48 overflow-y-auto whitespace-pre-wrap">{mcpConfirm.preview}</p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={busy !== "idle"}
+              onClick={() => void mcpConfirmed()}
+              className="rounded-full bg-accent px-4 py-1.5 text-accent-ink disabled:opacity-50"
+            >
+              Go ahead
+            </button>
+            <button
+              type="button"
+              onClick={() => setMcpConfirm(null)}
+              className="rounded-full px-3 py-1.5 text-muted hover:text-foreground"
+            >
+              Cancel
             </button>
           </div>
         </div>
@@ -2108,6 +2153,7 @@ export function Companion(props: CompanionProps) {
         Boolean(example) ||
         Boolean(confirm) ||
         Boolean(appConfirm) ||
+        Boolean(mcpConfirm) ||
         Boolean(made && !props.overlay) ||
         Boolean(switchOffer && busy === "idle") ||
         Boolean(watchNote && !watching))) ||

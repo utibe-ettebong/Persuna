@@ -164,6 +164,11 @@ export function tidyReply(
       if (action.kind === "flow") return action.flow ? [action] : [];
       return action.body.trim() ? [action] : [];
     }
+    if (action.type === "mcp") {
+      // Only servers and tools the user actually connected.
+      const server = (state.mcpServers ?? []).find((s) => s.name === action.server);
+      return server?.tools.some((t) => t.name === action.tool) ? [action] : [];
+    }
     if (action.type === "answer" || action.type === "learn")
       return state.focusSkill ? [action] : [];
     return [action];

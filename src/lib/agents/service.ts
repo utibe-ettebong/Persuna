@@ -116,6 +116,99 @@ export async function authenticateAgent(token: string | null): Promise<AgentKey 
 
 /* ---------- Receiving ---------- */
 
+/* ---------- Running (MCP server side) ---------- */
+
+/** One published skill a key may run for its person. */
+export interface RunnableSkill {
+  slug: string;
+  name: string;
+  taskDescription: string;
+  inputType: string;
+  outputType: string;
+}
+
+/** The key owner's skills that are published and so runnable by agents. */
+export async function listRunnableSkills(key: AgentKey): Promise<RunnableSkill[]> {
+  const rows = await db()
+    .select({
+      slug: schema.skills.slug,
+      name: schema.skills.name,
+      taskDescription: schema.skills.taskDescription,
+      inputType: schema.skills.inputType,
+      outputType: schema.skills.outputType,
+    })
+    .from(schema.skills)
+    .where(and(eq(schema.skills.ownerId, key.userId), isNotNull(schema.skills.publishedVersionId)))
+    .orderBy(schema.skills.name);
+  return rows;
+}
+
+export type AgentRunResult =
+  | { ok: true; jobId: string; status: "approved" | "awaiting_review"; output: string | null }
+  | { ok: false; status: 404 | 422; errors: string[] };
+
+/**
+ * Runs one of the key owner's published skills on given input and drafts the
+ * result with the usual grounding and trust checks. The draft leaves only
+ * when the owner's trust level approves it (job status "approved"); otherwise
+ * it waits for the owner under Jobs like any other run.
+ */
+export async function runSkillForKey(
+  client: ModelClient,
+  key: AgentKey,
+  slug: string,
+  input: string,
+): Promise<AgentRunResult> {
+  const [skill] = await db()
+    .select()
+    .from(schema.skills)
+    .where(and(eq(schema.skills.ownerId, key.userId), eq(schema.skills.slug, slug)))
+    .limit(1);
+  if (!skill) return { ok: false, status: 404, errors: [`No skill "${slug}" for this key`] };
+  if (!skill.publishedVersionId) {
+    return { ok: false, status: 422, errors: [`Skill "${slug}" is not published yet`] };
+  }
+  const { openJob, draftJob, getJob } = await import("@/lib/jobs/service");
+  const job = await openJob({
+    skillId: skill.id,
+    origin: "renter",
+    requesterName: key.agentName,
+    input,
+  });
+  await draftJob(client, job.id);
+  const fresh = await getJob(job.id);
+  return {
+    ok: true,
+    jobId: job.id,
+    status: fresh.status === "approved" ? "approved" : "awaiting_review",
+    output: fresh.status === "approved" ? (fresh.finalOutput ?? fresh.draft) : null,
+  };
+}
+
+/** A run's state for a key: output only once the owner-side trust approves. */
+export async function agentRunStatus(key: AgentKey, jobId: string) {
+  const { getJobWithSkill } = await import("@/lib/jobs/service");
+  let found: Awaited<ReturnType<typeof getJobWithSkill>>;
+  try {
+    found = await getJobWithSkill(jobId);
+  } catch {
+    return null;
+  }
+  if (found.skill.ownerId !== key.userId || found.job.requesterName !== key.agentName) return null;
+  const { job, skill } = found;
+  return {
+    jobId: job.id,
+    skill: skill.slug,
+    status:
+      job.status === "approved"
+        ? "approved"
+        : job.status === "rejected"
+          ? "rejected"
+          : "awaiting_review",
+    output: job.status === "approved" ? (job.finalOutput ?? job.draft) : null,
+  };
+}
+
 export type ReceiveResult =
   | { ok: true; import: AgentImport }
   | { ok: false; status: 400 | 429; errors: string[]; retryAfterSeconds?: number };
