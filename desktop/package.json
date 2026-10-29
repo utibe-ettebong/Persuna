@@ -1,6 +1,6 @@
 {
   "name": "persuna-desktop",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "Persuna, your AI assistant, over your whole screen.",
   "main": "main.js",

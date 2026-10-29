@@ -170,11 +170,15 @@ export type PersonaObservation = z.infer<typeof personaObservation>;
 /**
  * Work mode: one look at what the user is doing, and whether to step in.
  * "follow" learns a step quietly; "guide" helps when they seem stuck or are
- * searching; "lead" offers to do the next bit for them; "quiet" does nothing.
+ * searching; "lead" offers to do the next bit for them; "ask" asks one
+ * question about how or why they do it (to refine the skill); "explain"
+ * explains something on screen they seem unsure about; "quiet" does nothing.
  */
 export const personaWork = z.object({
-  mode: z.enum(["quiet", "follow", "guide", "lead"]),
-  /** What to say when guiding or leading (short, in their tone); else null. */
+  mode: z.enum(["quiet", "follow", "guide", "lead", "ask", "explain"]),
+  /** The slug of their skill this work belongs to (state.skills), or null. */
+  skill: z.string().trim().max(80).nullish(),
+  /** What to say when guiding, leading, asking or explaining (short, in their tone); else null. */
   say: z.string().trim().max(300).nullish(),
   /** When guiding: the entry to point at (e12, t3), or null. */
   point: z.string().trim().max(10).nullish(),

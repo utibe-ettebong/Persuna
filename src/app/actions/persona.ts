@@ -10,6 +10,7 @@ import { actorOf, requireUser } from "@/lib/auth/session";
 import { createModelClient, createTranscriber } from "@/lib/models";
 import { ModelError } from "@/lib/models/gateway";
 import { sceneSchema } from "@/lib/persona/scene";
+import { MAX_FIRST_SKILLS } from "@/lib/persona/onboarding";
 import { readAudio } from "@/lib/models/transcribe";
 import { takeTurns } from "@/lib/persona/voice-agent";
 import { PROVIDER_IDS } from "@/lib/connections/providers";
@@ -185,6 +186,18 @@ const setupForm = z.object({
       kind: z.literal("new"),
       name: z.string().trim().min(3, "Name the task").max(120),
       description: z.string().trim().min(10, "Describe the task in a sentence").max(1000),
+    }),
+    z.object({
+      kind: z.literal("many"),
+      skills: z
+        .array(
+          z.object({
+            name: z.string().trim().min(3, "Name each task").max(120),
+            description: z.string().trim().max(1000).optional(),
+          }),
+        )
+        .min(1, "Pick at least one")
+        .max(MAX_FIRST_SKILLS, `Pick up to ${MAX_FIRST_SKILLS} for now`),
     }),
     z.object({ kind: z.literal("skip") }),
   ]),

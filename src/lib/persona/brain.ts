@@ -177,9 +177,12 @@ export async function personaWorkLook(
     { maxTokens: 2048 },
   );
   const point = value.point && spotOf(input.scene, value.point) ? value.point : null;
-  if (!input.mayInterrupt || value.mode === "quiet" || value.mode === "follow") {
+  const skill =
+    value.skill && input.state.skills.some((s) => s.slug === value.skill) ? value.skill : null;
+  if (!input.mayInterrupt || value.mode === "quiet" || value.mode === "follow" || !value.say) {
     return {
       mode: value.mode === "quiet" ? "quiet" : "follow",
+      skill,
       say: null,
       point: null,
       offer: null,
@@ -188,7 +191,8 @@ export async function personaWorkLook(
   }
   return {
     ...value,
-    point: value.mode === "guide" ? point : null,
+    skill,
+    point: value.mode === "guide" || value.mode === "explain" ? point : null,
     offer: value.mode === "lead" ? (value.offer ?? null) : null,
   };
 }

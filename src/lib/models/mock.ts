@@ -367,6 +367,13 @@ function mockPersonaTurn(user: string): {
   ) {
     return { reply: "On it.", actions: [{ type: "app_task", goal: text.trim() }] };
   }
+  if (/\bturn (?:off|on) (?:work|walk|watch) mode\b/.test(lower)) {
+    const on = /\bturn on\b/.test(lower);
+    return {
+      reply: on ? "Work mode is on." : "Work mode is off.",
+      actions: [{ type: "watch_screen", on }],
+    };
+  }
   if (/\b(stop|quit|end) (?:watching|following)\b/.test(lower)) {
     return {
       reply: "Okay, I've stopped watching.",
@@ -508,18 +515,22 @@ function mockWork(user: string, system: string) {
   if (interrupt && search && trail.length >= 2) {
     return {
       mode: "guide",
+      skill: null,
       say: "Looking for something? Try the search here with fewer words.",
       point: search.split(" ")[0],
       offer: null,
       step: null,
     };
   }
+  const recent = blocks(user, "recent_steps")[0] ?? "";
+  const seen = recent.startsWith("(none") ? 0 : recent.split("\n").length;
   return {
     mode: "follow",
+    skill: null,
     say: null,
     point: null,
     offer: null,
-    step: "Works through the page top to bottom. (mock)",
+    step: `Works through the page top to bottom, part ${seen + 1}. (mock)`,
   };
 }
 

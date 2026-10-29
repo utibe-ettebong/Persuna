@@ -285,6 +285,67 @@ ipcMain.on("persona:watching", (event, on) => {
 });
 ipcMain.handle("persona:island", () => islandShape());
 
+/* ---------- Permissions, asked for in the island when needed ---------- */
+
+/** What Persuna may use right now: "granted", "denied" or "not-determined" (always granted off a Mac). */
+function permissionStatus() {
+  if (!MAC) return { mic: "granted", screen: "granted", keyboard: "granted" };
+  return {
+    mic: systemPreferences.getMediaAccessStatus("microphone"),
+    screen: systemPreferences.getMediaAccessStatus("screen"),
+    keyboard: keyboardAllowed() ? "granted" : "denied",
+  };
+}
+ipcMain.handle("persona:permissions", (event) => (fromOverlay(event) ? permissionStatus() : null));
+
+/**
+ * The island's "Allow" button. The microphone gets macOS's own prompt the
+ * first time; after a refusal, and for Screen Recording and Accessibility
+ * (which macOS only lets you switch on in System Settings), it opens the
+ * right pane. Resolves with the new status.
+ */
+ipcMain.handle("persona:ask-permission", async (event, kind) => {
+  if (!fromOverlay(event) || !MAC) return "granted";
+  if (kind === "mic") {
+    if (systemPreferences.getMediaAccessStatus("microphone") === "not-determined") {
+      stepAside(true);
+      const ok = await systemPreferences.askForMediaAccess("microphone").catch(() => false);
+      stepAside(false);
+      return ok ? "granted" : "denied";
+    }
+    void shell.openExternal(PRIVACY("Microphone"));
+  } else if (kind === "screen") {
+    void shell.openExternal(PRIVACY("ScreenCapture"));
+  } else if (kind === "keyboard") {
+    systemPreferences.isTrustedAccessibilityClient(true);
+    void shell.openExternal(PRIVACY("Accessibility"));
+  }
+  return permissionStatus()[kind] ?? "denied";
+});
+
+/** The island opened: take the keyboard, so clicking anywhere else closes it again. */
+ipcMain.on("persona:focus", (event) => {
+  if (!fromOverlay(event)) return;
+  overlay.focus();
+  if (!MAC) app.focus({ steal: true });
+});
+
+/** ⌃⌥C (Ctrl+Alt+C): circle something on screen to ask about it. */
+const CIRCLE_SHORTCUT = "Control+Alt+C";
+function registerCircleShortcut() {
+  try {
+    globalShortcut.register(CIRCLE_SHORTCUT, () => {
+      if (!overlay || !/^\/companion/.test(pathOf(overlay.webContents.getURL()))) return;
+      if (!overlay.isVisible()) overlay.showInactive();
+      // The keyboard too, so Esc cancels.
+      overlay.focus();
+      overlay.webContents.send("persona:circle");
+    });
+  } catch {
+    // Taken by another app: circling is still in the island.
+  }
+}
+
 /* ---------- Copying, pasting and saving for you ---------- */
 
 const fromOverlay = (event) => Boolean(overlay) && event.sender === overlay.webContents;
@@ -1038,11 +1099,12 @@ if (!app.requestSingleInstanceLock()) {
       const source = await chooseSource();
       callback(source ? { video: source } : {});
     });
-    // macOS asks for the microphone the first time Persona listens.
-    if (MAC) void systemPreferences.askForMediaAccess("microphone").catch(() => {});
+    // No permission prompts at launch: Persuna's island asks for each one
+    // the first time you use what needs it (see persona:ask-permission).
 
     createOverlay();
     registerCallShortcut();
+    registerCircleShortcut();
     startKeyListener();
     warmEyes();
     createTray();

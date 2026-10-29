@@ -32,6 +32,17 @@ contextBridge.exposeInMainWorld("personaDesktop", {
     ipcRenderer.removeAllListeners("persona:island");
     ipcRenderer.on("persona:island", (_event, shape) => handler(shape));
   },
+  // Permissions, asked for from the island: { mic, screen, keyboard } each
+  // "granted" / "denied" / "not-determined"; ask("mic" | "screen" | "keyboard").
+  permissions: () => ipcRenderer.invoke("persona:permissions"),
+  askPermission: (kind) => ipcRenderer.invoke("persona:ask-permission", String(kind)),
+  // Take the keyboard while the island is open (clicking elsewhere then closes it).
+  focus: () => ipcRenderer.send("persona:focus"),
+  // ⌃⌥C: circle something to ask about it.
+  onCircle: (handler) => {
+    ipcRenderer.removeAllListeners("persona:circle");
+    ipcRenderer.on("persona:circle", () => handler());
+  },
   // Copying and pasting for you: paste resolves true once it pressed ⌘V in your app.
   copy: (text) => ipcRenderer.send("persona:copy", String(text)),
   paste: (text) => ipcRenderer.invoke("persona:paste", String(text)),

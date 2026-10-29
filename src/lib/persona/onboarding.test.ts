@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { introFacts, parseFirstTask, parseLook, parseName, suggestedSkill } from "./onboarding";
+import {
+  describeSkill,
+  freeSlug,
+  introFacts,
+  parseFirstTask,
+  parseLook,
+  parseName,
+  suggestedSkill,
+} from "./onboarding";
 
 describe("parseName", () => {
   it("pulls the name out of how people say it", () => {
@@ -57,5 +65,17 @@ describe("getting to know you", () => {
     expect(suggestedSkill("um, probably meeting minutes and follow-ups")).toBe("Meeting minutes");
     expect(suggestedSkill("Emails")).toBeNull();
     expect(suggestedSkill(undefined)).toBeNull();
+  });
+});
+
+describe("picking several skills at setup", () => {
+  it("describes common and custom skills", () => {
+    expect(describeSkill("email replies")).toMatch(/reply in my voice/);
+    expect(describeSkill("Podcast show notes")).toBe("Podcast show notes, done the way I do it.");
+  });
+
+  it("finds a free slug", () => {
+    expect(freeSlug("minutes", new Set())).toBe("minutes");
+    expect(freeSlug("minutes", new Set(["minutes", "minutes-2"]))).toBe("minutes-3");
   });
 });
