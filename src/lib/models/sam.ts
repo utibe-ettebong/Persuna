@@ -5,7 +5,7 @@
  * of the screen doesn't name.
  */
 import { modelProvider, samConfig } from "@/env";
-import { parseSamBox } from "@/lib/persona/scene";
+import { parseSamBox } from "@/lib/persuna/scene";
 
 export interface Locator {
   /** The box around `thing` in the screenshot's pixels, or null if it isn't there. */

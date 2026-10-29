@@ -1,10 +1,10 @@
 /**
- * What Persona can do in each connected app. Reads run straight away;
+ * What Persuna can do in each connected app. Reads run straight away;
  * anything that sends or creates ("writes") waits for the user's OK. Results
  * are kept short: a few fields per item, never whole mailboxes.
  */
 import { z } from "zod";
-import { localToUtc, type OffsetMinutes } from "@/lib/persona/when";
+import { localToUtc, type OffsetMinutes } from "@/lib/persuna/when";
 import type { Provider } from "./providers";
 
 export interface ToolContext {

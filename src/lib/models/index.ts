@@ -23,7 +23,7 @@ export function createTranscriber(caller?: Caller): Transcriber {
     : transcriber;
 }
 
-/** Persona's cloud voice, or null when none is configured (the browser speaks). */
+/** Persuna's cloud voice, or null when none is configured (the browser speaks). */
 export function createSpeaker(caller?: Caller): Speaker | null {
   const speaker = liveSpeaker();
   return speaker && caller ? meteredSpeaker(speaker, caller) : speaker;

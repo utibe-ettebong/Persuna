@@ -22,7 +22,7 @@ const roleSchema = z.object({
 
 export type ModelRoleConfig = z.infer<typeof roleSchema>;
 /**
- * extract, draft and evaluate run the training loop; listen is Persona hearing
+ * extract, draft and evaluate run the training loop; listen is Persuna hearing
  * a spoken message directly (audio in, reply out), with no transcription first.
  */
 export type ModelRole = "extract" | "draft" | "evaluate" | "listen";
@@ -35,10 +35,10 @@ const envSchema = z.object({
   MODEL_TIMEOUT_MS: z.coerce.number().int().min(1000).default(180_000),
   MODEL_PROVIDER: z.enum(["live", "mock"]).optional(),
   /**
-   * How Persona hears you. "listen": the recording goes straight to the
+   * How Persuna hears you. "listen": the recording goes straight to the
    * LISTEN model (Muse Spark), no transcription. "transcribe": transcribe
    * first, then reply. "agent": ElevenLabs Agents handles listening, turn
-   * taking and voice, with Persona's own server as its brain (needs
+   * taking and voice, with Persuna's own server as its brain (needs
    * ELEVENLABS_AGENT_ID). Default: agent when that's set, otherwise listen.
    */
   VOICE_MODE: z.enum(["listen", "transcribe", "agent"]).optional(),
@@ -55,7 +55,7 @@ const envSchema = z.object({
   NOTION_CLIENT_SECRET: z.string().min(1).optional(),
   /** The ElevenLabs agent created by `npm run voice:agent`. */
   ELEVENLABS_AGENT_ID: z.string().min(1).optional(),
-  /** Shared secret ElevenLabs sends when it calls Persona's brain (/api/persona/llm). */
+  /** Shared secret ElevenLabs sends when it calls Persuna's brain (/api/persuna/llm). */
   ELEVENLABS_LLM_SECRET: z.string().min(24).optional(),
   JOB_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
   PLATFORM_FEE_PERCENT: z.coerce.number().min(0).max(50).default(20),
@@ -173,7 +173,7 @@ export interface SpeechConfig {
   voice: string;
 }
 
-/** How Persona hears a spoken message (see VOICE_MODE). */
+/** How Persuna hears a spoken message (see VOICE_MODE). */
 export function voiceMode(): "listen" | "transcribe" | "agent" {
   const explicit = setting("VOICE_MODE");
   const agent = Boolean(agentConfig());
@@ -183,7 +183,7 @@ export function voiceMode(): "listen" | "transcribe" | "agent" {
 
 /**
  * ElevenLabs Agents, when set up: the agent, the ElevenLabs key (the cloud
- * voice's) and the secret ElevenLabs sends when it calls Persona's brain.
+ * voice's) and the secret ElevenLabs sends when it calls Persuna's brain.
  */
 export function agentConfig(): {
   agentId: string;
@@ -199,7 +199,7 @@ export function agentConfig(): {
 }
 
 /**
- * Persona's cloud voice (text to speech), or null when no SPEECH_API_KEY is
+ * Persuna's cloud voice (text to speech), or null when no SPEECH_API_KEY is
  * set, in which case the browser's own voice is used. Two API shapes:
  * OpenAI-compatible POST {base}/audio/speech (OpenAI, and the many servers
  * that copy it), or ElevenLabs. ElevenLabs is chosen when SPEECH_API=elevenlabs

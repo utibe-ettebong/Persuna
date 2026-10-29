@@ -14,7 +14,7 @@ export interface NavItem {
 /** Every studio section, grouped in the sidebar. */
 export const NAV: NavItem[] = [
   { href: "/dashboard", label: "Dashboard" },
-  { href: "/persona", label: "My Persuna" },
+  { href: "/persuna", label: "My Persuna" },
   { href: "/skills", label: "Skills" },
   { href: "/jobs", label: "Jobs" },
   { href: "/team", label: "Team" },
@@ -31,7 +31,7 @@ const SECTIONS = ["Workspace", "Marketplace", "Account"] as const;
 /** Small line icons, one per section of the studio. */
 const ICONS: Record<string, string> = {
   "/dashboard": "M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z",
-  "/persona": "M12 3a7 7 0 0 1 7 7c0 4-3 7-7 11-4-4-7-7-7-11a7 7 0 0 1 7-7zM9.5 10h.01M14.5 10h.01",
+  "/persuna": "M12 3a7 7 0 0 1 7 7c0 4-3 7-7 11-4-4-7-7-7-11a7 7 0 0 1 7-7zM9.5 10h.01M14.5 10h.01",
   "/skills": "M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.4 6.8 19.1l1-5.8L3.5 9.2l5.9-.9z",
   "/jobs": "M4 7h16v12H4zM9 7V5h6v2M4 12h16",
   "/market": "M4 9l1.5-5h13L20 9M4 9v11h16V9M4 9h16M9 20v-6h6v6",

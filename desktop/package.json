@@ -21,7 +21,7 @@
   },
   "homepage": "https://persuna-production.up.railway.app",
   "build": {
-    "appId": "app.persuna.persona",
+    "appId": "app.persuna.persuna",
     "productName": "Persuna",
     "copyright": "\u00a9 Persuna. MIT licensed.",
     "directories": {

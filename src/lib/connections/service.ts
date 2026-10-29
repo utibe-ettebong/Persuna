@@ -11,7 +11,7 @@ import { appConnections } from "@/db/schema";
 import { env } from "@/env";
 import { audit, type Actor } from "@/lib/audit";
 import type { ModelClient } from "@/lib/models/gateway";
-import type { OffsetMinutes } from "@/lib/persona/when";
+import type { OffsetMinutes } from "@/lib/persuna/when";
 import { runAppTask } from "./agent";
 import { readToken, seal, signToken, unseal } from "./crypto";
 import {

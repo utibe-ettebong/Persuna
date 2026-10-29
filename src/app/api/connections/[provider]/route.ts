@@ -7,7 +7,7 @@ import { NONCE_COOKIE, startConnecting } from "@/lib/connections/service";
 export async function GET(request: Request, { params }: { params: Promise<{ provider: string }> }) {
   const { provider } = await params;
   const user = await getUser();
-  if (!user) return NextResponse.redirect(new URL("/sign-in?next=/persona%23apps", request.url));
+  if (!user) return NextResponse.redirect(new URL("/sign-in?next=/persuna%23apps", request.url));
   if (!isProvider(provider)) return new Response("Unknown app", { status: 404 });
   try {
     const { url, nonce } = startConnecting(user.id, provider, new URL(request.url).origin);
@@ -22,7 +22,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
     return res;
   } catch (error) {
     return NextResponse.redirect(
-      new URL(`/persona?apps=${encodeURIComponent((error as Error).message)}#apps`, request.url),
+      new URL(`/persuna?apps=${encodeURIComponent((error as Error).message)}#apps`, request.url),
     );
   }
 }

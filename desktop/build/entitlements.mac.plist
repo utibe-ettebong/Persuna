@@ -10,7 +10,7 @@
   <!-- Loads the talk-key listener (a native module that isn't signed by Apple's team ID). -->
   <key>com.apple.security.cs.disable-library-validation</key>
   <true/>
-  <!-- Persona listens when you talk to it. -->
+  <!-- Persuna listens when you talk to it. -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
 </dict>

@@ -39,7 +39,7 @@ export default async function ProfilePage({ searchParams }: Props) {
         title="Your public profile"
         description="What clients posting projects and people renting your skills see about you. Your email is never shown."
       >
-        <Link href={`/personas/${p.handle}`} className={buttonClass("secondary")}>
+        <Link href={`/persunas/${p.handle}`} className={buttonClass("secondary")}>
           See it as others do ↗
         </Link>
       </PageHeader>

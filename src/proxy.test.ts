@@ -3,14 +3,14 @@ import { isPublicPath } from "./proxy";
 import { matchesList, parseList, signUpAllowed } from "./lib/auth/policy";
 
 describe("isPublicPath", () => {
-  it("opens the landing page, auth pages, auth API, employer links, public persona profiles, the marketplace and the projects board", () => {
+  it("opens the landing page, auth pages, auth API, employer links, public persuna profiles, the marketplace and the projects board", () => {
     for (const p of [
       "/",
       "/sign-in",
       "/sign-up",
       "/api/auth/sign-in/email",
       "/approvals/abc",
-      "/personas/owl-ab12c",
+      "/persunas/owl-ab12c",
       "/download",
       "/welcome",
       "/desktop/setup",
@@ -35,7 +35,7 @@ describe("isPublicPath", () => {
       "/settings",
       "/sign-in-x",
       "/approvals",
-      "/persona",
+      "/persuna",
       "/companion",
       "/desktop/connect",
     ]) {

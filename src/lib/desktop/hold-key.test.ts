@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-// The desktop app's own module (CommonJS, shipped with Persona Desktop).
+// The desktop app's own module (CommonJS, shipped with Persuna Desktop).
 import { createHoldKey, DOUBLE_TAP_MS, HOLD_MS } from "../../../desktop/hold-key.js";
 
 const KEY = 3640;

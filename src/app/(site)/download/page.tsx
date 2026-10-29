@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { MacChipNote, MacChoice } from "@/components/download/mac-chip";
 import { Frame, SectionLabel } from "@/components/brand";
-import { PersonaOrb } from "@/components/persona/orb";
+import { PersunaOrb } from "@/components/persuna/orb";
 import { buttonClass } from "@/components/ui";
 import {
   RELEASES_URL,
@@ -119,7 +119,7 @@ export default async function DownloadPage() {
             </div>
             <div className="hatch relative flex min-h-80 items-center justify-center rounded-md border border-line">
               <div className="flex flex-col items-center gap-3">
-                <PersonaOrb look="plum" size={150} />
+                <PersunaOrb look="plum" size={150} />
                 <p className="label-mono text-muted">Say &ldquo;Hey Persuna&rdquo;</p>
               </div>
             </div>

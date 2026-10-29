@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { AuthForm } from "@/components/auth-form";
-import { PersonaOrb } from "@/components/persona/orb";
+import { PersunaOrb } from "@/components/persuna/orb";
 
 const POINTS = [
   ["Talks with you", "Tap me and just talk. I answer out loud."],
@@ -18,9 +18,9 @@ const POINTS = [
 export function DesktopWelcome() {
   const [step, setStep] = useState<"hello" | "sign-in" | "sign-up">("hello");
   return (
-    <main className="persona-backdrop flex min-h-screen flex-col px-7 pb-7 pt-10 text-foreground">
-      <div className="persona-drag flex flex-col items-center text-center">
-        <PersonaOrb look="plum" size={step === "hello" ? 132 : 84} />
+    <main className="persuna-backdrop flex min-h-screen flex-col px-7 pb-7 pt-10 text-foreground">
+      <div className="persuna-drag flex flex-col items-center text-center">
+        <PersunaOrb look="plum" size={step === "hello" ? 132 : 84} />
         <h1 className="mt-4 font-display text-3xl font-medium tracking-[-0.03em]">
           {step === "hello"
             ? "Hi, I'm Persuna"
@@ -48,7 +48,7 @@ export function DesktopWelcome() {
               </li>
             ))}
           </ul>
-          <div className="persona-no-drag mx-auto mt-auto flex w-full max-w-xs flex-col gap-2 pt-8">
+          <div className="persuna-no-drag mx-auto mt-auto flex w-full max-w-xs flex-col gap-2 pt-8">
             <button
               type="button"
               onClick={() => setStep("sign-up")}
@@ -66,7 +66,7 @@ export function DesktopWelcome() {
           </div>
         </>
       ) : (
-        <div className="persona-no-drag mx-auto mt-6 w-full max-w-xs">
+        <div className="persuna-no-drag mx-auto mt-6 w-full max-w-xs">
           <AuthForm
             key={step}
             mode={step}

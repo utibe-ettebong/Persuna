@@ -10,10 +10,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
   const url = new URL(request.url);
   const back = (message: string) =>
     NextResponse.redirect(
-      new URL(`/persona?apps=${encodeURIComponent(message)}#apps`, request.url),
+      new URL(`/persuna?apps=${encodeURIComponent(message)}#apps`, request.url),
     );
   const user = await getUser();
-  if (!user) return NextResponse.redirect(new URL("/sign-in?next=/persona%23apps", request.url));
+  if (!user) return NextResponse.redirect(new URL("/sign-in?next=/persuna%23apps", request.url));
   if (!isProvider(provider)) return new Response("Unknown app", { status: 404 });
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");

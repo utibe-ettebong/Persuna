@@ -5,7 +5,7 @@ import { rentAction } from "@/app/actions/market";
 import { ActionForm } from "@/components/action-form";
 import { FairDealPanel, RatingLine, Stars, VerifiedBadge } from "@/components/market";
 import { Markdown } from "@/components/markdown";
-import { PersonaOrb } from "@/components/persona/orb";
+import { PersunaOrb } from "@/components/persuna/orb";
 import { Badge, buttonClass, Card, Field, inputClass, PageHeader } from "@/components/ui";
 import { env } from "@/env";
 import { getUser } from "@/lib/auth/session";
@@ -14,7 +14,7 @@ import { orNotFound } from "@/lib/load";
 import { MAX_REVISIONS } from "@/lib/market/rules";
 import { getActiveListing } from "@/lib/market/service";
 import { formatUsd } from "@/lib/money";
-import { personasByOwner } from "@/lib/persona/service";
+import { persunasByOwner } from "@/lib/persuna/service";
 import { plural } from "@/lib/plural";
 
 export const dynamic = "force-dynamic";
@@ -55,7 +55,7 @@ export default async function ListingDetailPage({ params }: Params) {
   const { id } = await params;
   const { listing, skill, verification, verified, ratings, reviews, rentals } = await load(id);
   const user = await getUser();
-  const seller = skill.ownerId ? (await personasByOwner([skill.ownerId])).get(skill.ownerId) : null;
+  const seller = skill.ownerId ? (await persunasByOwner([skill.ownerId])).get(skill.ownerId) : null;
   const signIn = `/sign-in?next=${encodeURIComponent(`/market/${listing.id}`)}`;
 
   return (
@@ -87,10 +87,10 @@ export default async function ListingDetailPage({ params }: Params) {
         <span>{plural(rentals, "paid rental")}</span>
         {seller?.handle && (
           <Link
-            href={`/personas/${seller.handle}`}
+            href={`/persunas/${seller.handle}`}
             className="inline-flex items-center gap-2 hover:text-accent"
           >
-            <PersonaOrb look={seller.avatar} size={22} animate={false} />
+            <PersunaOrb look={seller.avatar} size={22} animate={false} />
             by {seller.name} →
           </Link>
         )}

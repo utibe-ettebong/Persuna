@@ -52,7 +52,7 @@ function createAuth() {
       },
     },
     plugins: [
-      // Persona Desktop signs in through the browser: the signed-in browser
+      // Persuna Desktop signs in through the browser: the signed-in browser
       // makes a one-time token (server-side only, 3 minutes, stored hashed)
       // and the app trades it for its own session.
       oneTimeToken({ expiresIn: 3, disableClientRequest: true, storeToken: "hashed" }),
