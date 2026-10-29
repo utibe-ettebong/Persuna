@@ -253,12 +253,17 @@ export async function chatFromVoice(
   client: ModelClient,
   transcriber: Transcriber,
   userId: string,
-  input: { audio: File; clock: Clock; actor: Actor },
+  input: { audio: File; clock: Clock; actor: Actor; screen?: string | null },
 ): Promise<ChatResult> {
   if (voiceMode() !== "transcribe" && modelProvider() !== "mock") {
     try {
       const audio = Buffer.from(await input.audio.arrayBuffer()).toString("base64");
-      return await chat(client, userId, { audio, clock: input.clock, actor: input.actor });
+      return await chat(client, userId, {
+        audio,
+        clock: input.clock,
+        actor: input.actor,
+        screen: input.screen,
+      });
     } catch (error) {
       if (!(error instanceof NotHeardError)) throw error;
       console.warn(`[persona] listening failed, transcribing instead: ${String(error.reason)}`);
@@ -266,14 +271,24 @@ export async function chatFromVoice(
   }
   const { text } = await transcriber.transcribe(input.audio, input.audio.name);
   if (!text.trim()) throw new Error("I couldn't make that out. Try again?");
-  return chat(client, userId, { text, clock: input.clock, actor: input.actor });
+  return chat(client, userId, {
+    text,
+    clock: input.clock,
+    actor: input.actor,
+    screen: input.screen,
+  });
 }
 
 /** One message from the user: think, apply the actions, save both sides. */
 export async function chat(
   client: ModelClient,
   userId: string,
-  input: ({ text: string } | { audio: string }) & { clock: Clock; actor: Actor },
+  input: ({ text: string } | { audio: string }) & {
+    clock: Clock;
+    actor: Actor;
+    /** A screenshot of the user's screen right now, when Persona may look. */
+    screen?: string | null;
+  },
 ): Promise<ChatResult> {
   const spoken = "audio" in input;
   const typed = spoken ? "" : normalizeText(input.text).slice(0, 4000);
@@ -285,7 +300,13 @@ export async function chat(
   }));
   let reply: PersonaReply;
   try {
-    reply = await personaTurn(client, state, history, spoken ? { audio: input.audio } : typed);
+    reply = await personaTurn(
+      client,
+      state,
+      history,
+      spoken ? { audio: input.audio } : typed,
+      input.screen ?? null,
+    );
   } catch (error) {
     if (spoken && !(error instanceof UsageLimitError)) throw new NotHeardError(error);
     throw error;

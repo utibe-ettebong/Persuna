@@ -8,6 +8,7 @@ import { readTaskInput } from "@/lib/docs/read-input";
 import { createFileStore } from "@/lib/models/files";
 import { actorOf, requireUser } from "@/lib/auth/session";
 import { createModelClient, createTranscriber } from "@/lib/models";
+import { ModelError } from "@/lib/models/gateway";
 import { readAudio } from "@/lib/models/transcribe";
 import { takeTurns } from "@/lib/persona/voice-agent";
 import { PROVIDER_IDS } from "@/lib/connections/providers";
@@ -50,6 +51,12 @@ async function run<T>(work: () => Promise<T>): Promise<Result<T>> {
     console.error(error);
     if (error instanceof z.ZodError)
       return { ok: false, error: error.issues[0]?.message ?? "Invalid input." };
+    // A model provider's own wording ("[extract model] HTTP 404 …") means nothing to the user.
+    if (error instanceof ModelError)
+      return {
+        ok: false,
+        error: "I couldn't reach my model just now. Give me a moment and try again.",
+      };
     return { ok: false, error: error instanceof Error ? error.message : "Something went wrong." };
   }
 }
@@ -65,7 +72,18 @@ const clockField = z.object({
   offset: z.number().int().min(-900).max(900),
 });
 
-export async function personaChatAction(text: string, clock: z.input<typeof clockField>) {
+/** A screenshot sent with a turn: a JPEG, PNG or WebP data URL of a sensible size, or nothing. */
+const screenField = z
+  .string()
+  .regex(FRAME_TYPES, "That screen image couldn't be read")
+  .max(MAX_FRAME_CHARS)
+  .nullish();
+
+export async function personaChatAction(
+  text: string,
+  clock: z.input<typeof clockField>,
+  screen?: string | null,
+) {
   return run(async () => {
     const user = await requireUser();
     const message = z.string().trim().min(1, "Say something first").max(4000).parse(text);
@@ -73,6 +91,7 @@ export async function personaChatAction(text: string, clock: z.input<typeof cloc
       text: message,
       clock: clockField.parse(clock),
       actor: actorOf(user),
+      screen: screenField.parse(screen),
     });
   });
 }
@@ -220,10 +239,12 @@ export async function personaVoiceAction(form: FormData, clock: z.input<typeof c
     const user = await requireUser();
     const audio = readAudio(form.get("audio"));
     if (!audio) throw new Error("Nothing was recorded");
+    const screen = form.get("screen");
     return chatFromVoice(createModelClient(user), createTranscriber(user), user.id, {
       audio,
       clock: clockField.parse(clock),
       actor: actorOf(user),
+      screen: screenField.parse(typeof screen === "string" ? screen : null),
     });
   });
 }

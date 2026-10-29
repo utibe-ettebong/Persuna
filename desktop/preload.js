@@ -22,6 +22,16 @@ contextBridge.exposeInMainWorld("personaDesktop", {
     ipcRenderer.on("persona:hold", (_event, phase) => handler(phase));
   },
   holdKey: () => ipcRenderer.invoke("persona:hold-key"),
+  // One look at the screen (Persuna left out), or null without Screen Recording.
+  look: () => ipcRenderer.invoke("persona:look"),
+  // Watching started or stopped (Persuna hides itself from captures meanwhile).
+  watching: (on) => ipcRenderer.send("persona:watching", Boolean(on)),
+  // Where the island sits: on the notch, or hanging from the top centre.
+  island: () => ipcRenderer.invoke("persona:island"),
+  onIsland: (handler) => {
+    ipcRenderer.removeAllListeners("persona:island");
+    ipcRenderer.on("persona:island", (_event, shape) => handler(shape));
+  },
   onHoldKey: (handler) => {
     ipcRenderer.removeAllListeners("persona:hold-key");
     ipcRenderer.on("persona:hold-key", (_event, label) => handler(label));

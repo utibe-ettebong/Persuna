@@ -15,7 +15,9 @@
 // Watching is still your choice each time. The operating system asks once
 // (macOS: Screen Recording); after that, turning watching on in Persona
 // starts it without a picker, using the screen or window you chose and
-// asked it to remember. Persona's own layer never appears in what it sees.
+// asked it to remember. When you talk or type to Persuna, it takes one look at
+// the screen so it can see what you mean (switch that off from its menu).
+// Persuna leaves itself out of what it sees, but shows in your own screenshots.
 const {
   app,
   BrowserWindow,
@@ -103,13 +105,29 @@ const pathOf = (url) => {
 
 /* ---------- The overlay: Persona over the whole screen ---------- */
 
+/**
+ * Where Persuna's island goes: hugging the camera notch on a Mac that has
+ * one, else hanging from the top centre of the screen (other Macs, Windows).
+ * Electron can't ask macOS for the notch, so it's inferred: only built-in
+ * displays have one, and they get a taller menu bar (about 37 points, not 24).
+ */
+function islandShape() {
+  const display = screen.getPrimaryDisplay();
+  const menuBar = display.workArea.y - display.bounds.y;
+  const notch = MAC && display.internal && menuBar >= 30;
+  return { notch, height: notch ? menuBar : 34, notchWidth: notch ? 196 : 0 };
+}
+
 function createOverlay() {
-  const { x, y, width, height } = screen.getPrimaryDisplay().workArea;
+  // The whole screen, menu bar included, so the island can sit on the notch.
+  const { x, y, width, height } = screen.getPrimaryDisplay().bounds;
   overlay = new BrowserWindow({
     x,
     y,
     width,
     height,
+    // Lets a frameless window cover the menu bar (macOS keeps others below it).
+    enableLargerThanScreen: true,
     title: "Persuna",
     transparent: true,
     frame: false,
@@ -132,14 +150,15 @@ function createOverlay() {
       autoplayPolicy: "no-user-gesture-required",
     },
   });
-  // Above your apps, on every desktop and over full-screen apps, but below
-  // macOS's own prompts and System Settings, so permissions stay clickable.
-  overlay.setAlwaysOnTop(true, "floating");
+  // Above your apps and the menu bar, on every desktop and over full-screen
+  // apps. macOS's own prompts still come first (see stepAside).
+  overlay.setAlwaysOnTop(true, MAC ? "status" : "screen-saver");
   overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   // Clicks go through to the apps underneath until the pointer is over Persona.
   overlay.setIgnoreMouseEvents(true, { forward: true });
-  // Persona never shows up in screenshots or in what it watches.
-  overlay.setContentProtection(true);
+  // Persuna shows in your screenshots and recordings; it hides itself only
+  // from what it looks at itself (while watching, and for each look).
+  overlay.setContentProtection(false);
   overlay.loadURL(`${ORIGIN}/companion?overlay=1`);
   // Show the layer only once it holds Persuna. Signed out, it lands on the
   // sign-in page, which must never cover the screen (clicks pass through it).
@@ -184,16 +203,16 @@ function openSetup() {
     return;
   }
   setup = new BrowserWindow({
-    width: 600,
-    height: 760,
-    minWidth: 520,
-    minHeight: 640,
+    width: 980,
+    height: 680,
+    minWidth: 860,
+    minHeight: 620,
     maximizable: false,
     fullscreenable: false,
     title: "Set up Persuna",
     titleBarStyle: MAC ? "hiddenInset" : "default",
     autoHideMenuBar: true,
-    backgroundColor: "#f8f6f8",
+    backgroundColor: "#faf8fc",
     show: false,
     webPreferences: {
       preload: path.join(__dirname, "setup-preload.js"),
@@ -241,7 +260,51 @@ ipcMain.handle("persona:pick-screen", async (event) => {
   if (!overlay || event.sender !== overlay.webContents) return null;
   if (!(await ensureScreenPermission())) return null;
   const source = await chooseSource();
+  // While watching, Persuna keeps itself out of the picture.
+  if (source) setWatching(true);
   return source?.id ?? null;
+});
+ipcMain.on("persona:watching", (event, on) => {
+  if (overlay && event.sender === overlay.webContents) setWatching(Boolean(on));
+});
+ipcMain.handle("persona:island", () => islandShape());
+
+let watching = false;
+function setWatching(on) {
+  watching = on;
+  overlay?.setContentProtection(on);
+}
+
+/** The longest side of a look, in pixels: plenty to read text, small enough to send. */
+const LOOK_WIDTH = 1600;
+
+/**
+ * A screenshot of the main screen right now, for Persuna to understand what
+ * you're asking about. Persuna hides itself from it. Null without Screen
+ * Recording (it never asks from here: that's setup's job).
+ */
+ipcMain.handle("persona:look", async (event) => {
+  if (!overlay || event.sender !== overlay.webContents) return null;
+  if (MAC && systemPreferences.getMediaAccessStatus("screen") !== "granted") return null;
+  const display = screen.getPrimaryDisplay();
+  const scale = Math.min(1, LOOK_WIDTH / (display.size.width * display.scaleFactor));
+  overlay.setContentProtection(true);
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ["screen"],
+      thumbnailSize: {
+        width: Math.round(display.size.width * display.scaleFactor * scale),
+        height: Math.round(display.size.height * display.scaleFactor * scale),
+      },
+    });
+    const main = sources.find((s) => s.display_id === String(display.id)) ?? sources[0];
+    if (!main || main.thumbnail.isEmpty()) return null;
+    return `data:image/jpeg;base64,${main.thumbnail.toJPEG(72).toString("base64")}`;
+  } catch {
+    return null;
+  } finally {
+    overlay?.setContentProtection(watching);
+  }
 });
 
 ipcMain.handle("persona:shortcut", () => shortcutLabel(callShortcut));
@@ -783,8 +846,9 @@ if (!app.requestSingleInstanceLock()) {
     if (!readSettings().setupDone) openSetup();
     else sayRunning();
     screen.on("display-metrics-changed", () => {
-      const { x, y, width, height } = screen.getPrimaryDisplay().workArea;
+      const { x, y, width, height } = screen.getPrimaryDisplay().bounds;
       overlay?.setBounds({ x, y, width, height });
+      overlay?.webContents.send("persona:island", islandShape());
     });
   });
 
