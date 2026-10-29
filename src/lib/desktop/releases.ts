@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /**
  * Persuna Desktop downloads, read from the repository's latest GitHub
- * release (published by .github/workflows/desktop.yml). Cached for ten
+ * release (published by .github/workflows/desktop.yml). Cached for two
  * minutes; when GitHub can't be reached the page links to the releases list.
  */
 export const RELEASES_URL = "https://github.com/utibe-ettebong/Persuna/releases/latest";
@@ -60,7 +60,7 @@ export async function latestDesktopRelease(): Promise<DesktopRelease | null> {
   try {
     const res = await fetch(API_URL, {
       headers: { accept: "application/vnd.github+json" },
-      next: { revalidate: 600 },
+      next: { revalidate: 120 },
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return null;

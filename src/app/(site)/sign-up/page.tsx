@@ -10,8 +10,9 @@ export const metadata: Metadata = { title: "Create your account" };
 type Params = { searchParams: Promise<{ next?: string }> };
 
 export default async function SignUpPage({ searchParams }: Params) {
-  const { next = "/skills" } = await searchParams;
-  if (await getUser()) redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/skills");
+  const { next = "/dashboard" } = await searchParams;
+  if (await getUser())
+    redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard");
   return (
     <Frame className="relative">
       <div aria-hidden className="halftone absolute inset-0" />

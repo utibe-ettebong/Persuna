@@ -9,6 +9,7 @@
  * Briefs, deliveries and messages are material: they stay in these tables and
  * are blanked after the retention period. They never go into a skill.
  */
+import { peopleFor } from "@/lib/profile/service";
 import { randomBytes } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import { db, schema } from "@/db/client";
@@ -363,22 +364,36 @@ export async function getProject(projectId: string, viewer: Viewer) {
               ? u.proposalId === null || u.proposalId === chosen?.proposal.id
               : u.proposalId === mine?.proposal.id,
         );
-  const poster = await db().query.authUsers.findFirst({
-    where: eq(schema.authUsers.id, project.posterId),
-  });
+  const shown = (role === "poster" || role === "admin" ? proposals : mine ? [mine] : []).map(
+    (p) => p.proposal.sellerId,
+  );
+  // Names as each person chose to show them, and links to their profiles.
+  const people = await peopleFor([
+    project.posterId,
+    ...shown,
+    ...(chosen ? [chosen.proposal.sellerId] : []),
+  ]);
+  const person = (id: string, fallback: string | null | undefined) =>
+    people.get(id) ?? { name: firstName(fallback), handle: null };
 
   return {
     project: { ...project, brief: role === "public" ? null : project.brief },
     role,
-    posterName: firstName(poster?.name),
-    sellerName: chosen ? firstName(chosen.seller) : null,
+    poster: person(project.posterId, null),
+    seller: chosen ? person(chosen.proposal.sellerId, chosen.seller) : null,
+    posterName: person(project.posterId, null).name,
+    sellerName: chosen ? person(chosen.proposal.sellerId, chosen.seller).name : null,
     milestones: milestones.map((m) => ({
       ...m,
       delivery: party ? m.delivery : null,
       check: party ? m.check : null,
     })),
     proposals: (role === "poster" || role === "admin" ? proposals : mine ? [mine] : []).map(
-      (p) => ({ ...p.proposal, sellerName: firstName(p.seller) }),
+      (p) => ({
+        ...p.proposal,
+        sellerName: person(p.proposal.sellerId, p.seller).name,
+        sellerHandle: person(p.proposal.sellerId, p.seller).handle,
+      }),
     ),
     proposalCount: proposals.length,
     updates,

@@ -19,7 +19,7 @@ export function AuthForm({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   // Only same-site paths, so a crafted link can't bounce users elsewhere after sign-in.
-  const destination = next.startsWith("/") && !next.startsWith("//") ? next : "/skills";
+  const destination = next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
