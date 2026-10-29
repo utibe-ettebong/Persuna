@@ -113,7 +113,7 @@ jobs:
             codesign -dv "$app" 2>&1 | grep -E "Authority|Signature|flags"
             # Signed with Persuna's certificate: macOS must know it by that, not by this build's hash.
             if [ -n "${PERSUNA_MAC_IDENTITY:-}" ]; then
-              codesign -dr - "$app" 2>&1 | tee /dev/stderr | grep -q "certificate leaf"
+              codesign -dr - "$app" 2>&1 | tee /dev/stderr | grep -qE "certificate (leaf|root)"
             fi
           done
           # A valid signature isn't enough: start the Apple silicon app (this runner's chip)

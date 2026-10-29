@@ -5,7 +5,7 @@
 // (Accessibility, Screen Recording, Microphone) then stop applying after
 // every update. Signed with Persuna's own certificate instead (the same one
 // for every release), macOS knows each new version as the same app:
-//   identifier "app.persuna.persuna" and certificate leaf = H"…"
+//   identifier "app.persuna.persuna" and certificate root = H"…"
 // so permissions survive updates. The certificate needn't be trusted by
 // anyone for that (it isn't an Apple one, so Gatekeeper still asks once on
 // first install; updates install without that).
