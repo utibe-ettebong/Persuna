@@ -528,3 +528,53 @@ describe("Work mode asking, explaining and matching skills", () => {
     expect(quiet).toMatchObject({ mode: "follow", say: null, step: "Exports at 2x" });
   });
 });
+
+describe("Work mode's dot: the pointer, corrections and fit", () => {
+  const scene = sceneSchema.parse({
+    screen: { w: 1440, h: 900 },
+    app: "Mail",
+    items: [{ role: "button", label: "Send", x: 100, y: 100, w: 80, h: 30 }],
+  });
+
+  it("asks about what the pointer has rested on", async () => {
+    const seen = await personaWorkLook(createMockClient(), {
+      state: state(),
+      scene,
+      image: null,
+      trail: [],
+      recentSteps: [],
+      mayInterrupt: true,
+      pointer: { x: 120, y: 110, still: 6 },
+    });
+    // The question shows beside the dot, at the pointer: no separate highlight.
+    expect(seen).toMatchObject({ mode: "ask", fit: "unsure", point: null });
+    expect(seen.say).toMatch(/Not sure about this one/);
+  });
+
+  it("keeps a correction's point and its fit", async () => {
+    const client: ModelClient = {
+      async complete() {
+        return {
+          text: JSON.stringify({
+            mode: "correct",
+            fit: "off",
+            say: "You usually attach the report first.",
+            point: "e1",
+          }),
+          model: "test",
+          promptTokens: 0,
+          completionTokens: 0,
+        };
+      },
+    };
+    const seen = await personaWorkLook(client, {
+      state: state(),
+      scene,
+      image: null,
+      trail: [],
+      recentSteps: [],
+      mayInterrupt: true,
+    });
+    expect(seen).toMatchObject({ mode: "correct", fit: "off", point: "e1" });
+  });
+});

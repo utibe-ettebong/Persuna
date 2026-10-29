@@ -6,6 +6,8 @@
 //                                and the text you've selected in it.
 //   persuna-eyes ocr <image>     The text in a screenshot, with boxes, from
 //                                Apple's on-device text recognition.
+//   persuna-eyes haptic          A light tap on the trackpad (Force Touch
+//                                trackpads, while a finger is on it).
 //
 // Prints one JSON object. Nothing leaves the Mac. Frames are in screen points
 // from the top-left of the main display; OCR boxes are in image pixels.
@@ -151,7 +153,12 @@ switch args.count > 1 ? args[1] : "" {
 case "ax": emit(readTree(skip: pid_t(args.count > 2 ? Int32(args[2]) ?? 0 : 0)))
 case "ocr" where args.count > 2: emit(readText(path: args[2]))
 case "trusted": emit(["trusted": AXIsProcessTrusted()])
+case "haptic":
+  NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+  // Give the tap time to play before the process ends.
+  usleep(120_000)
+  emit(["ok": true])
 default:
-  FileHandle.standardError.write("usage: persuna-eyes ax <skip-pid> | ocr <image> | trusted\n".data(using: .utf8)!)
+  FileHandle.standardError.write("usage: persuna-eyes ax <skip-pid> | ocr <image> | trusted | haptic\n".data(using: .utf8)!)
   exit(2)
 }

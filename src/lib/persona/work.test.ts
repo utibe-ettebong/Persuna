@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { sceneSchema } from "./scene";
-import { TRAIL_LENGTH, extendTrail, sceneDigest, trailLine } from "./work";
+import { TRAIL_LENGTH, extendTrail, mayInterrupt, sceneDigest, trailLine } from "./work";
 
 const scene = (over: Partial<Parameters<typeof sceneSchema.parse>[0]> = {}) =>
   sceneSchema.parse({
@@ -28,5 +28,15 @@ describe("Work mode pacing", () => {
     for (let i = 0; i < 10; i++) trail = extendTrail(trail, `step ${i}`);
     expect(trail).toHaveLength(TRAIL_LENGTH);
     expect(extendTrail(trail, trail.at(-1)!)).toBe(trail);
+  });
+});
+
+describe("when Work mode may speak up", () => {
+  it("waits a minute after speaking, and a little after you talked to it", () => {
+    const now = 1_000_000;
+    expect(mayInterrupt(now, 0, 0)).toBe(true);
+    expect(mayInterrupt(now, now - 30_000, 0)).toBe(false);
+    expect(mayInterrupt(now, 0, now - 10_000)).toBe(false);
+    expect(mayInterrupt(now, now - 61_000, now - 21_000)).toBe(true);
   });
 });

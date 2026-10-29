@@ -6,9 +6,16 @@
 import type { Scene } from "./scene";
 
 /** How often Persuna looks while Work mode is on (only when the screen changed). */
-export const WORK_EVERY_MS = 15_000;
+export const WORK_EVERY_MS = 10_000;
 /** After stepping in, Persuna only follows quietly for this long. */
-export const WORK_QUIET_MS = 120_000;
+export const WORK_QUIET_MS = 60_000;
+/** After you talk or type to Persuna, it leaves you be for this long. */
+export const TALKED_QUIET_MS = 20_000;
+
+/** Whether Work mode may speak up now (moving the pointer doesn't count as talking). */
+export function mayInterrupt(now: number, spokeAt: number, talkedAt: number): boolean {
+  return now - spokeAt > WORK_QUIET_MS && now - talkedAt > TALKED_QUIET_MS;
+}
 /** How many earlier moments go with each look. */
 export const TRAIL_LENGTH = 6;
 

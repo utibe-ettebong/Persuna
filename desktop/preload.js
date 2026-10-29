@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld("personaDesktop", {
   askPermission: (kind) => ipcRenderer.invoke("persona:ask-permission", String(kind)),
   // Take the keyboard while the island is open (clicking elsewhere then closes it).
   focus: () => ipcRenderer.send("persona:focus"),
+  // A light tap on the trackpad when Work mode nudges you.
+  nudge: () => ipcRenderer.send("persona:nudge"),
   // ⌃⌥C: circle something to ask about it.
   onCircle: (handler) => {
     ipcRenderer.removeAllListeners("persona:circle");

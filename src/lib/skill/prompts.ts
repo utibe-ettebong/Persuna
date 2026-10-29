@@ -373,6 +373,8 @@ export function personaWorkMessages(input: {
   trail: string[];
   recentSteps: string[];
   mayInterrupt: boolean;
+  /** What the pointer is over (an entry), and how many seconds it has stayed still. */
+  pointer?: { over: string | null; still: number } | null;
 }): ChatMessage[] {
   const { state } = input;
   return [
@@ -387,11 +389,14 @@ Choose ONE mode:
 - "lead": you could do the next bit for them, with their skills or apps (draft the reply, fill in the table, summarise the document, file the notes). Offer it in "say" ("Want me to draft the reply?") and put the request in "offer", worded as they'd ask you ("Draft a reply to this email").
 - "ask": they just did something you'd do differently without knowing why, or a choice that looks like a personal rule (an order, a format, a check). Ask ONE short question in "say" about how or why they do it, so you can learn their method for the skill. At most now and then.
 - "explain": something on screen they seem unsure about (an unfamiliar setting, term, error or concept they keep looking at). Explain it in one or two plain sentences in "say", and point at it when you can.
+- "correct": they just did something that goes against their own way of doing it (state.focusSkill's task, state.memory, the steps in <recent_steps>): a skipped check, a wrong order, a different format. Say what differs and what they usually do, in one kind sentence, and point at it. Only for a clear slip, never for taste.
+Their pointer is in <work_pointer>: what it's over, and how long it has stayed still. A pointer hovering on one thing for several seconds, or over a field or menu without acting, often means hesitation: that's a good moment for "ask" or "explain" about that thing.
+Set "fit" every time: "on_track" when this matches how they work, "unsure" when they seem hesitant or lost, "off" when it differs from their usual way.
 Also say which of their skills (state.skills) this work belongs to in "skill" (its slug), or null when none fits.
 ${input.mayInterrupt ? "" : `\nYou spoke up a moment ago: don't interrupt again now. Choose only "quiet" or "follow".\n`}
 Keep their style: help them do it their way (state.memory, state.tone, today's focus and skill), not yours. ${toneInstruction(state.tone)} Never read out passwords, codes or card numbers. Steps describe the method, never the material: no names of people or organisations, figures, dates, emails or other details.
 
-Reply with one JSON object and nothing else: { "mode": "quiet|follow|guide|lead|ask|explain", "skill": "slug" or null, "say": "..." or null, "point": "e12" or null, "offer": "..." or null, "step": "..." or null }`,
+Reply with one JSON object and nothing else: { "mode": "quiet|follow|guide|lead|ask|explain|correct", "fit": "on_track|unsure|off", "skill": "slug" or null, "say": "..." or null, "point": "e12" or null, "offer": "..." or null, "step": "..." or null }`,
     },
     {
       role: "user",
@@ -420,6 +425,12 @@ Reply with one JSON object and nothing else: { "mode": "quiet|follow|guide|lead|
             ),
             fence("work_trail", input.trail.join("\n") || "(just started)"),
             fence("recent_steps", input.recentSteps.join("\n") || "(none yet)"),
+            fence(
+              "work_pointer",
+              input.pointer
+                ? `Over: ${input.pointer.over ?? "nothing listed"}. Still for ${input.pointer.still} s.`
+                : "(unknown)",
+            ),
             fence("persona_screen", input.scene),
           ].join("\n\n"),
         },
