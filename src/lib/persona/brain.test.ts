@@ -73,6 +73,25 @@ describe("tidyReply", () => {
 describe("personaTurn with the offline mock", () => {
   const client = createMockClient();
 
+  it("knows about the user's company onboarding", async () => {
+    const onboarding = {
+      org: "Acme",
+      role: "Designer",
+      next: "Module 2: Design review",
+      done: 1,
+      total: 3,
+    };
+    const reply = await personaTurn(
+      client,
+      state({ onboarding }),
+      [],
+      "What's next in my onboarding?",
+    );
+    expect(reply.reply).toBe(
+      "You're onboarding as Designer at Acme; next: Module 2: Design review.",
+    );
+  });
+
   it("sets today's focus and matches it to a skill", async () => {
     const reply = await personaTurn(client, state(), [], "I'm working on the meeting minutes");
     expect(reply.actions).toEqual([

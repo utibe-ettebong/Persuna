@@ -14,6 +14,7 @@ This repository is the hackathon build. The first skill is turning raw meeting n
 - `/companion`: the companion on its own page (used by the desktop app).
 - `/skills`, `/jobs`, `/market`, `/earnings`, `/audit`: the studio, for signed-in users. Each person sees only their own skills, jobs, earnings and activity; renters see their own orders. Admins (`ADMIN_EMAILS`) see everything and the Models & keys page.
 - `/approvals/<token>`: an employer's approval link (open; the token is the credential).
+- `/team`: Persuna for teams: your organisation, roles, handbook, people and onboarding (`/team/join/<token>` accepts an invitation).
 
 The design follows a framed, rule-drawn system: an off-white page inside vertical rules, mono uppercase labels and buttons (DM Mono), display type in Instrument Sans, one purple brand colour, plum bands, and diagonal hatching in empty space. Tokens live in `src/app/globals.css`; shared pieces are in `src/components/ui.tsx` and `src/components/brand.tsx`.
 
@@ -91,6 +92,18 @@ For work bigger than one task. Persuna is involved at every stage, and every che
 
 Anyone can see an open project's title, scope, budget and milestones; signed-in people also see the brief; proposals, deliveries, checks and the timeline are only for the people on it. The poster can cancel until work is delivered (funded milestones are refunded). Briefs, deliveries, proposal messages and timeline text are material: they stay in the project tables and are blanked `JOB_RETENTION_DAYS` after the project ends, and they never go into a skill. Seller payouts from milestones appear on the Earnings page.
 
+**Persuna for teams** (`/team`)
+
+For companies: everyone has a Persuna that learns their role and the way the company works, and when the company hires, Persuna takes the new person through how the job is done there.
+
+1. **Organisations, roles and people.** Anyone can start an organisation and becomes its first admin. Admins add roles (Designer, Account manager…) and invite people by email to a role. The invitation link (`/team/join/<token>`, shown once; only its SHA-256 is kept; 14 days) needs sign-in with the invited address. Pending invitations also show on the invitee's `/team` page. A person can be in several organisations; one always keeps an admin. People who leave stay listed as former holders of their role.
+2. **Company know-how stays confidential.** A member attaches the skills that are part of their job to their role. An attached skill is confidential: a live listing is taken down at once, it can't be listed again (the listing gate says why: `src/lib/market/rules.ts`), it never appears on public profiles or in the marketplace (even by link), and its method is visible only to the organisation's admins and people in the same role. Admins also write a **handbook**: how the company works (values, tools, processes).
+3. **Role playbooks.** For each role, Persuna writes a playbook from the rule sheets of every skill attached to it by current and former holders, plus the handbook: the workflows the role runs, step by step, the tools, the quality bar and common mistakes. Method only: never examples or job text. Each build is a new version; admins edit the draft and publish it to recruits, and can rebuild it as the team's skills improve.
+4. **New-hire onboarding.** An admin starts onboarding for a member (or ticks _New hire_ on the invitation, and it starts when they join). Persuna turns the published playbook into modules (the company and handbook first, then one per workflow), each with short lessons, a hands-on practice task and a check. At `/team/onboarding/<id>` the recruit reads, asks Persuna questions (answered only from the playbook and handbook; it says when it doesn't know; questions aren't saved), hands in practice work and answers the check, which Persuna marks against a rubric with feedback (70 to pass), and marks each module done. Admins see everyone's progress. At the end, Persuna offers starter skills, one per workflow, so the recruit's own Persuna starts with the company's way of working; they stay attached to the role, and only an admin can release them.
+5. **Persuna knows.** While someone is onboarding, their Persuna knows the role, the company and the next module, and helps with it in chat.
+
+Rules are in `src/lib/teams/rules.ts` (invitations, permissions, confidentiality) and `src/lib/teams/onboarding.ts` (plans, marking, progress, starter skills). Every change is audited, with ids and small facts only; handbook text and recruits' answers never go in the log.
+
 **The renter workspace** (Marketplace → an order)
 
 - A renter uploads up to 5 files (text, Word, PDF, scans, photos) and/or pastes notes. Each file is read and labelled with its name, so the work and the statement check can tell them apart.
@@ -156,6 +169,7 @@ src/lib/market/                  listings, rent, escrow, payouts, browse filters
 src/lib/money.ts                 US cents: parsing and formatting
 src/lib/agents/                  agent keys and skill imports (rules, service)
 src/lib/projects/                projects: rules, Persuna's checks (no storage), service
+src/lib/teams/                   teams: organisations, confidential skills, playbooks, onboarding
 src/lib/docs/                    .docx export and .md/.txt/.docx upload reading
 src/lib/models/gateway.ts        live model client: retries, timeouts, usage tracking
 src/lib/models/mock.ts           offline mock models
