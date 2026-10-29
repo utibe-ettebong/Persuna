@@ -365,7 +365,8 @@ async function readText(image, display) {
 function warmEyes() {
   if (!MAC) return;
   void app
-    .getFileIcon(appBundle(), { size: "large" })
+    // "normal": macOS doesn't support "large", and asking for it crashes Electron.
+    .getFileIcon(appBundle(), { size: "normal" })
     .then((icon) => readText(icon, { size: { width: 64 } }))
     .catch(() => {});
 }
@@ -891,8 +892,17 @@ function sayRunning() {
 
 /* ---------- Start ---------- */
 
+/**
+ * PERSUNA_SMOKE_TEST=1: start as usual, then quit after a few seconds with
+ * exit code 0. CI runs the packaged app this way, so a crash at launch fails
+ * the build instead of reaching people. It leaves links and login items alone.
+ */
+const SMOKE = process.env.PERSUNA_SMOKE_TEST === "1";
+
 // persuna:// links (signing in through the browser) come to this app.
-if (process.defaultApp && process.argv[1]) {
+if (SMOKE) {
+  // Not registered from a test run.
+} else if (process.defaultApp && process.argv[1]) {
   app.setAsDefaultProtocolClient("persuna", process.execPath, [path.resolve(process.argv[1])]);
 } else {
   app.setAsDefaultProtocolClient("persuna");
@@ -946,6 +956,12 @@ if (!app.requestSingleInstanceLock()) {
     createTray();
     if (!readSettings().setupDone) openSetup();
     else sayRunning();
+    if (SMOKE) {
+      setTimeout(() => {
+        console.log("Persuna started and ran for 12 seconds without crashing");
+        app.exit(0);
+      }, 12_000);
+    }
     screen.on("display-metrics-changed", () => {
       const { x, y, width, height } = screen.getPrimaryDisplay().bounds;
       overlay?.setBounds({ x, y, width, height });
