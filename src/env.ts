@@ -141,6 +141,18 @@ const PREFIX: Record<ModelRole, string> = {
 };
 
 /**
+ * SAM 3.1 (Segment Anything), which finds where a named thing is in a
+ * screenshot, on Meta's /v1/responses endpoint with the EXTRACT_* key. Null
+ * when SAM_MODEL=off.
+ */
+export function samConfig(): { baseUrl: string; apiKey: string; model: string } | null {
+  const model = setting("SAM_MODEL") ?? "sam-3.1";
+  if (model === "off") return null;
+  const { baseUrl, apiKey } = modelConfig("extract");
+  return { baseUrl, apiKey, model };
+}
+
+/**
  * Speech-to-text (Muse Voice Transcribe): an OpenAI-compatible
  * POST {base}/audio/transcriptions endpoint. Falls back to EXTRACT_*.
  */

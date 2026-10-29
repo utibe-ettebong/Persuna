@@ -35,6 +35,7 @@ const {
   systemPreferences,
 } = require("electron");
 const { execFile } = require("node:child_process");
+const os = require("node:os");
 const { randomBytes } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -275,13 +276,109 @@ function setWatching(on) {
   overlay?.setContentProtection(on);
 }
 
+/* ---------- Seeing: what's on screen, read on this computer ---------- */
+
+/**
+ * persuna-eyes (desktop/native): on a Mac, a small Swift program that reads
+ * the front app's accessibility tree and recognises text in a screenshot; on
+ * Windows, a PowerShell script over UI Automation. Both run here, take a
+ * fraction of a second, and send nothing anywhere themselves.
+ */
+const EYES = MAC
+  ? app.isPackaged
+    ? path.join(process.resourcesPath, "bin", "persuna-eyes")
+    : path.join(__dirname, "build", "bin", "persuna-eyes")
+  : app.isPackaged
+    ? path.join(process.resourcesPath, "bin", "eyes.ps1")
+    : path.join(__dirname, "native", "win", "eyes.ps1");
+
+function runEyes(args, timeout = 2500) {
+  return new Promise((resolve) => {
+    if (!fs.existsSync(EYES)) return resolve(null);
+    const [cmd, argv] = MAC
+      ? [EYES, args]
+      : ["powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", EYES, ...args]];
+    execFile(
+      cmd,
+      argv,
+      { timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
+      (error, stdout) => {
+        if (error) return resolve(null);
+        try {
+          resolve(JSON.parse(stdout));
+        } catch {
+          resolve(null);
+        }
+      },
+    );
+  });
+}
+
+/** The front app's elements, in points from the top-left of the main display. */
+async function readElements(display) {
+  const tree = await runEyes(MAC ? ["ax", String(process.pid)] : ["-SkipPid", String(process.pid)]);
+  if (!tree) return { app: "", window: "", items: [] };
+  const toLocal = (r) => {
+    // Windows reports physical pixels; Electron works in scaled points.
+    const dip = MAC ? r : screen.screenToDipRect(null, r);
+    return {
+      x: Math.round(dip.x - display.bounds.x),
+      y: Math.round(dip.y - display.bounds.y),
+      w: Math.round(dip.width ?? dip.w),
+      h: Math.round(dip.height ?? dip.h),
+    };
+  };
+  return {
+    app: tree.app ?? "",
+    window: tree.window ?? "",
+    items: (tree.items ?? []).map((i) =>
+      Object.assign(
+        { role: i.role, label: i.label },
+        toLocal({ x: i.x, y: i.y, width: i.w, height: i.h }),
+      ),
+    ),
+  };
+}
+
+/** The text in a screenshot (Mac only), scaled from image pixels to the display's points. */
+async function readText(image, display) {
+  if (!MAC) return [];
+  const file = path.join(os.tmpdir(), `persuna-look-${process.pid}-${Date.now()}.png`);
+  try {
+    fs.writeFileSync(file, image.toPNG());
+    const read = await runEyes(["ocr", file]);
+    if (!read?.width) return [];
+    const k = display.size.width / read.width;
+    return read.lines.map((l) => ({
+      text: l.text,
+      x: Math.round(l.x * k),
+      y: Math.round(l.y * k),
+      w: Math.round(l.w * k),
+      h: Math.round(l.h * k),
+    }));
+  } finally {
+    fs.rm(file, () => {});
+  }
+}
+
+/** Apple's text recognition loads its models once, which can take a while: do it at launch. */
+function warmEyes() {
+  if (!MAC) return;
+  void app
+    .getFileIcon(appBundle(), { size: "large" })
+    .then((icon) => readText(icon, { size: { width: 64 } }))
+    .catch(() => {});
+}
+
 /** The longest side of a look, in pixels: plenty to read text, small enough to send. */
 const LOOK_WIDTH = 1600;
 
 /**
- * A screenshot of the main screen right now, for Persuna to understand what
- * you're asking about. Persuna hides itself from it. Null without Screen
- * Recording (it never asks from here: that's setup's job).
+ * One look at the main screen, for Persuna to understand what you're asking
+ * about: a screenshot (Persuna hidden from it) and a description of what's on
+ * it (the front app's buttons, fields, links and text, and on a Mac every line
+ * of text it can read), each with its place on screen, so Persuna can point.
+ * Null without Screen Recording (it never asks from here: that's setup's job).
  */
 ipcMain.handle("persona:look", async (event) => {
   if (!overlay || event.sender !== overlay.webContents) return null;
@@ -289,6 +386,8 @@ ipcMain.handle("persona:look", async (event) => {
   const display = screen.getPrimaryDisplay();
   const scale = Math.min(1, LOOK_WIDTH / (display.size.width * display.scaleFactor));
   overlay.setContentProtection(true);
+  let shot = null;
+  const elements = readElements(display);
   try {
     const sources = await desktopCapturer.getSources({
       types: ["screen"],
@@ -297,21 +396,22 @@ ipcMain.handle("persona:look", async (event) => {
         height: Math.round(display.size.height * display.scaleFactor * scale),
       },
     });
-    const main = sources.find((s) => s.display_id === String(display.id)) ?? sources[0];
-    if (!main || main.thumbnail.isEmpty()) return null;
-    return `data:image/jpeg;base64,${main.thumbnail.toJPEG(72).toString("base64")}`;
+    shot = (sources.find((s) => s.display_id === String(display.id)) ?? sources[0])?.thumbnail;
   } catch {
-    return null;
+    shot = null;
   } finally {
     overlay?.setContentProtection(watching);
   }
-});
-
-ipcMain.handle("persona:shortcut", () => shortcutLabel(callShortcut));
-
-ipcMain.on("persona:hide", (event) => {
-  if (overlay && event.sender === overlay.webContents) overlay.hide();
-  rebuildTray();
+  if (!shot || shot.isEmpty()) return null;
+  const [found, text] = await Promise.all([elements, readText(shot, display)]);
+  return {
+    image: `data:image/jpeg;base64,${shot.toJPEG(72).toString("base64")}`,
+    scene: {
+      screen: { w: display.size.width, h: display.size.height },
+      ...found,
+      text,
+    },
+  };
 });
 
 /* ---------- Setup window (see setup-preload.js) ---------- */
@@ -842,6 +942,7 @@ if (!app.requestSingleInstanceLock()) {
     createOverlay();
     registerCallShortcut();
     startKeyListener();
+    warmEyes();
     createTray();
     if (!readSettings().setupDone) openSetup();
     else sayRunning();

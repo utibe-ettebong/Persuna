@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ModelClient } from "@/lib/models/gateway";
+import { sceneSchema } from "./scene";
 import { createMockClient } from "@/lib/models/mock";
 import { personaObserve, personaTurn, tidyReply } from "./brain";
 import type { PersonaState } from "./types";
@@ -291,7 +292,10 @@ describe("seeing the screen", () => {
         return { text: JSON.stringify(reply), model: "fake", promptTokens: 0, completionTokens: 0 };
       },
     };
-    await personaTurn(client, state(), [], "What's on my screen?", "data:image/jpeg;base64,AAAA");
+    await personaTurn(client, state(), [], "What's on my screen?", {
+      scene: null,
+      image: "data:image/jpeg;base64,AAAA",
+    });
     await personaTurn(client, state(), [], "Hello");
     expect(calls[0].role).toBe("listen");
     expect(calls[0].content).toEqual(
@@ -300,5 +304,41 @@ describe("seeing the screen", () => {
       ]),
     );
     expect(calls[1].role).toBe("draft");
+  });
+});
+
+describe("pointing at the screen", () => {
+  const scene = sceneSchema.parse({
+    screen: { w: 1440, h: 900 },
+    app: "Mail",
+    items: [
+      { role: "button", label: "Reply", x: 100, y: 80, w: 60, h: 24 },
+      { role: "button", label: "Archive", x: 170, y: 80, w: 70, h: 24 },
+    ],
+  });
+
+  it("sends the list of what's on screen, and points at an entry", async () => {
+    const reply = await personaTurn(createMockClient(), state(), [], "Where's the reply button?", {
+      scene,
+      image: null,
+    });
+    expect(reply.actions).toEqual([{ type: "point", item: "e1", thing: null }]);
+  });
+
+  it("drops points at entries that don't exist, and visual things without a picture", () => {
+    const reply = {
+      reply: "There.",
+      actions: [
+        { type: "point" as const, item: "e9", thing: null },
+        { type: "point" as const, item: null, thing: "red icon" },
+        { type: "look_closer" as const },
+      ],
+    };
+    expect(tidyReply(reply, state(), { scene, image: null }).actions).toEqual([
+      { type: "look_closer" },
+    ]);
+    expect(tidyReply(reply, state(), { scene, image: "data:," }).actions).toEqual([
+      { type: "point", item: null, thing: "red icon" },
+    ]);
   });
 });

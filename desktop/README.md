@@ -2,7 +2,9 @@
 
 Persuna, your PERSUNA assistant, as a small island on your Mac's notch (or hanging from the top centre of the screen on Windows and Macs without one), above every app, even full-screen ones. Clicks pass straight through to your apps everywhere else.
 
-- **It sees what you mean:** when you talk or type, it takes one look at your screen (leaving itself out) so you can ask "what's this?" or "reply to this email". Switch it off from its right-click menu. It never keeps the screenshots.
+- **It sees what you mean, and points:** when you talk or type, Persuna reads your screen on your computer (the front app's buttons, fields, links and text, with exact places) so you can ask "what's this?", "reply to this email" or "where do I click?", and it outlines the thing on screen. A screenshot is sent only when the list isn't enough (a photo, a design). Switch it off from its right-click menu. Nothing is kept.
+
+Building from source on a Mac: `npm run build:eyes` compiles the screen reader (`native/mac/eyes.swift`, needs Xcode's command-line tools) before `npm run dist:mac`.
 
 - **Talk:** hold **right ⌥** (right Alt on Windows) from any app, say what you need, and let go. Persuna answers out loud.
 - **Type:** tap right ⌥ twice quickly, or click the bar. The panel has a message box, your last exchange and quick actions (watch my screen, wrap up my day, to-dos).

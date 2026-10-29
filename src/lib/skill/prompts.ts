@@ -243,9 +243,14 @@ export function personaChatMessages(
   state: PersonaState,
   history: PersonaTurn[],
   message: string | { audio: string },
-  /** A screenshot of the user's screen right now (a data URL), when Persona may look. */
-  screen: string | null = null,
+  /**
+   * What's on the user's screen right now, when Persona may look: a numbered
+   * list of it (read on their computer) and/or a screenshot (a data URL).
+   */
+  sight: { scene: string | null; image: string | null } | null = null,
 ): ChatMessage[] {
+  const screen = sight?.image ?? null;
+  const scene = sight?.scene ?? null;
   const keys = INTERVIEW_QUESTIONS.map((q) => q.key);
   const spoken = typeof message !== "string";
   return [
@@ -283,8 +288,14 @@ Staying on the skill: if state.focusSkill is set and the user asks for work that
 Training: when the user wants to teach you their focus skill and it has unanswered questions, ask the next one in your own words and set "asked" to its key. If they say skip or later, move on. Learn the method, never the material: in answers and learn actions, keep the steps and rules but leave out names of people or clients, figures and other client details.
 
 ${
-  screen
-    ? `Their screen: a screenshot of it, taken as they spoke, is attached. Use it only when what they say points at something on screen ("what's this", "reply to this email", "what am I looking at", "fix this", "what does this error mean"): then be specific about what you see. Otherwise (a greeting, an introduction, a reminder, a question about their work) answer as you normally would and don't describe or mention the screen at all. Never read out passwords, codes or card numbers you see.`
+  scene || screen
+    ? `Their screen, as it was when they spoke: ${scene ? `<persona_screen> lists what's on it (the front app's buttons, fields and links as e1…, lines of text as t1…, each with a rough place).${screen ? " A screenshot is attached too." : ""}` : "a screenshot is attached."} Use it only when what they say points at something on screen ("what's this", "reply to this email", "what am I looking at", "fix this", "what does this error mean", "where do I click"): then be specific about what's there. Otherwise (a greeting, an introduction, a reminder, a question about their work) answer as you normally would and don't describe or mention the screen at all. Never read out passwords, codes or card numbers.
+- point: when they ask where something is, what to click or what needs their attention (or showing would help), point at it: "item" is its entry (e12, t3); if it's something visual that isn't listed (an icon, a picture, part of a chart), leave "item" null and give "thing", a short name for it ("red warning icon"). One point per reply, and say in your reply what you're pointing at.${
+        scene && !screen
+          ? `
+- look_closer: if answering needs the picture itself (a photo, colours, a design, a chart) and the list isn't enough, add only { "type": "look_closer" } with a short reply; you'll be asked again with the screenshot.`
+          : ""
+      }`
     : `You can't see their screen right now. If they ask about it, say so in a few words: in Persona Desktop they can allow Screen Recording; in a browser they can say "watch my screen".`
 }
 
@@ -302,7 +313,7 @@ Reply with one JSON object and nothing else:
           : ""
       }
   "reply": "what you say",
-  "actions": [ { "type": "remember", "fact": "..." } | { "type": "note", "title": "...", "body": "..." } | { "type": "set_focus", "focus": "...", "skill": "slug or null" } | { "type": "answer", "key": one of ${JSON.stringify(keys)}, "answer": "..." } | { "type": "learn", "method": "..." } | { "type": "remind", "text": "...", "at": "YYYY-MM-DDTHH:mm or null" } | { "type": "run_task", "skill": "slug or null" } | { "type": "coach", "skill": "slug or null" } | { "type": "wrap_up" } | { "type": "app_task", "goal": "..." } | { "type": "watch_screen", "on": true|false } | { "type": "open_page", "page": "persona|todos|skills|skill|jobs|market|earnings|audit", "skill": "slug or null" } | { "type": "create_skill", "name": "...", "task": "...", "input": "what goes in or null", "output": "what comes out or null" } | { "type": "add_example" | "train_skill" | "test_skill" | "publish_skill", "skill": "slug or null" } | { "type": "suggest_switch", "skill": "slug or null", "task": "a new task, or null" } | { "type": "set_tone", "length": "short|normal|detailed", "formality": "casual|neutral|formal", "playful": true|false, "note": "..." } ],
+  "actions": [ { "type": "remember", "fact": "..." } | { "type": "note", "title": "...", "body": "..." } | { "type": "set_focus", "focus": "...", "skill": "slug or null" } | { "type": "answer", "key": one of ${JSON.stringify(keys)}, "answer": "..." } | { "type": "learn", "method": "..." } | { "type": "remind", "text": "...", "at": "YYYY-MM-DDTHH:mm or null" } | { "type": "run_task", "skill": "slug or null" } | { "type": "coach", "skill": "slug or null" } | { "type": "wrap_up" } | { "type": "app_task", "goal": "..." } | { "type": "watch_screen", "on": true|false } | { "type": "point", "item": "e12 or null", "thing": "short name or null" } | { "type": "look_closer" } | { "type": "open_page", "page": "persona|todos|skills|skill|jobs|market|earnings|audit", "skill": "slug or null" } | { "type": "create_skill", "name": "...", "task": "...", "input": "what goes in or null", "output": "what comes out or null" } | { "type": "add_example" | "train_skill" | "test_skill" | "publish_skill", "skill": "slug or null" } | { "type": "suggest_switch", "skill": "slug or null", "task": "a new task, or null" } | { "type": "set_tone", "length": "short|normal|detailed", "formality": "casual|neutral|formal", "playful": true|false, "note": "..." } ],
   "asked": one of ${JSON.stringify(keys)} or null
 }`,
     },
@@ -324,6 +335,7 @@ Reply with one JSON object and nothing else:
               },
             ]
           : []),
+        ...(scene ? [{ type: "text" as const, text: fence("persona_screen", scene) }] : []),
         ...(screen ? [{ type: "image_url" as const, image_url: { url: screen } }] : []),
       ],
     },

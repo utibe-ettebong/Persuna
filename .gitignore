@@ -47,4 +47,6 @@ next-env.d.ts
 # local tool state (gstack browser)
 /.gstack/
 /desktop/dist
+# Built by `npm run build:eyes` (desktop/native/mac/eyes.swift).
+/desktop/build/bin
 /voice-samples

@@ -40,6 +40,18 @@ export const personaAction = z.discriminatedUnion("type", [
   z.object({ type: z.literal("app_task"), goal: z.string().trim().min(3).max(1000) }),
   /** The user wants Persona to start or stop watching their screen (the app asks permission). */
   z.object({ type: z.literal("watch_screen"), on: z.boolean() }),
+  /**
+   * Show the user where something is on their screen: an entry from the list
+   * of what's on screen (e12, t3), or a short name for something visual that
+   * isn't in it ("red warning icon"), which SAM 3.1 then finds in the picture.
+   */
+  z.object({
+    type: z.literal("point"),
+    item: z.string().trim().max(10).nullish(),
+    thing: z.string().trim().max(80).nullish(),
+  }),
+  /** The list wasn't enough: answer again with the picture itself. */
+  z.object({ type: z.literal("look_closer") }),
   /** The user wants to see a page: Persona takes them there. */
   z.object({
     type: z.literal("open_page"),

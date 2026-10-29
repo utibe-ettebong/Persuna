@@ -52,6 +52,14 @@ import {
 import { buildWrapUp } from "./wrapup";
 import { introFacts, type IntroAnswers } from "./onboarding";
 import type { PersonaReply, PersonaState } from "./types";
+import { createLocator } from "@/lib/models/sam";
+import { samSpot, sceneIsThin, spotOf, wantsPicture, type Scene, type Spot } from "./scene";
+
+/** What Persona may see with a message: the list of the screen, and a screenshot. */
+export interface Sight {
+  scene: Scene | null;
+  image: string | null;
+}
 
 const { personaProfiles, personaMessages, personaNotes, personaReminders, skills, jobs, listings } =
   schema;
@@ -224,6 +232,8 @@ export interface ChatResult {
   watch: "start" | "stop" | null;
   /** A send or create in the user's apps, waiting for their OK. */
   appConfirm: AppConfirm | null;
+  /** Where on screen to show the user something (Persona Desktop draws it). */
+  point: Spot | null;
 }
 
 export interface PublishConfirm {
@@ -253,7 +263,7 @@ export async function chatFromVoice(
   client: ModelClient,
   transcriber: Transcriber,
   userId: string,
-  input: { audio: File; clock: Clock; actor: Actor; screen?: string | null },
+  input: { audio: File; clock: Clock; actor: Actor; sight?: Sight | null },
 ): Promise<ChatResult> {
   if (voiceMode() !== "transcribe" && modelProvider() !== "mock") {
     try {
@@ -262,7 +272,7 @@ export async function chatFromVoice(
         audio,
         clock: input.clock,
         actor: input.actor,
-        screen: input.screen,
+        sight: input.sight,
       });
     } catch (error) {
       if (!(error instanceof NotHeardError)) throw error;
@@ -275,7 +285,7 @@ export async function chatFromVoice(
     text,
     clock: input.clock,
     actor: input.actor,
-    screen: input.screen,
+    sight: input.sight,
   });
 }
 
@@ -286,8 +296,11 @@ export async function chat(
   input: ({ text: string } | { audio: string }) & {
     clock: Clock;
     actor: Actor;
-    /** A screenshot of the user's screen right now, when Persona may look. */
-    screen?: string | null;
+    /**
+     * What's on the user's screen right now, when Persona may look: the list
+     * of it read on their computer (desktop) and/or a screenshot.
+     */
+    sight?: Sight | null;
   },
 ): Promise<ChatResult> {
   const spoken = "audio" in input;
@@ -298,15 +311,27 @@ export async function chat(
     role: m.role,
     content: m.content,
   }));
+  const sight = input.sight ?? null;
+  // The list of what's on screen is quicker for the model than a picture, and
+  // exact about where things are: send the picture only when the list is thin
+  // (a photo, a canvas) or the question is about how something looks.
+  const picture = Boolean(
+    sight?.image && (!sight.scene || sceneIsThin(sight.scene) || (!spoken && wantsPicture(typed))),
+  );
+  const message = spoken ? { audio: input.audio } : typed;
   let reply: PersonaReply;
   try {
     reply = await personaTurn(
       client,
       state,
       history,
-      spoken ? { audio: input.audio } : typed,
-      input.screen ?? null,
+      message,
+      sight && { scene: sight.scene, image: picture ? sight.image : null },
     );
+    // It needed the picture after all: once more, with it.
+    if (sight?.image && !picture && reply.actions.some((a) => a.type === "look_closer")) {
+      reply = await personaTurn(client, state, history, message, sight);
+    }
   } catch (error) {
     if (spoken && !(error instanceof UsageLimitError)) throw new NotHeardError(error);
     throw error;
@@ -336,6 +361,7 @@ export async function chat(
   let navigate: string | null = null;
   let watch: ChatResult["watch"] = null;
   let appConfirm: ChatResult["appConfirm"] = null;
+  let point: ChatResult["point"] = null;
 
   for (const action of reply.actions) {
     if (action.type === "remember") {
@@ -508,6 +534,15 @@ export async function chat(
       extra.push(`\n\n${done.reply}`);
       appConfirm = done.confirm;
       if (done.needsConnecting) link = { href: "/persona#apps", label: "Connect your apps" };
+    } else if (action.type === "point" && sight?.scene) {
+      if (action.item) point = spotOf(sight.scene, action.item);
+      else if (action.thing && sight.image) {
+        // Not in the list: SAM 3.1 finds it in the picture.
+        const box = await createLocator()
+          ?.locate(sight.image, action.thing)
+          .catch(() => null);
+        if (box) point = samSpot(box, sight.scene, action.thing);
+      }
     } else if (action.type === "watch_screen") {
       watch = action.on ? "start" : "stop";
     } else if (action.type === "wrap_up") {
@@ -562,6 +597,7 @@ export async function chat(
     switchTo,
     watch,
     appConfirm,
+    point,
   };
 }
 

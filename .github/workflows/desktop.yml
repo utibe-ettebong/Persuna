@@ -76,6 +76,10 @@ jobs:
           if [ -n "$APPLE_ID" ] && [ -n "$APPLE_APP_SPECIFIC_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
             { echo "APPLE_ID=$APPLE_ID"; echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_APP_SPECIFIC_PASSWORD"; echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"; } >> "$GITHUB_ENV"
           fi
+      # Persuna's on-device screen reader (Swift, both Mac chips in one file).
+      - name: Build the screen reader
+        if: runner.os == 'macOS'
+        run: npm run build:eyes
       - name: Build
         run: npx electron-builder ${{ matrix.target }} --publish never ${{ env.SIGN_ARGS }}
         env:
@@ -94,6 +98,8 @@ jobs:
           # far enough to load Electron, which fails if macOS refuses its libraries.
           ELECTRON_RUN_AS_NODE=1 "dist/mac-arm64/Persuna.app/Contents/MacOS/Persuna" \
             -e 'console.log("Persuna starts: Electron", process.versions.electron)'
+          # The screen reader is bundled and runs (it reports whether it's allowed to read).
+          "dist/mac-arm64/Persuna.app/Contents/Resources/bin/persuna-eyes" trusted
           # The talk-key listener is a native module: it must load from the packaged app.
           ELECTRON_RUN_AS_NODE=1 "dist/mac-arm64/Persuna.app/Contents/MacOS/Persuna" \
             -e 'require(process.argv[1] + "/node_modules/uiohook-napi"); console.log("Talk key listener loads")' \
