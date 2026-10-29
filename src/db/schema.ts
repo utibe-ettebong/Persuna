@@ -17,6 +17,7 @@ import {
 import type { GroundingReport } from "@/lib/jobs/grounding";
 import type { JobFlag } from "@/lib/jobs/self-check";
 import type { Tone } from "@/lib/persona/tone";
+import type { FitReport, MilestoneCheck, ProjectPlan } from "@/lib/projects/types";
 import type { InterviewAnswers } from "@/lib/skill/interview";
 import type { RuleOp, ScoreBreakdown, SkillSheet } from "@/lib/skill/types";
 
@@ -654,3 +655,167 @@ export const agentImports = pgTable(
 );
 export type AgentKey = typeof agentKeys.$inferSelect;
 export type AgentImport = typeof agentImports.$inferSelect;
+
+/* ---------- Projects: posted work, with Persuna checking every stage ---------- */
+
+export const projectStatus = pgEnum("project_status", [
+  "draft",
+  "open",
+  "in_progress",
+  "completed",
+  "cancelled",
+  "disputed",
+]);
+export const milestoneStatus = pgEnum("milestone_status", [
+  "pending",
+  "funded",
+  "submitted",
+  "changes_requested",
+  "approved",
+  "released",
+  "refunded",
+]);
+export const proposalStatus = pgEnum("proposal_status", [
+  "pending",
+  "accepted",
+  "declined",
+  "withdrawn",
+]);
+export const updateAuthor = pgEnum("project_update_author", ["persona", "poster", "seller"]);
+
+/**
+ * A piece of work someone posts. The brief is material: it stays here and is
+ * blanked after the retention period, never copied into a skill.
+ */
+export const projects = pgTable(
+  "projects",
+  {
+    id: id(),
+    posterId: text("poster_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    brief: text("brief").notNull(),
+    budgetCents: integer("budget_cents").notNull(),
+    deadline: timestamp("deadline", { withTimezone: true }).notNull(),
+    status: projectStatus("status").notNull().default("draft"),
+    chosenProposalId: uuid("chosen_proposal_id").references(
+      (): AnyPgColumn => projectProposals.id,
+      { onDelete: "set null" },
+    ),
+    /** Persuna's plan (scope, criteria, milestones, flags), as the poster confirmed it. */
+    plan: jsonb("plan").$type<ProjectPlan>(),
+    posterRating: integer("poster_rating"),
+    posterReview: text("poster_review"),
+    sellerRating: integer("seller_rating"),
+    sellerReview: text("seller_review"),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    /** Set when the project ends; the material is blanked after this. */
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    purgedAt: timestamp("purged_at", { withTimezone: true }),
+  },
+  (t) => [
+    index().on(t.status, t.createdAt),
+    index().on(t.posterId),
+    index().on(t.expiresAt),
+    check("budget_cents_positive", sql`${t.budgetCents} > 0`),
+    check(
+      "project_ratings_range",
+      sql`(${t.posterRating} is null or ${t.posterRating} between 1 and 5) and (${t.sellerRating} is null or ${t.sellerRating} between 1 and 5)`,
+    ),
+  ],
+);
+
+/** One deliverable with its acceptance criteria and its own escrow. Amounts in US cents. */
+export const projectMilestones = pgTable(
+  "project_milestones",
+  {
+    id: id(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    title: text("title").notNull(),
+    criteria: text("criteria")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    amountCents: integer("amount_cents").notNull(),
+    status: milestoneStatus("status").notNull().default("pending"),
+    /** The seller's latest delivery. Material: blanked after retention. */
+    delivery: text("delivery"),
+    /** Persuna's check of the latest delivery against the criteria. */
+    check: jsonb("check").$type<MilestoneCheck>(),
+    /** Times the poster asked for changes. */
+    rounds: integer("rounds").notNull().default(0),
+    provider: paymentProvider("provider"),
+    paymentReference: text("payment_reference").unique(),
+    platformFeeCents: integer("platform_fee_cents"),
+    sellerShareCents: integer("seller_share_cents"),
+    fundedAt: timestamp("funded_at", { withTimezone: true }),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    settledAt: timestamp("settled_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique().on(t.projectId, t.position),
+    check("milestone_amount_positive", sql`${t.amountCents} > 0`),
+  ],
+);
+
+/** A seller's offer to do the project, with Persuna's fit report for the poster. */
+export const projectProposals = pgTable(
+  "project_proposals",
+  {
+    id: id(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    sellerId: text("seller_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    /** A listing of theirs the work would draw on, if any. */
+    listingId: uuid("listing_id").references(() => listings.id, { onDelete: "set null" }),
+    message: text("message").notNull(),
+    priceCents: integer("price_cents").notNull(),
+    days: integer("days").notNull(),
+    fit: jsonb("fit").$type<FitReport>(),
+    status: proposalStatus("status").notNull().default("pending"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique().on(t.projectId, t.sellerId),
+    check("proposal_price_positive", sql`${t.priceCents} > 0`),
+  ],
+);
+
+/** The project's timeline: every step, and every Persuna check, in order. */
+export const projectUpdates = pgTable(
+  "project_updates",
+  {
+    id: id(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    author: updateAuthor("author").notNull(),
+    /** plan, opened, proposal, fit, accepted, funded, delivery, check, changes, approved, dispute, assessment, wrapup, rating, cancelled, resolved. */
+    kind: text("kind").notNull(),
+    body: text("body").notNull(),
+    milestoneId: uuid("milestone_id").references(() => projectMilestones.id, {
+      onDelete: "set null",
+    }),
+    /** Set on updates about one proposal: only the poster and that seller see them. */
+    proposalId: uuid("proposal_id").references(() => projectProposals.id, {
+      onDelete: "set null",
+    }),
+    createdAt: createdAt(),
+  },
+  (t) => [index().on(t.projectId, t.createdAt)],
+);
+
+export type Project = typeof projects.$inferSelect;
+export type ProjectMilestone = typeof projectMilestones.$inferSelect;
+export type ProjectProposal = typeof projectProposals.$inferSelect;
+export type ProjectUpdate = typeof projectUpdates.$inferSelect;

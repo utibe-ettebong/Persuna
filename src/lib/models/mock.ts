@@ -10,6 +10,13 @@ import { parseWhen } from "@/lib/persona/when";
 import { tokenize } from "@/lib/skill/retrieve";
 import type { RuleCategory } from "@/lib/skill/types";
 import { textOf, type ChatMessage, type ModelClient } from "./gateway";
+import {
+  mockDispute,
+  mockMilestoneCheck,
+  mockProjectPlan,
+  mockProposalFit,
+  mockWrapup,
+} from "./mock-projects";
 
 export const MOCK_MODEL = "mock";
 
@@ -20,7 +27,14 @@ export function createMockClient(): ModelClient {
       const user = lastUser ? textOf(lastUser.content) : "";
       const system = textOf(messages.find((m) => m.role === "system")?.content ?? "");
       let text: string;
-      if (user.includes("<transcribe_document>")) text = JSON.stringify(mockTranscription(user));
+      if (user.includes("<project_brief>")) text = JSON.stringify(mockProjectPlan(user));
+      else if (user.includes("<proposal_fit>")) text = JSON.stringify(mockProposalFit(user));
+      else if (user.includes("<milestone_delivery>"))
+        text = JSON.stringify(mockMilestoneCheck(user));
+      else if (user.includes("<project_dispute>")) text = JSON.stringify(mockDispute(user));
+      else if (user.includes("<project_wrapup>")) text = JSON.stringify(mockWrapup(user));
+      else if (user.includes("<transcribe_document>"))
+        text = JSON.stringify(mockTranscription(user));
       else if (user.includes("<ground_draft>")) text = JSON.stringify(mockGrounding(user));
       else if (user.includes("<unsupported>")) text = mockRedraft(messages, user);
       else if (user.includes("<persona_user>")) text = JSON.stringify(mockPersona(user));

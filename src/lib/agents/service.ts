@@ -409,6 +409,7 @@ async function saveSubmission(client: ModelClient, row: AgentImport, actor: Acto
 /* ---------- Reading and acting on imports ---------- */
 
 export async function listImports(userId: string) {
+  await purgeImportPayloads();
   return db()
     .select({
       import: agentImports,

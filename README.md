@@ -76,6 +76,19 @@ The design follows a framed, rule-drawn system: an off-white page inside vertica
 - Other AI agents a person uses (Grokbot, Musebot, Dot…) can send Persuna what they have learned about how that person works. The person creates a key per agent (shown once; only its SHA-256 is stored; revocable) and the agent calls `POST /api/agents/skills` with `Authorization: Bearer psk_…` and a `persuna.skill-import/v1` body: `{ agent, skill: { name, task, input?, output? }, method: string | string[], examples: [{ input, output, test? }] }` (3–50 examples, size-limited, 10 imports an hour per key, 2 in flight per account). It answers `202` with an id; `GET /api/agents/skills/<id>` returns the status (`received → training → testing → verified | failed`) and a report of counts, score and problems, never the text. The same JSON can be uploaded as a file.
 - After answering, Persuna does what it does when it's taught directly: names and identifiers are found and replaced (method only), a new skill is created with the method as its interview steps, examples are split (the agent's `test` flags, or about a quarter held back), rules are extracted and tested on the held-back examples. At `LISTING_MIN_SCORE` or more it's **verified** and the person gets a message from their Persuna with the score and a one-click _Publish and list_ (price plus their ownership declaration). The submission is held only until its redacted examples are saved, then cleared. Each stage is recorded, so an interrupted import resumes, and any failure lands as `failed` with a reason. Every step is audited.
 
+**Projects** (`/projects`, public to browse; posting and proposing need an account)
+
+For work bigger than one task. Persuna is involved at every stage, and every check it makes is posted to the project's timeline:
+
+1. **Posting:** the poster writes a title, brief, budget (US$) and deadline. Persuna turns the brief into a scope, acceptance criteria and 1–5 milestones whose amounts add up exactly to the budget, and flags vague requirements and unfair terms (a budget that doesn't fit the scope, an impossible deadline, one-sided terms), partly by model and partly by fixed rules (`src/lib/projects/rules.ts`). The poster edits everything before opening it.
+2. **Proposals:** sellers propose a price, days and a message (optionally pointing at one of their listings). Persuna writes the poster a **fit report** (the seller's Persuna Verified skills and scores, price against budget, strengths, risks, a recommendation). The seller sees their own report too. Accepting a proposal rescales the milestone amounts to the agreed price, to the cent.
+3. **Escrow per milestone:** the poster funds each milestone through the payment provider (mock, or Paystack in USD, verified server-side exactly like rentals; references are `persuna-ms-…` and the webhook routes them).
+4. **Delivery checks:** each delivery is checked against that milestone's criteria: met, not met or can't tell, each with a reason, plus a fairness note for each side. Both see it. The poster approves (escrow released to the seller minus `PLATFORM_FEE_PERCENT`) or asks for changes, up to `MAX_CHANGE_ROUNDS` (3) per milestone.
+5. **Disputes:** either side can raise one; Persuna records a neutral assessment and the project is marked disputed. Held money stays in escrow; an admin (`ADMIN_EMAILS`) settles each held milestone (release or refund) or resumes the project. Everything is audited.
+6. **Completion:** when every milestone is paid, Persuna writes a short wrap-up and each side rates the other.
+
+Anyone can see an open project's title, scope, budget and milestones; signed-in people also see the brief; proposals, deliveries, checks and the timeline are only for the people on it. The poster can cancel until work is delivered (funded milestones are refunded). Briefs, deliveries, proposal messages and timeline text are material: they stay in the project tables and are blanked `JOB_RETENTION_DAYS` after the project ends, and they never go into a skill. Seller payouts from milestones appear on the Earnings page.
+
 **The renter workspace** (Marketplace → an order)
 
 - A renter uploads up to 5 files (text, Word, PDF, scans, photos) and/or pastes notes. Each file is read and labelled with its name, so the work and the statement check can tell them apart.
@@ -137,7 +150,10 @@ src/lib/persona/                 the assistant: brain (no storage), service, typ
 src/components/persona/          the on-screen companion, setup, task runner, screen watcher, My Persuna page pieces
 desktop/                         Persuna Desktop: Electron shell around /companion
 src/lib/jobs/                    real jobs: draft, review, edit size, retention
-src/lib/market/                  listings, rent, mock escrow, payouts
+src/lib/market/                  listings, rent, escrow, payouts, browse filters, Persuna Verified
+src/lib/money.ts                 US cents: parsing and formatting
+src/lib/agents/                  agent keys and skill imports (rules, service)
+src/lib/projects/                projects: rules, Persuna's checks (no storage), service
 src/lib/docs/                    .docx export and .md/.txt/.docx upload reading
 src/lib/models/gateway.ts        live model client: retries, timeouts, usage tracking
 src/lib/models/mock.ts           offline mock models
