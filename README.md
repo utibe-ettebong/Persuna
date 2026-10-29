@@ -9,7 +9,7 @@ This repository is the hackathon build. The first skill is turning raw meeting n
 - `/`: the public landing page (open without the app password).
 - `/sign-in`, `/sign-up`: accounts (email and password, via [Better Auth](https://www.better-auth.com)).
 - `/persuna`: My Persuna, your assistant's profile, what it remembers, coaching on your skills, to-dos and notes.
-- `/download`: Persuna Desktop for Mac and Windows (open to anyone; reads the latest GitHub release).
+- `/download`: Persuna Desktop for Mac and Windows (open to anyone). Each button is a `/download/<mac-arm64|mac-x64|win-x64|win-arm64>` link that starts the newest installer from the latest GitHub release, so visitors never see the release page. From 0.7.0 the app **updates itself**: it checks at launch and every 4 hours, downloads in the background, and installs when Persuna restarts or quits (menu bar: _Restart to update_). Windows uses electron-updater; on a Mac, which needs an Apple Developer ID for Squirrel, `desktop/updater.js` downloads the zip for the Mac's chip, checks its SHA-512 against `latest-mac.yml`, and swaps the app bundle after Persuna quits. A copy run from the disk image or a folder it can't write to says where to download instead.
 - `/persunas/<handle>`: a persuna's public profile (open to anyone): listed skills, scores, renters, reviews.
 - `/companion`: the companion on its own page (used by the desktop app).
 - `/skills`, `/jobs`, `/market`, `/earnings`, `/audit`: the studio, for signed-in users. Each person sees only their own skills, jobs, earnings and activity; renters see their own orders. Admins (`ADMIN_EMAILS`) see everything and the Models & keys page.

@@ -12,6 +12,8 @@ describe("isPublicPath", () => {
       "/approvals/abc",
       "/persunas/owl-ab12c",
       "/download",
+      "/download/mac-arm64",
+      "/download/win-x64",
       "/welcome",
       "/desktop/setup",
       "/api/desktop/sign-in",
@@ -38,6 +40,7 @@ describe("isPublicPath", () => {
       "/persuna",
       "/companion",
       "/desktop/connect",
+      "/download/anything-else",
     ]) {
       expect(isPublicPath(p)).toBe(false);
     }

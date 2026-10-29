@@ -115,10 +115,14 @@ jobs:
         with:
           name: persuna-${{ runner.os }}
           if-no-files-found: error
+          # The installers, plus what the app's updater reads: latest-mac.yml /
+          # latest.yml (version and SHA-512 of each file) and the blockmaps.
           path: |
             desktop/dist/*.dmg
             desktop/dist/*.zip
             desktop/dist/*.exe
+            desktop/dist/latest*.yml
+            desktop/dist/*.blockmap
 
   release:
     if: startsWith(github.ref, 'refs/tags/desktop-v')
@@ -142,5 +146,7 @@ jobs:
           **Windows:** run the `.exe` (`x64` for most PCs, `arm64` for Arm laptops).
 
           The first time Persuna watches, macOS asks for Screen Recording permission. Persuna only watches while you have watching turned on.
+
+          **Updates:** Persuna 0.7.0 and later update themselves: they download new versions in the background and install them when Persuna restarts (or from the menu bar: Restart to update).
           NOTES
           gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --title "Persuna Desktop ${GITHUB_REF_NAME#desktop-v}" --notes-file notes.md

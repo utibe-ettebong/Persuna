@@ -3,7 +3,7 @@ import { type NextRequest, NextResponse } from "next/server";
 
 /** Pages anyone may open. Everything else needs a signed-in account. */
 const PUBLIC = [
-  /^\/download$/,
+  /^\/download(\/(mac-arm64|mac-x64|win-x64|win-arm64))?$/,
   /^\/welcome$/,
   /^\/$/,
   /^\/sign-(in|up)$/,

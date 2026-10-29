@@ -6,10 +6,11 @@ import { Frame, SectionLabel } from "@/components/brand";
 import { PersunaOrb } from "@/components/persuna/orb";
 import { buttonClass } from "@/components/ui";
 import {
-  RELEASES_URL,
+  downloadPath,
   latestDesktopRelease,
   platformFromUserAgent,
   type DesktopFile,
+  type DesktopPlatform,
 } from "@/lib/desktop/releases";
 
 export const metadata: Metadata = {
@@ -22,17 +23,19 @@ export const revalidate = 120;
 
 function DownloadButton({
   file,
+  platform,
   label,
   primary,
 }: {
   file: DesktopFile | undefined;
+  platform: DesktopPlatform;
   label: string;
   primary?: boolean;
 }) {
   if (!file) return null;
   return (
     <a
-      href={file.url}
+      href={downloadPath(platform)}
       className={`${buttonClass(primary ? "primary" : "secondary", "md")} w-full justify-between`}
       download
     >
@@ -42,7 +45,12 @@ function DownloadButton({
   );
 }
 
-export default async function DownloadPage() {
+export default async function DownloadPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ unavailable?: string }>;
+}) {
+  const { unavailable } = await searchParams;
   const [release, ua] = await Promise.all([
     latestDesktopRelease(),
     headers().then((h) => h.get("user-agent") ?? ""),
@@ -54,17 +62,23 @@ export default async function DownloadPage() {
       apple={
         <DownloadButton
           file={f.macArm}
+          platform="macArm"
           label="Mac · Apple silicon (M1 and later)"
           primary={platform === "mac"}
         />
       }
-      intel={<DownloadButton file={f.macIntel} label="Mac · Intel" />}
+      intel={<DownloadButton file={f.macIntel} platform="macIntel" label="Mac · Intel" />}
     />
   );
   const windows = (
     <>
-      <DownloadButton file={f.winX64} label="Windows · most PCs" primary={platform === "windows"} />
-      <DownloadButton file={f.winArm} label="Windows · Arm laptops" />
+      <DownloadButton
+        file={f.winX64}
+        platform="winX64"
+        label="Windows · most PCs"
+        primary={platform === "windows"}
+      />
+      <DownloadButton file={f.winArm} platform="winArm" label="Windows · Arm laptops" />
     </>
   );
 
@@ -84,6 +98,12 @@ export default async function DownloadPage() {
                 through. Talk to it, hand it tasks, and when you allow it, let it learn from any app
                 you work in, without sharing a window each time.
               </p>
+              {unavailable && release && (
+                <p className="mt-6 max-w-md rounded-md border border-warn/40 bg-warn/8 p-3 text-sm text-warn">
+                  That download isn&apos;t ready yet. Try again in a few minutes, or pick another
+                  below.
+                </p>
+              )}
               <div className="mt-8 grid max-w-md gap-2">
                 {release ? (
                   platform === "windows" ? (
@@ -98,23 +118,14 @@ export default async function DownloadPage() {
                     </>
                   )
                 ) : (
-                  <a href={RELEASES_URL} className={buttonClass("primary", "md")}>
-                    See the downloads on GitHub
-                  </a>
+                  <p className="rounded-md border border-line bg-card p-4 text-sm text-muted">
+                    Downloads are being updated. Try again in a few minutes.
+                  </p>
                 )}
               </div>
               <p className="mt-4 max-w-md text-sm text-muted">
                 {platform === "mac" && <MacChipNote />}
-                {release && (
-                  <>
-                    {" "}
-                    Version {release.version}.{" "}
-                    <a href={release.url} className="underline hover:text-foreground">
-                      All files and release notes
-                    </a>
-                    .
-                  </>
-                )}
+                {release && <> Version {release.version}. It keeps itself up to date after that.</>}
               </p>
             </div>
             <div className="hatch relative flex min-h-80 items-center justify-center rounded-md border border-line">
