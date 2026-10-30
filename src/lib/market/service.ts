@@ -11,7 +11,7 @@ import { randomBytes } from "node:crypto";
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import { env, paystackConfig } from "@/env";
-import { audit } from "@/lib/audit";
+import { audit, type Actor } from "@/lib/audit";
 import { createJob, draftJob, jobRoundsFor, openJob, reviseJob } from "@/lib/jobs/service";
 import type { ModelClient } from "@/lib/models/gateway";
 import { createPaystack, paymentMatches } from "@/lib/payments/paystack";
@@ -31,7 +31,7 @@ import {
 } from "./rules";
 import { verificationFor } from "./verification";
 
-const { listings, skills, jobs, transactions } = schema;
+const { listings, skills, jobs, transactions, authUsers } = schema;
 
 export interface ListingInput {
   title: string;
@@ -157,7 +157,12 @@ export async function readiness(skillId: string) {
   return { skill, listing, score, requirements, ready: requirements.every((r) => r.met) };
 }
 
-export async function setListingActive(skillId: string, active: boolean) {
+export async function setListingActive(
+  skillId: string,
+  active: boolean,
+  actor: Actor = "owner",
+  details: Record<string, unknown> = {},
+) {
   const { listing, ready } = await readiness(skillId);
   if (!listing) throw new Error("Save the listing first");
   if (active && !ready) throw new Error("The listing doesn't meet every requirement yet");
@@ -170,12 +175,35 @@ export async function setListingActive(skillId: string, active: boolean) {
     })
     .where(eq(listings.id, listing.id));
   await audit({
-    actor: "owner",
+    actor,
     action: active ? "listing.activated" : "listing.deactivated",
     entityType: "listing",
     entityId: listing.id,
     skillId,
+    details,
   });
+}
+
+/** Every listing with its skill and owner, newest first. Admins only. */
+export interface AdminListingRow {
+  listing: typeof listings.$inferSelect;
+  skillName: string;
+  skillSlug: string;
+  ownerEmail: string | null;
+}
+
+export async function listAllListings(): Promise<AdminListingRow[]> {
+  return db()
+    .select({
+      listing: listings,
+      skillName: skills.name,
+      skillSlug: skills.slug,
+      ownerEmail: authUsers.email,
+    })
+    .from(listings)
+    .innerJoin(skills, eq(listings.skillId, skills.id))
+    .leftJoin(authUsers, eq(skills.ownerId, authUsers.id))
+    .orderBy(desc(listings.updatedAt));
 }
 
 /* ---------- Employer approval ---------- */
