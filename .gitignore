@@ -41,6 +41,11 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# python (modal-voice services)
+__pycache__/
+*.py[cod]
+.venv/
+
 # allow the env template
 !.env.example
 
