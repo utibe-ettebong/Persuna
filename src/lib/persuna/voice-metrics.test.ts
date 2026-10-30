@@ -66,7 +66,7 @@ describe("logVoiceTurn", () => {
     time.advance(800);
     timer.mark("end");
 
-    logVoiceTurn("/api/persuna/llm", timer);
+    logVoiceTurn("/api/persuna/llm", timer, { spoken: true, picture: false });
 
     expect(spy).toHaveBeenCalledTimes(1);
     expect(JSON.parse(spy.mock.calls[0][0])).toEqual({
@@ -78,6 +78,8 @@ describe("logVoiceTurn", () => {
       firstSentenceMs: null,
       firstAudioMs: null,
       malformedTail: false,
+      spoken: true,
+      picture: false,
     });
   });
 });

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { textOf, type ChatMessage, type ModelClient } from "@/lib/models/gateway";
+import {
+  textOf,
+  type ChatMessage,
+  type CompleteOptions,
+  type ModelClient,
+} from "@/lib/models/gateway";
 import type { ModelRole } from "@/env";
 import { sceneSchema } from "./scene";
 import { createMockClient } from "@/lib/models/mock";
@@ -704,13 +709,13 @@ describe("Work mode's dot: the pointer, corrections and fit", () => {
 
 describe("persunaTurnStream", () => {
   const streamingClient = (text: string, chunkSize = 7) => {
-    const seen: { role: ModelRole; messages: ChatMessage[] }[] = [];
+    const seen: { role: ModelRole; messages: ChatMessage[]; options?: CompleteOptions }[] = [];
     const client: ModelClient = {
       async complete() {
         throw new Error("should stream, not complete");
       },
-      async *completeStream(role, messages) {
-        seen.push({ role, messages });
+      async *completeStream(role, messages, options) {
+        seen.push({ role, messages, options });
         for (let i = 0; i < text.length; i += chunkSize) yield text.slice(i, i + chunkSize);
       },
     };
@@ -747,6 +752,7 @@ describe("persunaTurnStream", () => {
     expect(events.some((e) => e.type === "malformed-tail")).toBe(false);
     expect(seen).toHaveLength(1);
     expect(seen[0].role).toBe("draft");
+    expect(seen[0].options).toMatchObject({ reasoningOff: true });
     const system = textOf(seen[0].messages.find((m) => m.role === "system")?.content ?? "");
     expect(system).toContain("```actions");
     expect(system).not.toContain("Reply with one JSON object");
@@ -836,5 +842,28 @@ describe("collectTurn", () => {
       malformed: false,
     });
     expect(collectTurn([{ type: "malformed-tail" }]).malformed).toBe(true);
+  });
+});
+
+describe("persunaTurnStream without reasoning", () => {
+  it("skips reasoning on the fallback path too", async () => {
+    const seen: (CompleteOptions | undefined)[] = [];
+    const client: ModelClient = {
+      async complete(_role, _messages, options) {
+        seen.push(options);
+        return {
+          text: JSON.stringify({ reply: "Okay.", actions: [], asked: null }),
+          model: "test",
+          promptTokens: 0,
+          completionTokens: 0,
+        };
+      },
+    };
+    const events: TurnStreamEvent[] = [];
+    for await (const event of persunaTurnStream(client, state(), [], "hi")) events.push(event);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ reasoningOff: true });
+    expect(events).toContainEqual({ type: "prose", text: "Okay." });
   });
 });
