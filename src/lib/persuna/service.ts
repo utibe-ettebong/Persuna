@@ -476,9 +476,7 @@ async function applyTurn(
 
   for (const action of reply.actions) {
     if (action.type === "remember") {
-      if (!memory.some((m) => m.toLowerCase() === action.fact.toLowerCase())) {
-        memory = [...memory, action.fact].slice(-MAX_MEMORY);
-      }
+      memory = withFact(memory, action.fact);
     } else if (action.type === "note") {
       await db().insert(persunaNotes).values({
         userId,
@@ -1170,6 +1168,21 @@ export async function updateProfile(
       }),
       updatedAt: new Date(),
     })
+    .where(eq(persunaProfiles.userId, userId));
+}
+
+/** Adds a fact unless it's already kept; memory holds the latest MAX_MEMORY. */
+export function withFact(memory: string[], fact: string): string[] {
+  if (memory.some((m) => m.toLowerCase() === fact.toLowerCase())) return memory;
+  return [...memory, fact].slice(-MAX_MEMORY);
+}
+
+/** Keeps one fact about the user, for tools that act outside a chat turn. */
+export async function rememberFact(userId: string, fact: string) {
+  const profile = await getProfile(userId);
+  await db()
+    .update(persunaProfiles)
+    .set({ memory: withFact(profile.memory, fact), updatedAt: new Date() })
     .where(eq(persunaProfiles.userId, userId));
 }
 

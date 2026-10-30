@@ -57,6 +57,8 @@ const envSchema = z.object({
   ELEVENLABS_AGENT_ID: z.string().min(1).optional(),
   /** Shared secret ElevenLabs sends when it calls Persuna's brain (/api/persuna/llm). */
   ELEVENLABS_LLM_SECRET: z.string().min(24).optional(),
+  /** Shared secret the LiveKit trial agent sends with tool calls (/api/persuna/livekit-tool). */
+  LIVEKIT_TOOL_SECRET: z.string().min(24).optional(),
   JOB_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
   PLATFORM_FEE_PERCENT: z.coerce.number().min(0).max(50).default(20),
   LISTING_MIN_SCORE: z.coerce.number().min(0).max(100).default(80),

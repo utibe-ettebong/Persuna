@@ -158,6 +158,7 @@ drizzle/                         generated SQL migrations (commit these)
 scripts/skill.ts                 CLI for the training loop
 scripts/migrate.mjs              applies migrations (Railway pre-deploy)
 scripts/voice-latency.ts         voice latency probe: streamed turns + first-sound estimate (needs live keys)
+livekit-trial/                  trial voice agent on LiveKit (own deps; needs a LiveKit Cloud project)
 src/lib/skill/engine.ts          the loop itself, with no storage: extract, draft, score, correct
 src/lib/skill/service.ts         skills, pairs, versions, test runs, corrections, publishing (Postgres)
 src/lib/skill/prompts.ts         every prompt in one place
