@@ -1,4 +1,5 @@
 import type { ChatMessage, ContentPart } from "@/lib/models/gateway";
+import { VOICE_TURN_INSTRUCTIONS } from "@/lib/persuna/stream-protocol";
 import { toneInstruction } from "@/lib/persuna/tone";
 import type { PersunaState, PersunaTurn } from "@/lib/persuna/types";
 import { INTERVIEW_QUESTIONS } from "./interview";
@@ -250,11 +251,23 @@ export function persunaChatMessages(
   sight: { scene: string | null; image: string | null; circled?: boolean } | null = null,
   /** A file the user handed over with this message: its text, or a picture (data URL). */
   file: { name: string; text: string | null; image: string | null } | null = null,
+  /** A spoken turn: the reply streams as prose with a fenced actions block, not one JSON blob. */
+  voice = false,
 ): ChatMessage[] {
   const screen = sight?.image ?? null;
   const scene = sight?.scene ?? null;
   const keys = INTERVIEW_QUESTIONS.map((q) => q.key);
   const spoken = typeof message !== "string";
+  /** One action object per action, in the fence (voice) or the reply JSON (typed). */
+  const shapes = `{ "type": "remember", "fact": "..." } | { "type": "note", "title": "...", "body": "..." } | { "type": "set_focus", "focus": "...", "skill": "slug or null" } | { "type": "answer", "key": one of ${JSON.stringify(keys)}, "answer": "..." } | { "type": "learn", "method": "..." } | { "type": "remind", "text": "...", "at": "YYYY-MM-DDTHH:mm or null" } | { "type": "run_task", "skill": "slug or null" } | { "type": "coach", "skill": "slug or null" } | { "type": "wrap_up" } | { "type": "app_task", "goal": "..." } | { "type": "mcp", "server": "server name from state.mcpServers", "tool": "tool name", "arguments": { } } | { "type": "watch_screen", "on": true|false } | { "type": "point", "item": "e12 or null", "thing": "short name or null" } | { "type": "look_closer" } | { "type": "clipboard", "op": "copy|paste", "text": "..." } | { "type": "make_file", "kind": "document|table|flow", "title": "...", "body": "...", "flow": { "direction": "down|right", "nodes": [ { "id": "a", "label": "..." } ], "edges": [ { "from": "a", "to": "b", "label": "or null" } ] } or null } | { "type": "draw", "title": "... or null", "marks": [ { "item": "e4", "note": "..." } ] or null, "flow": { ... } or null } | { "type": "open_page", "page": "persuna|todos|skills|skill|jobs|market|earnings|audit", "skill": "slug or null" } | { "type": "create_skill", "name": "...", "task": "...", "input": "what goes in or null", "output": "what comes out or null" } | { "type": "add_example" | "train_skill" | "test_skill" | "publish_skill", "skill": "slug or null" } | { "type": "suggest_switch", "skill": "slug or null", "task": "a new task, or null" } | { "type": "set_tone", "length": "short|normal|detailed", "formality": "casual|neutral|formal", "playful": true|false, "note": "..." }`;
+  const messageLine = !spoken
+    ? "Their latest message is in <persuna_user>."
+    : voice
+      ? "Their latest message is the attached recording: they said it out loud. Your Heard line holds exactly what they said."
+      : `Their latest message is the attached recording: they said it out loud. Write exactly what they said in "heard" (their words, not a summary), then answer it.`;
+  const closing = voice
+    ? `${VOICE_TURN_INSTRUCTIONS}\n\nEach action in the fence is one object shaped like this:\n[ ${shapes} ]\nWhen you ask an interview question, its Asked key is one of ${JSON.stringify(keys)}.`
+    : `Reply with one JSON object and nothing else:\n{${spoken ? `\n  "heard": "what they said, word for word",` : ""}\n  "reply": "what you say",\n  "actions": [ ${shapes} ],\n  "asked": one of ${JSON.stringify(keys)} or null\n}`;
   return [
     {
       role: "system",
@@ -318,23 +331,9 @@ ${
           : `You can't see their screen right now. If they ask about it, say so in a few words: in Persuna Desktop they can allow Screen Recording; in a browser they can say "watch my screen".`
       }
 
-The user's state is in <persuna_state>. ${
-        spoken
-          ? `Their latest message is the attached recording: they said it out loud. Write exactly what they said in "heard" (their words, not a summary), then answer it.`
-          : "Their latest message is in <persuna_user>."
-      }
+The user's state is in <persuna_state>. ${messageLine}
 
-Reply with one JSON object and nothing else:
-{${
-        spoken
-          ? `
-  "heard": "what they said, word for word",`
-          : ""
-      }
-  "reply": "what you say",
-  "actions": [ { "type": "remember", "fact": "..." } | { "type": "note", "title": "...", "body": "..." } | { "type": "set_focus", "focus": "...", "skill": "slug or null" } | { "type": "answer", "key": one of ${JSON.stringify(keys)}, "answer": "..." } | { "type": "learn", "method": "..." } | { "type": "remind", "text": "...", "at": "YYYY-MM-DDTHH:mm or null" } | { "type": "run_task", "skill": "slug or null" } | { "type": "coach", "skill": "slug or null" } | { "type": "wrap_up" } | { "type": "app_task", "goal": "..." } | { "type": "mcp", "server": "server name from state.mcpServers", "tool": "tool name", "arguments": { } } | { "type": "watch_screen", "on": true|false } | { "type": "point", "item": "e12 or null", "thing": "short name or null" } | { "type": "look_closer" } | { "type": "clipboard", "op": "copy|paste", "text": "..." } | { "type": "make_file", "kind": "document|table|flow", "title": "...", "body": "...", "flow": { "direction": "down|right", "nodes": [ { "id": "a", "label": "..." } ], "edges": [ { "from": "a", "to": "b", "label": "or null" } ] } or null } | { "type": "draw", "title": "... or null", "marks": [ { "item": "e4", "note": "..." } ] or null, "flow": { ... } or null } | { "type": "open_page", "page": "persuna|todos|skills|skill|jobs|market|earnings|audit", "skill": "slug or null" } | { "type": "create_skill", "name": "...", "task": "...", "input": "what goes in or null", "output": "what comes out or null" } | { "type": "add_example" | "train_skill" | "test_skill" | "publish_skill", "skill": "slug or null" } | { "type": "suggest_switch", "skill": "slug or null", "task": "a new task, or null" } | { "type": "set_tone", "length": "short|normal|detailed", "formality": "casual|neutral|formal", "playful": true|false, "note": "..." } ],
-  "asked": one of ${JSON.stringify(keys)} or null
-}`,
+${closing}`,
     },
     ...history.map((m) => ({ role: m.role, content: m.content })),
     {

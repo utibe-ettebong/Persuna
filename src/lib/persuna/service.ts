@@ -40,9 +40,13 @@ import { createJob, getJob, reviewJob } from "@/lib/jobs/service";
 import {
   persunaObserve,
   persunaTurn,
+  persunaTurnStream,
   persunaWorkLook,
+  collectTurn,
   HISTORY_TURNS,
+  type CollectedTurn,
   type PersunaFile,
+  type TurnStreamEvent,
 } from "./brain";
 import { coachSkill, suggestTestSplit, type SkillStats } from "./coach";
 import { localToUtc, startOfLocalDay, utcToLocal, type OffsetMinutes } from "./when";
@@ -67,6 +71,8 @@ import {
 import type { Flow, PersunaReply, PersunaState } from "./types";
 import { createLocator } from "@/lib/models/sam";
 import { samSpot, sceneIsThin, spotOf, wantsPicture, type Scene, type Spot } from "./scene";
+import { splitSentences } from "./sentences";
+import { logVoiceTurn, startTurn } from "./voice-metrics";
 import { confidentialSkills } from "@/lib/teams/confidential";
 import { withoutConfidential } from "@/lib/teams/rules";
 import { activeOnboardingNote } from "@/lib/teams/service";
@@ -336,24 +342,25 @@ export async function chatFromVoice(
   });
 }
 
-/** One message from the user: think, apply the actions, save both sides. */
-export async function chat(
-  client: ModelClient,
-  userId: string,
-  input: ({ text: string } | { audio: string }) & {
-    clock: Clock;
-    actor: Actor;
-    /**
-     * What's on the user's screen right now, when Persuna may look: the list
-     * of it read on their computer (desktop) and/or a screenshot.
-     */
-    sight?: Sight | null;
-    /** A file handed over with the message. Its contents are read for this turn only. */
-    file?: PersunaFile | null;
-    /** The user pressed "Show me": the reply must show, not just tell. */
-    show?: boolean;
-  },
-): Promise<ChatResult> {
+/** One message plus its context: the clock, who acts, and what Persuna may see. */
+export interface ChatInput {
+  clock: Clock;
+  actor: Actor;
+  /**
+   * What's on the user's screen right now, when Persuna may look: the list
+   * of it read on their computer (desktop) and/or a screenshot.
+   */
+  sight?: Sight | null;
+  /** A file handed over with the message. Its contents are read for this turn only. */
+  file?: PersunaFile | null;
+  /** The user pressed "Show me": the reply must show, not just tell. */
+  show?: boolean;
+}
+
+export type ChatMessageInput = ({ text: string } | { audio: string }) & ChatInput;
+
+/** Reads the state, history and screen context a turn starts from. */
+async function prepareTurn(userId: string, input: ChatMessageInput) {
   const spoken = "audio" in input;
   const typed = spoken ? "" : normalizeText(input.text).slice(0, 4000);
   if (!spoken && !typed) throw new Error("Say something first");
@@ -372,6 +379,18 @@ export async function chat(
   );
   const file = input.file ?? null;
   const message = spoken ? { audio: input.audio } : typed;
+  return { spoken, typed, state, history, sight, picture, file, message };
+}
+/** One message from the user: think, apply the actions, save both sides. */
+export async function chat(
+  client: ModelClient,
+  userId: string,
+  input: ChatMessageInput,
+): Promise<ChatResult> {
+  const { spoken, typed, state, history, sight, picture, file, message } = await prepareTurn(
+    userId,
+    input,
+  );
   let reply: PersunaReply;
   const turnStarted = performance.now();
   try {
@@ -400,6 +419,34 @@ export async function chat(
   const text = spoken ? normalizeText(reply.heard ?? "").slice(0, 4000) : typed;
   if (!text) throw spoken ? new NotHeardError(null) : new Error("Say something first");
 
+  const { result } = await applyTurn(
+    client,
+    userId,
+    input.clock,
+    input.actor,
+    sight,
+    file,
+    reply,
+    text,
+  );
+  return result;
+}
+
+/**
+ * Applies a reply's actions, saves both sides of the turn, and reports
+ * what the actions added to Persuna's words. Typed turns and streamed
+ * voice turns share it, so the two can never drift apart.
+ */
+async function applyTurn(
+  client: ModelClient,
+  userId: string,
+  clock: Clock,
+  actor: Actor,
+  sight: Sight | null,
+  file: PersunaFile | null,
+  reply: PersunaReply,
+  text: string,
+): Promise<{ result: ChatResult; extra: string[] }> {
   const profile = await getProfile(userId);
   const owned = await listSkills(userId);
   const focusSkill = owned.find((s) => s.id === profile.focusSkillId) ?? null;
@@ -452,7 +499,7 @@ export async function chat(
       await saveInterview(focusSkill.id, answers);
       link = { href: `/skills/${focusSkill.slug}/interview`, label: "See your answers" };
     } else if (action.type === "remind") {
-      const dueAt = action.at ? localToUtc(action.at, input.clock.offset) : null;
+      const dueAt = action.at ? localToUtc(action.at, clock.offset) : null;
       await db()
         .insert(persunaReminders)
         .values({ userId, text: action.text, dueAt: dueAt && dueAt > new Date() ? dueAt : null });
@@ -468,7 +515,7 @@ export async function chat(
           outputType: action.output || "text",
         },
         userId,
-        input.actor,
+        actor,
       );
       owned.push(created);
       focus = created.name;
@@ -590,10 +637,10 @@ export async function chat(
     } else if (action.type === "app_task") {
       const done = await doAppTask(client, userId, {
         goal: action.goal,
-        now: input.clock.now,
-        offset: input.clock.offset,
+        now: clock.now,
+        offset: clock.offset,
         name: profile.name,
-        actor: input.actor,
+        actor,
       });
       extra.push(`\n\n${done.reply}`);
       appConfirm = done.confirm;
@@ -647,14 +694,14 @@ export async function chat(
     } else if (action.type === "watch_screen") {
       watch = action.on ? "start" : "stop";
     } else if (action.type === "wrap_up") {
-      extra.push(`\n\n${await wrapUpText(userId, input.clock)}`);
+      extra.push(`\n\n${await wrapUpText(userId, clock)}`);
       await db()
         .update(persunaProfiles)
-        .set({ wrapupDay: input.clock.day })
+        .set({ wrapupDay: clock.day })
         .where(eq(persunaProfiles.userId, userId));
     } else if (action.type === "learn" && focusSkill) {
       try {
-        link = await teach(client, focusSkill, action.method, input.actor);
+        link = await teach(client, focusSkill, action.method, actor);
       } catch (error) {
         console.error(error);
         extra.push(
@@ -692,7 +739,7 @@ export async function chat(
   saved.sort((a, b) => (a.role === b.role ? 0 : a.role === "user" ? -1 : 1));
 
   const focusRow = owned.find((s) => s.id === focusSkillId) ?? null;
-  return {
+  const result: ChatResult = {
     messages: saved,
     link,
     focus: { text: focus, skill: focusRow ? { slug: focusRow.slug, name: focusRow.name } : null },
@@ -710,6 +757,152 @@ export async function chat(
     drawing,
     file: made,
   };
+  return { result, extra };
+}
+/** A streamed voice turn: heard and sentences as they're written, then the saved result. */
+export type ChatStreamEvent =
+  | { type: "heard"; text: string }
+  | { type: "sentence"; text: string }
+  | { type: "done"; result: ChatResult };
+
+/**
+ * One voice turn, streamed: the first sentence flows while the model is still
+ * writing, so speech starts in about a second instead of after the whole
+ * reply. Actions still run once the reply is complete, through the same
+ * applyTurn as typed turns, and anything they add is spoken last, in order.
+ */
+export async function* chatStream(
+  client: ModelClient,
+  userId: string,
+  input: ChatMessageInput,
+  logRoute: string,
+): AsyncGenerator<ChatStreamEvent> {
+  const prep = await prepareTurn(userId, input);
+  const timer = startTurn();
+  const buffered: TurnStreamEvent[] = [];
+  let firstSentence = true;
+  const forward = async function* (
+    events: AsyncGenerator<TurnStreamEvent>,
+  ): AsyncGenerator<ChatStreamEvent> {
+    for await (const event of events) {
+      buffered.push(event);
+      if (event.type === "started") timer.mark("first-token");
+      else if (event.type === "heard") {
+        timer.mark("heard");
+        yield { type: "heard", text: event.text };
+      } else if (event.type === "sentence") {
+        if (firstSentence) {
+          firstSentence = false;
+          timer.mark("first-sentence");
+        }
+        yield { type: "sentence", text: event.text };
+      }
+    }
+  };
+  const runTurn = (sight: Sight | null) =>
+    persunaTurnStream(
+      client,
+      prep.state,
+      prep.history,
+      prep.message,
+      sight,
+      prep.file,
+      input.show ?? false,
+    );
+  let turn: CollectedTurn;
+  try {
+    for await (const event of forward(
+      runTurn(
+        prep.sight && {
+          scene: prep.sight.scene,
+          image: prep.picture ? prep.sight.image : null,
+          circled: prep.sight.circled,
+        },
+      ),
+    )) {
+      yield event;
+    }
+    turn = collectTurn(buffered);
+    // It needed the picture after all: once more, with it. What's already
+    // been said stands ("Let me look closer"), and the second reply follows.
+    if (prep.sight?.image && !prep.picture && turn.actions.some((a) => a.type === "look_closer")) {
+      const before = buffered.length;
+      for await (const event of forward(runTurn(prep.sight))) yield event;
+      const second = collectTurn(buffered.slice(before));
+      turn = {
+        heard: turn.heard ?? second.heard,
+        prose: [turn.prose, second.prose].filter(Boolean).join("\n\n"),
+        actions: second.actions,
+        asked: second.asked,
+        malformed: turn.malformed || second.malformed,
+      };
+    }
+  } catch (error) {
+    if (prep.spoken && !(error instanceof UsageLimitError)) throw new NotHeardError(error);
+    throw error;
+  }
+  if (turn.malformed) timer.flagMalformedTail();
+  // A recording: the model wrote down what it heard. Nothing heard, nothing done.
+  const text = prep.spoken ? normalizeText(turn.heard ?? "").slice(0, 4000) : prep.typed;
+  if (!text) throw prep.spoken ? new NotHeardError(null) : new Error("Say something first");
+  const { result, extra } = await applyTurn(
+    client,
+    userId,
+    input.clock,
+    input.actor,
+    prep.sight,
+    prep.file,
+    { heard: turn.heard, reply: turn.prose, actions: turn.actions, asked: turn.asked },
+    text,
+  );
+  for (const chunk of extra) {
+    for (const sentence of splitSentences(chunk)) yield { type: "sentence", text: sentence };
+  }
+  timer.mark("end");
+  logVoiceTurn(logRoute, timer);
+  yield { type: "done", result };
+}
+
+/**
+ * A spoken message, streamed. Like {@link chatFromVoice} the listening model
+ * hears the recording itself and answers in one call — but its sentences flow
+ * as they're written. Transcribing first stays the fallback when listening
+ * fails before a word is out, or when transcribing is configured.
+ */
+export async function* chatFromVoiceStream(
+  client: ModelClient,
+  transcriber: Transcriber,
+  userId: string,
+  input: { audio: File; clock: Clock; actor: Actor; sight?: Sight | null },
+  logRoute: string,
+): AsyncGenerator<ChatStreamEvent> {
+  if (voiceMode() !== "transcribe" && modelProvider() !== "mock") {
+    let yielded = false;
+    try {
+      const audio = Buffer.from(await input.audio.arrayBuffer()).toString("base64");
+      for await (const event of chatStream(
+        client,
+        userId,
+        { audio, clock: input.clock, actor: input.actor, sight: input.sight },
+        logRoute,
+      )) {
+        yielded = true;
+        yield event;
+      }
+      return;
+    } catch (error) {
+      if (!(error instanceof NotHeardError) || yielded) throw error;
+      console.warn(`[persuna] listening failed, transcribing instead: ${String(error.reason)}`);
+    }
+  }
+  const { text } = await transcriber.transcribe(input.audio, input.audio.name);
+  if (!text.trim()) throw new Error("I couldn't make that out. Try again?");
+  yield* chatStream(
+    client,
+    userId,
+    { text, clock: input.clock, actor: input.actor, sight: input.sight },
+    logRoute,
+  );
 }
 
 /**

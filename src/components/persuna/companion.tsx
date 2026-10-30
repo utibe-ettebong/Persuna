@@ -12,7 +12,6 @@ import {
   persunaFastAction,
   persunaTeachNoteAction,
   persunaTranscribeAction,
-  persunaVoiceAction,
   persunaAgentTurnsAction,
   persunaAppConfirmAction,
   persunaMcpConfirmAction,
@@ -54,12 +53,15 @@ import {
 } from "@/lib/persuna/work";
 import {
   chime,
+  createSpeechQueue,
+  parseStreamEvent,
   speak,
   startConversation,
   startHoldRecording,
   stopSpeaking,
   type Conversation,
   type HoldRecording,
+  type SpeechQueue,
   type UtteranceEnd,
 } from "./voice";
 import { startWakeWord, wakeWordSupported, type WakeListener } from "./wake-listener";
@@ -367,6 +369,8 @@ export function Companion(props: CompanionProps) {
   const talkingNow = useRef(false);
   // Lines queued or being spoken.
   const speaking = useRef(0);
+  /** Aborts the in-flight streamed voice turn, if any. */
+  const streamAbort = useRef<AbortController | null>(null);
   const lastHeard = useRef(0);
   // The desktop app lets Persuna speak before any click (see desktop/main.js).
   const overlayRef = useRef(Boolean(props.overlay));
@@ -470,6 +474,7 @@ export function Companion(props: CompanionProps) {
   /** Stop Persuna mid-sentence: tapping it, typing, or talking over it. */
   const interrupt = useCallback(() => {
     if (!talkingNow.current) return;
+    streamAbort.current?.abort();
     stopSpeaking();
     speaking.current = 0;
     talkingNow.current = false;
@@ -943,6 +948,8 @@ export function Companion(props: CompanionProps) {
     async (audio: Blob, end: UtteranceEnd = "pause") => {
       lastHeard.current = Date.now();
       setBusy("hearing");
+      const controller = new AbortController();
+      let queue: SpeechQueue | null = null;
       try {
         const wav = await toTranscribableWav(audio, "persuna");
         const form = new FormData();
@@ -957,26 +964,124 @@ export function Companion(props: CompanionProps) {
           if (res.value.trim()) await send(res.value, lead);
           return;
         }
-        // Heard and answered in one go: no separate transcription. The
-        // screen read started when the key went down (or a moment ago).
+        // Heard and answered as it streams: each sentence is spoken while
+        // the rest is still being written. The screen read started when the
+        // key went down (or a moment ago).
+        streamAbort.current?.abort();
         stopSpeaking();
         const started = performance.now();
         const sight = await screenNow();
         if (sight?.image) form.append("screen", sight.image);
         if (sight?.scene) form.append("scene", JSON.stringify(sight.scene));
         if (sight?.circled) form.append("circled", "1");
-        const res = await persunaVoiceAction(form, clock());
+        const { day, now, offset } = clock();
+        form.append("day", day);
+        form.append("now", now);
+        form.append("offset", String(offset));
+        streamAbort.current = controller;
+        const res = await fetch("/api/persuna/chat-stream", {
+          method: "POST",
+          body: form,
+          signal: controller.signal,
+        });
+        if (!res.ok || !res.body) {
+          setBusy("idle");
+          return setError(
+            res.status === 401 ? "Sign in first" : "The voice service didn't answer.",
+          );
+        }
+        let soFar = "";
+        if (live.current.voiceOn) {
+          speaking.current += 1;
+          talkingNow.current = true;
+          setTalking(true);
+          queue = createSpeechQueue({
+            onLevel: setLevel,
+            onSpoken: (piece) => {
+              soFar = soFar ? `${soFar} ${piece}` : piece;
+              showCaption(soFar);
+              spokenChars.current += piece.length;
+              if (speakTotal.current > 0) {
+                setSpeakProgress(Math.min(1, spokenChars.current / speakTotal.current));
+              }
+            },
+          });
+          if (lead) queue.push(lead);
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        let result: ChatResult | null = null;
+        let failed: string | null = null;
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (value) buf += decoder.decode(value, { stream: true });
+            if (done) buf += decoder.decode();
+            let idx: number;
+            while ((idx = buf.indexOf("\n\n")) >= 0) {
+              const event = parseStreamEvent<ChatResult>(buf.slice(0, idx));
+              buf = buf.slice(idx + 2);
+              if (event?.name === "sentence") queue?.push(event.text);
+              else if (event?.name === "heard") showCaption(`“${event.text}”`);
+              else if (event?.name === "done") result = event.result;
+              else if (event?.name === "error") failed = event.message;
+            }
+            if (done) break;
+          }
+        } finally {
+          reader.releaseLock();
+        }
         console.info(
           `[persuna] voice turn total=${Math.round(performance.now() - started)}ms sight=${Boolean(sight)}`,
         );
         setBusy("idle");
-        if (!res.ok) return setError(res.error);
+        if (streamAbort.current === controller) streamAbort.current = null;
+        if (failed || !result) {
+          stopSpeaking();
+          if (queue) {
+            const settled = queue;
+            queue = null;
+            void settled.finish();
+            speaking.current = Math.max(0, speaking.current - 1);
+            if (speaking.current === 0) {
+              talkingNow.current = false;
+              setTalking(false);
+            }
+          }
+          return setError(failed ?? "The voice service didn't answer.");
+        }
         setError(null);
-        screenyRef.current = Boolean(sight) || Boolean(res.value.drawing || res.value.point);
-        answered(res.value, lead);
+        screenyRef.current = Boolean(sight) || Boolean(result.drawing || result.point);
+        if (queue) {
+          // The reply is already being spoken; show the messages and cards.
+          const settled = queue;
+          queue = null;
+          void settled.finish().then(() => {
+            speaking.current = Math.max(0, speaking.current - 1);
+            if (speaking.current === 0) {
+              talkingNow.current = false;
+              setTalking(false);
+            }
+          });
+          answered(result, "", true);
+        } else {
+          answered(result, lead);
+        }
       } catch {
         setBusy("idle");
-        setError("I couldn't make that out. Try again?");
+        if (streamAbort.current === controller) streamAbort.current = null;
+        if (queue) {
+          // Died mid-read (aborted or cut off): settle the speech it started.
+          void queue.finish();
+          speaking.current = Math.max(0, speaking.current - 1);
+          if (speaking.current === 0) {
+            talkingNow.current = false;
+            setTalking(false);
+          }
+        }
+        // Talking over Persuna stops its turn silently; anything else is news.
+        if (!controller.signal.aborted) setError("I couldn't make that out. Try again?");
       }
     },
     // answered reads live state through refs.
