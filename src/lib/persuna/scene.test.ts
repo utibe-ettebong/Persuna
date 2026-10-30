@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   entryAt,
   parseSamBox,
+  pictureNeeded,
   samSpot,
   sceneEntries,
   sceneForModel,
@@ -134,6 +135,35 @@ describe("sceneForModel's cap", () => {
     expect(lines[1]).toBe('Selected text: "hello world"');
     // 40 lines total − 2 head − 1 "more" line = 37 entries kept, 13 trimmed.
     expect(lines.at(-1)).toBe("…and 13 more things on screen (ask to look closer for the rest)");
+  });
+});
+
+describe("pictureNeeded", () => {
+  const rich = sceneSchema.parse({
+    screen: { w: 1440, h: 900 },
+    app: "Mail",
+    window: "Inbox",
+    items: Array.from({ length: 10 }, (_, i) => ({
+      role: "button",
+      label: `Action number ${i} for this message`,
+      x: 10,
+      y: 40 * i,
+      w: 200,
+      h: 24,
+    })),
+    text: [],
+  });
+
+  it("keeps the screenshot back when the list says enough", () => {
+    expect(pictureNeeded({ scene: rich })).toBe(false);
+    expect(pictureNeeded({ scene: rich }, "what's next on my list?")).toBe(false);
+  });
+
+  it("sends it for a thin list, no list, a circled area or a question about looks", () => {
+    expect(pictureNeeded({ scene })).toBe(true);
+    expect(pictureNeeded({ scene: null })).toBe(true);
+    expect(pictureNeeded({ scene: rich, circled: true })).toBe(true);
+    expect(pictureNeeded({ scene: rich }, "what colour is this logo?")).toBe(true);
   });
 });
 

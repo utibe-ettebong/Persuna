@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { env, speechConfig, type SpeechConfig } from "@/env";
 
 /**
@@ -11,6 +12,9 @@ export interface Speaker {
     style?: string,
   ): Promise<{ audio: ReadableStream<Uint8Array>; type: string }>;
 }
+
+const TOKEN_TIMEOUT_MS = 5000;
+const speechToken = z.object({ token: z.string().min(1) });
 
 /** Longest reply spoken in one go; anything past it is cut at a sentence end. */
 export const MAX_SPOKEN_CHARS = 1500;
@@ -75,4 +79,33 @@ export function createSpeaker(
       };
     },
   };
+}
+
+/**
+ * Where the app can speak to ElevenLabs itself, or null for other voices. The
+ * address holds a single-use token, so the API key stays on the server; going
+ * straight there skips the trip through this server on every line.
+ */
+export async function directSpeechUrl(
+  config: SpeechConfig,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string | null> {
+  if (config.api !== "elevenlabs") return null;
+  const res = await fetchImpl(`${config.baseUrl}/single-use-token/tts_websocket`, {
+    method: "POST",
+    headers: { "xi-api-key": config.apiKey },
+    signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    throw new Error(`Speech token failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+  }
+  const { token } = speechToken.parse(await res.json());
+  const query = new URLSearchParams({
+    model_id: config.model,
+    output_format: "mp3_44100_128",
+    inactivity_timeout: "180",
+    single_use_token: token,
+  });
+  const voice = encodeURIComponent(config.voice);
+  return `${config.baseUrl.replace(/^http/, "ws")}/text-to-speech/${voice}/stream-input?${query}`;
 }

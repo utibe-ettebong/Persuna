@@ -1,10 +1,16 @@
-import { modelConfig, modelProvider } from "@/env";
+import { modelConfig, modelProvider, speechConfig } from "@/env";
 import { createGateway, type ModelClient } from "./gateway";
 import { createMockClient } from "./mock";
 import { withModelOverride, withSpeechOverride } from "./selection";
 import { createTranscriber as liveOrMockTranscriber, type Transcriber } from "./transcribe";
-import { createSpeaker as liveSpeaker, type Speaker } from "./speech";
-import { type Caller, meteredClient, meteredSpeaker, meteredTranscriber } from "./usage";
+import { createSpeaker as liveSpeaker, directSpeechUrl, type Speaker } from "./speech";
+import {
+  type Caller,
+  meteredClient,
+  meteredSpeaker,
+  meteredSpeech,
+  meteredTranscriber,
+} from "./usage";
 
 /**
  * The model client for this environment: live providers or the offline mock.
@@ -31,4 +37,12 @@ export function createTranscriber(caller?: Caller): Transcriber {
 export function createSpeaker(caller?: Caller): Speaker | null {
   const speaker = liveSpeaker(undefined, undefined, withSpeechOverride);
   return speaker && caller ? meteredSpeaker(speaker, caller) : speaker;
+}
+
+/** An address for the signed-in user's app to speak from directly, or null for other voices. */
+export async function directSpeech(caller: Caller): Promise<string | null> {
+  const voice = speechConfig();
+  if (!voice || voice.api !== "elevenlabs") return null;
+  const config = await withSpeechOverride(voice);
+  return meteredSpeech(caller, () => directSpeechUrl(config));
 }

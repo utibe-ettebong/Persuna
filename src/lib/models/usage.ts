@@ -73,11 +73,14 @@ export function meteredTranscriber(transcriber: Transcriber, caller: Caller): Tr
 
 export function meteredSpeaker(speaker: Speaker, caller: Caller): Speaker {
   return {
-    async synthesize(text, style) {
-      await checkAllowance(caller);
-      const result = await speaker.synthesize(text, style);
-      await record(caller, "speech");
-      return result;
-    },
+    synthesize: (text, style) => meteredSpeech(caller, () => speaker.synthesize(text, style)),
   };
+}
+
+/** One piece of speech against the caller's allowance, however it reaches them. */
+export async function meteredSpeech<T>(caller: Caller, speak: () => Promise<T>): Promise<T> {
+  await checkAllowance(caller);
+  const result = await speak();
+  await record(caller, "speech");
+  return result;
 }

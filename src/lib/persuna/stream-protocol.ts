@@ -22,7 +22,7 @@ export const HEARD_PREFIX = "Heard:";
 export const ACTIONS_OPEN = "```actions";
 export const FENCE_CLOSE = "```";
 
-/** Voice-only instructions appended to the turn prompt. Typed turns keep JSON. */
+/** Instructions appended to the turn prompt for streamed turns, spoken or typed. */
 export const VOICE_TURN_INSTRUCTIONS = [
   "Answer in two parts. First the spoken reply as plain prose: no JSON, no backticks, no stage directions.",
   `Start with one line: ${HEARD_PREFIX} "their exact words". Then the reply itself.`,

@@ -70,7 +70,7 @@ import {
 } from "./onboarding";
 import type { Flow, PersunaReply, PersunaState } from "./types";
 import { createLocator } from "@/lib/models/sam";
-import { samSpot, sceneIsThin, spotOf, wantsPicture, type Scene, type Spot } from "./scene";
+import { pictureNeeded, samSpot, sceneIsThin, spotOf, type Scene, type Spot } from "./scene";
 import { splitSentences } from "./sentences";
 import { logVoiceTurn, startTurn } from "./voice-metrics";
 import { confidentialSkills } from "@/lib/teams/confidential";
@@ -355,6 +355,10 @@ export interface ChatInput {
   file?: PersunaFile | null;
   /** The user pressed "Show me": the reply must show, not just tell. */
   show?: boolean;
+  /** The client holds a screenshot it didn't send, and can send it if the model asks. */
+  pictureHeld?: boolean;
+  /** The second pass of a turn that asked for the picture: what Persuna had already said. */
+  saidFirst?: string;
 }
 
 export type ChatMessageInput = ({ text: string } | { audio: string }) & ChatInput;
@@ -370,12 +374,8 @@ async function prepareTurn(userId: string, input: ChatMessageInput) {
     content: m.content,
   }));
   const sight = input.sight ?? null;
-  // The list of what's on screen is quicker for the model than a picture, and
-  // exact about where things are: send the picture only when the list is thin
-  // (a photo, a canvas) or the question is about how something looks.
   const picture = Boolean(
-    sight?.image &&
-    (sight.circled || !sight.scene || sceneIsThin(sight.scene) || (!spoken && wantsPicture(typed))),
+    sight?.image && (input.saidFirst !== undefined || pictureNeeded(sight, spoken ? null : typed)),
   );
   const file = input.file ?? null;
   const message = spoken ? { audio: input.audio } : typed;
@@ -761,10 +761,12 @@ async function applyTurn(
 export type ChatStreamEvent =
   | { type: "heard"; text: string }
   | { type: "sentence"; text: string }
+  /** The model needs the screenshot the client held back: nothing is saved yet. */
+  | { type: "look-closer"; heard: string; said: string }
   | { type: "done"; result: ChatResult };
 
 /**
- * One voice turn, streamed: the first sentence flows while the model is still
+ * One turn, streamed: the first sentence flows while the model is still
  * writing, so speech starts in about a second instead of after the whole
  * reply. Actions still run once the reply is complete, through the same
  * applyTurn as typed turns, and anything they add is spoken last, in order.
@@ -821,6 +823,21 @@ export async function* chatStream(
       yield event;
     }
     turn = collectTurn(buffered);
+    // The client has the picture: it sends it with what was heard and what
+    // was said, and that second pass finishes the turn.
+    if (
+      input.pictureHeld &&
+      !prep.sight?.image &&
+      turn.actions.some((a) => a.type === "look_closer")
+    ) {
+      const heard = prep.spoken ? normalizeText(turn.heard ?? "").slice(0, 4000) : prep.typed;
+      if (heard) {
+        timer.mark("end");
+        logVoiceTurn(logRoute, timer, { spoken: prep.spoken, picture: false, closer: true });
+        yield { type: "look-closer", heard, said: turn.prose };
+        return;
+      }
+    }
     // It needed the picture after all: once more, with it. What's already
     // been said stands ("Let me look closer"), and the second reply follows.
     if (prep.sight?.image && !prep.picture && turn.actions.some((a) => a.type === "look_closer")) {
@@ -850,7 +867,12 @@ export async function* chatStream(
     input.actor,
     prep.sight,
     prep.file,
-    { heard: turn.heard, reply: turn.prose, actions: turn.actions, asked: turn.asked },
+    {
+      heard: turn.heard,
+      reply: [input.saidFirst, turn.prose].filter(Boolean).join("\n\n"),
+      actions: turn.actions,
+      asked: turn.asked,
+    },
     text,
   );
   for (const chunk of extra) {
@@ -871,7 +893,13 @@ export async function* chatFromVoiceStream(
   client: ModelClient,
   transcriber: Transcriber,
   userId: string,
-  input: { audio: File; clock: Clock; actor: Actor; sight?: Sight | null },
+  input: {
+    audio: File;
+    clock: Clock;
+    actor: Actor;
+    sight?: Sight | null;
+    pictureHeld?: boolean;
+  },
   logRoute: string,
 ): AsyncGenerator<ChatStreamEvent> {
   if (voiceMode() !== "transcribe" && modelProvider() !== "mock") {
@@ -881,7 +909,13 @@ export async function* chatFromVoiceStream(
       for await (const event of chatStream(
         client,
         userId,
-        { audio, clock: input.clock, actor: input.actor, sight: input.sight },
+        {
+          audio,
+          clock: input.clock,
+          actor: input.actor,
+          sight: input.sight,
+          pictureHeld: input.pictureHeld,
+        },
         logRoute,
       )) {
         yielded = true;
@@ -898,7 +932,13 @@ export async function* chatFromVoiceStream(
   yield* chatStream(
     client,
     userId,
-    { text, clock: input.clock, actor: input.actor, sight: input.sight },
+    {
+      text,
+      clock: input.clock,
+      actor: input.actor,
+      sight: input.sight,
+      pictureHeld: input.pictureHeld,
+    },
     logRoute,
   );
 }

@@ -125,8 +125,110 @@ export function speak(text: string, handlers: SpeakHandlers): Promise<void> {
   return done;
 }
 
+/** How long a direct connection gets to start sounding before the server route takes over. */
+const DIRECT_FIRST_AUDIO_MS = 2500;
+
+/** A connection straight to the voice provider, opened before it's needed. */
+let readySocket: WebSocket | null = null;
+let warming = false;
+/** Set when the server has no direct address, or direct speech keeps failing. */
+let directOff = false;
+let directFailures = 0;
+
+/**
+ * Opens a direct connection ahead of the next line, so speech skips this
+ * server and the connection's own set-up time. Safe to call often.
+ */
+export async function warmVoice(): Promise<void> {
+  if (warming || directOff || cloudOff || readySocket?.readyState === WebSocket.OPEN) return;
+  warming = true;
+  try {
+    const res = await fetch("/api/persuna/speak-token", { method: "POST" });
+    if (res.status === 204) directOff = true;
+    if (!res.ok || res.status === 204) return;
+    const { url } = (await res.json()) as { url: string };
+    const socket = new WebSocket(url);
+    await new Promise<void>((resolve, reject) => {
+      socket.onopen = () => resolve();
+      socket.onerror = () => reject(new Error("no direct connection"));
+    });
+    socket.onclose = () => {
+      if (readySocket === socket) readySocket = null;
+    };
+    // The first message opens the stream; nothing is said until there's text.
+    socket.send(JSON.stringify({ text: " " }));
+    readySocket = socket;
+  } catch {
+    if (++directFailures >= 3) directOff = true;
+  } finally {
+    warming = false;
+  }
+}
+
+/**
+ * Speaks `text` over an open connection, as a Response like the server route's
+ * so playback is the same. Null when no audio comes in time.
+ */
+export function speakOverSocket(
+  socket: Pick<WebSocket, "send" | "close" | "onmessage" | "onclose">,
+  text: string,
+  firstAudioMs = DIRECT_FIRST_AUDIO_MS,
+): Promise<Response | null> {
+  return new Promise((resolve) => {
+    let out: ReadableStreamDefaultController<Uint8Array> | null = null;
+    let started = false;
+    let ended = false;
+    const body = new ReadableStream<Uint8Array>({
+      start: (controller) => void (out = controller),
+      cancel: () => {
+        ended = true;
+        socket.close();
+      },
+    });
+    const end = () => {
+      if (ended) return;
+      ended = true;
+      window.clearTimeout(timer);
+      if (started) out?.close();
+      else resolve(null);
+      socket.close();
+    };
+    const timer = window.setTimeout(end, firstAudioMs);
+    socket.onmessage = (event) => {
+      const message = JSON.parse(event.data as string) as { audio?: string; isFinal?: boolean };
+      if (message.audio && !ended) {
+        out?.enqueue(Uint8Array.from(atob(message.audio), (c) => c.charCodeAt(0)));
+        if (!started) {
+          started = true;
+          window.clearTimeout(timer);
+          resolve(new Response(body, { headers: { "content-type": "audio/mpeg" } }));
+        }
+      }
+      if (message.isFinal) end();
+    };
+    socket.onclose = end;
+    socket.send(JSON.stringify({ text: `${text} ` }));
+    // An empty message ends the stream, so the provider finishes and says so.
+    socket.send(JSON.stringify({ text: "" }));
+  });
+}
+
+/** One line over the connection that's ready, if there is one; the next is opened at once. */
+async function fetchDirect(text: string): Promise<Response | null> {
+  const socket = readySocket;
+  if (!socket || socket.readyState !== WebSocket.OPEN) return null;
+  readySocket = null;
+  void warmVoice();
+  const res = await speakOverSocket(socket, text);
+  if (res) directFailures = 0;
+  else if (++directFailures >= 3) directOff = true;
+  return res;
+}
+
 /** Starts one piece of cloud speech; null means "use the browser voice". */
 async function fetchSpeech(text: string): Promise<Response | null> {
+  const direct = await fetchDirect(text);
+  if (direct) return direct;
   try {
     const res = await fetch("/api/persuna/speak", {
       method: "POST",
@@ -492,16 +594,24 @@ export type StreamEvent<T = unknown> =
   | { name: "heard"; text: string }
   | { name: "sentence"; text: string }
   | { name: "done"; result: T }
-  | { name: "error"; message: string };
+  | { name: "error"; message: string }
+  | { name: "look-closer"; heard: string; said: string };
 
 /** Reads one SSE event block; null when it isn't one of ours. */
 export function parseStreamEvent<T = unknown>(raw: string): StreamEvent<T> | null {
-  const name = /^event: (\w+)$/m.exec(raw)?.[1];
+  const name = /^event: ([\w-]+)$/m.exec(raw)?.[1];
   const data = /^data: (.*)$/m.exec(raw)?.[1];
   if (!name || data === undefined) return null;
   try {
-    const json = JSON.parse(data) as { text?: unknown; message?: unknown };
+    const json = JSON.parse(data) as {
+      text?: unknown;
+      message?: unknown;
+      heard?: unknown;
+      said?: unknown;
+    };
     if (name === "done") return { name, result: json as T };
+    if (name === "look-closer" && typeof json.heard === "string")
+      return { name, heard: json.heard, said: typeof json.said === "string" ? json.said : "" };
     if (name === "error")
       return {
         name,
@@ -513,6 +623,46 @@ export function parseStreamEvent<T = unknown>(raw: string): StreamEvent<T> | nul
   } catch {
     return null;
   }
+}
+
+/** How a streamed turn ended: saved, failed, or asking for the screenshot held back. */
+export interface TurnOutcome<T> {
+  result: T | null;
+  failed: string | null;
+  closer: { heard: string; said: string } | null;
+}
+
+/** Reads one turn's Server-Sent Events, reporting words as they arrive. */
+export async function readTurnStream<T>(
+  body: ReadableStream<Uint8Array>,
+  on: { heard: (text: string) => void; sentence: (text: string) => void },
+): Promise<TurnOutcome<T>> {
+  const outcome: TurnOutcome<T> = { result: null, failed: null, closer: null };
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value) buf += decoder.decode(value, { stream: true });
+      if (done) buf += decoder.decode();
+      let idx: number;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const event = parseStreamEvent<T>(buf.slice(0, idx));
+        buf = buf.slice(idx + 2);
+        if (event?.name === "sentence") on.sentence(event.text);
+        else if (event?.name === "heard") on.heard(event.text);
+        else if (event?.name === "done") outcome.result = event.result;
+        else if (event?.name === "error") outcome.failed = event.message;
+        else if (event?.name === "look-closer")
+          outcome.closer = { heard: event.heard, said: event.said };
+      }
+      if (done) break;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return outcome;
 }
 
 /* ---------- Hands-free listening ---------- */

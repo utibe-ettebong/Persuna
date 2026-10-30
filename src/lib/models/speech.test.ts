@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { speechConfig, type SpeechConfig } from "@/env";
-import { MAX_SPOKEN_CHARS, createSpeaker, spokenPart } from "./speech";
+import { MAX_SPOKEN_CHARS, createSpeaker, directSpeechUrl, spokenPart } from "./speech";
 
 vi.mock("@/env", async (original) => ({
   ...(await original<typeof import("@/env")>()),
@@ -86,5 +86,44 @@ describe("speechConfig", () => {
     expect(speechConfig()).toMatchObject({ api: "elevenlabs", model: "eleven_flash_v2_5" });
     vi.stubEnv("SPEECH_API_KEY", "PASTE_KEY_HERE");
     expect(speechConfig()).toBeNull();
+  });
+});
+
+describe("directSpeechUrl", () => {
+  const eleven = {
+    api: "elevenlabs" as const,
+    apiKey: "secret-key",
+    baseUrl: "https://api.elevenlabs.io/v1",
+    model: "eleven_flash_v2_5",
+    voice: "voice id",
+  };
+
+  it("makes an address with a single-use token, never the key", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ token: "once" })));
+    const url = await directSpeechUrl(eleven, fetchImpl as unknown as typeof fetch);
+
+    expect(url).toMatch(
+      /^wss:\/\/api\.elevenlabs\.io\/v1\/text-to-speech\/voice%20id\/stream-input\?/,
+    );
+    expect(new URL(url!).searchParams.get("single_use_token")).toBe("once");
+    expect(new URL(url!).searchParams.get("model_id")).toBe("eleven_flash_v2_5");
+    expect(url).not.toContain("secret-key");
+    const [called, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(called).toBe("https://api.elevenlabs.io/v1/single-use-token/tts_websocket");
+    expect(init.headers).toMatchObject({ "xi-api-key": "secret-key" });
+  });
+
+  it("has nothing for other voices", async () => {
+    const fetchImpl = vi.fn();
+    const other = { ...eleven, api: "openai" as const };
+    expect(await directSpeechUrl(other, fetchImpl as unknown as typeof fetch)).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("fails loudly if the provider refuses", async () => {
+    const fetchImpl = vi.fn(async () => new Response("nope", { status: 401 }));
+    await expect(directSpeechUrl(eleven, fetchImpl as unknown as typeof fetch)).rejects.toThrow(
+      /401/,
+    );
   });
 });

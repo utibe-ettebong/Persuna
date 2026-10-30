@@ -188,6 +188,22 @@ export function wantsPicture(text: string): boolean {
 }
 
 /**
+ * Whether a turn's screenshot has to travel with it. The list of what's on
+ * screen is quicker for the model and exact about where things are, so the
+ * picture goes only when the list is thin (a photo, a canvas), something was
+ * circled, or the words are about how something looks. A spoken turn's words
+ * aren't known yet, so the model asks with look_closer if it needs the picture.
+ */
+export function pictureNeeded(
+  sight: { scene: Scene | null; circled?: boolean },
+  typed?: string | null,
+): boolean {
+  return Boolean(
+    sight.circled || !sight.scene || sceneIsThin(sight.scene) || (typed && wantsPicture(typed)),
+  );
+}
+
+/**
  * SAM 3.1's answer for one prompt: "<|box;x1=80;y1=400;x2=240;y2=450;w=1280;h=800|>…".
  * The box is in the screenshot's pixels; w and h are the screenshot's size.
  */

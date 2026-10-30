@@ -3,7 +3,6 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
-  persunaChatAction,
   persunaCheckInAction,
   persunaPublishAction,
   persunaPulseAction,
@@ -23,7 +22,13 @@ import type { ChatJob, ChatResult, Drawing, MadeFile, PublishConfirm } from "@/l
 import type { AppConfirm } from "@/lib/connections/service";
 import type { McpConfirm } from "@/lib/mcp/service";
 import { parseFastIntent } from "@/lib/persuna/intents";
-import { sceneIsThin, sceneWithin, type Scene, type Spot } from "@/lib/persuna/scene";
+import {
+  pictureNeeded,
+  sceneIsThin,
+  sceneWithin,
+  type Scene,
+  type Spot,
+} from "@/lib/persuna/scene";
 import { LOOKS, LOOK_IDS, lookOf } from "@/lib/persuna/looks";
 import {
   SETUP_QUESTIONS,
@@ -54,7 +59,8 @@ import {
 import {
   chime,
   createSpeechQueue,
-  parseStreamEvent,
+  readTurnStream,
+  warmVoice,
   speak,
   startConversation,
   startHoldRecording,
@@ -698,6 +704,155 @@ export function Companion(props: CompanionProps) {
     return true;
   }
 
+  /**
+   * One turn, streamed from the server: each sentence is spoken and shown while
+   * the rest is being written. The screenshot stays here unless the turn needs
+   * it, and goes up in a second request if the model asks to look closer.
+   * Returns what went wrong, or null (a turn you talked over ends quietly).
+   */
+  const streamTurn = useCallback(
+    async (
+      message: { audio: File } | { text: string },
+      sight: Awaited<ReturnType<typeof screenNow>>,
+      opts: {
+        lead?: string;
+        show?: boolean;
+        onWords?: (soFar: string) => void;
+        onEnd?: () => void;
+      },
+    ): Promise<string | null> => {
+      const controller = new AbortController();
+      streamAbort.current = controller;
+      const typed = "text" in message ? message.text : null;
+      const label = typed === null ? "voice" : "typed";
+      const started = performance.now();
+      const post = (form: FormData, withPicture: boolean) => {
+        if (sight?.scene) form.append("scene", JSON.stringify(sight.scene));
+        if (sight?.circled) form.append("circled", "1");
+        if (sight?.image && withPicture) form.append("screen", sight.image);
+        else if (sight?.image) form.append("picture-held", "1");
+        if (opts.show) form.append("show", "1");
+        const { day, now, offset } = clock();
+        form.append("day", day);
+        form.append("now", now);
+        form.append("offset", String(offset));
+        return fetch("/api/persuna/chat-stream", {
+          method: "POST",
+          body: form,
+          signal: controller.signal,
+        });
+      };
+      let queue: SpeechQueue | null = null;
+      const settleSpeech = () => {
+        const settled = queue;
+        queue = null;
+        return settled?.finish().then(() => {
+          speaking.current = Math.max(0, speaking.current - 1);
+          if (speaking.current === 0) {
+            talkingNow.current = false;
+            setTalking(false);
+          }
+        });
+      };
+      const close = () => {
+        setBusy("idle");
+        if (streamAbort.current === controller) streamAbort.current = null;
+        opts.onEnd?.();
+      };
+      try {
+        const form = new FormData();
+        if (typed === null) form.append("audio", (message as { audio: File }).audio);
+        else form.append("text", typed);
+        let res = await post(form, Boolean(sight && pictureNeeded(sight, typed)));
+        if (!res.ok || !res.body) {
+          close();
+          return res.status === 401 ? "Sign in first" : "The voice service didn't answer.";
+        }
+        let spoken = "";
+        let written = "";
+        let firstAudioLogged = false;
+        if (live.current.voiceOn) {
+          speaking.current += 1;
+          talkingNow.current = true;
+          setTalking(true);
+          queue = createSpeechQueue({
+            onLevel: setLevel,
+            onSpoken: (piece) => {
+              if (!firstAudioLogged) {
+                firstAudioLogged = true;
+                console.info(
+                  `[persuna] ${label} first-audio=${Math.round(performance.now() - started)}ms`,
+                );
+              }
+              spoken = spoken ? `${spoken} ${piece}` : piece;
+              showCaption(spoken);
+              spokenChars.current += piece.length;
+              if (speakTotal.current > 0) {
+                setSpeakProgress(Math.min(1, spokenChars.current / speakTotal.current));
+              }
+            },
+          });
+          if (opts.lead) queue.push(opts.lead);
+        }
+        let firstSentenceLogged = false;
+        const on = {
+          heard: (text: string) => showCaption(`“${text}”`),
+          sentence: (text: string) => {
+            if (!firstSentenceLogged) {
+              firstSentenceLogged = true;
+              console.info(
+                `[persuna] ${label} first-sentence=${Math.round(performance.now() - started)}ms`,
+              );
+            }
+            written = written ? `${written} ${text}` : text;
+            opts.onWords?.(written);
+            if (queue) queue.push(text);
+            else showCaption(written);
+          },
+        };
+        let outcome = await readTurnStream<ChatResult>(res.body, on);
+        if (outcome.closer && sight?.image) {
+          const again = new FormData();
+          again.append("text", outcome.closer.heard);
+          again.append("said-first", outcome.closer.said);
+          res = await post(again, true);
+          outcome = res.body
+            ? await readTurnStream<ChatResult>(res.body, on)
+            : { result: null, failed: null, closer: null };
+        }
+        const { result, failed } = outcome;
+        console.info(
+          `[persuna] ${label} turn total=${Math.round(performance.now() - started)}ms sight=${Boolean(sight)}`,
+        );
+        close();
+        if (failed || !result) {
+          stopSpeaking();
+          void settleSpeech();
+          return failed ?? "The voice service didn't answer.";
+        }
+        setError(null);
+        screenyRef.current = Boolean(sight) || Boolean(result.drawing || result.point);
+        if (queue) {
+          // The reply is already being spoken; show the messages and cards.
+          void settleSpeech();
+          answered(result, "", true);
+        } else {
+          answered(result, opts.lead);
+        }
+        return null;
+      } catch {
+        close();
+        // Died mid-read (aborted or cut off): settle the speech it started.
+        void settleSpeech();
+        // Talking over Persuna stops its turn silently; anything else is news.
+        return controller.signal.aborted ? null : "The voice service didn't answer.";
+      }
+    },
+    // answered and screenNow read live state through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [showCaption],
+  );
+
   const send = useCallback(
     async (message: string, lead = "", opts?: { show?: boolean }) => {
       const body = message.trim();
@@ -719,7 +874,7 @@ export function Companion(props: CompanionProps) {
       };
       setMessages((all) => [...all, pending]);
       setBusy("thinking");
-      const started = performance.now();
+      if (live.current.voiceOn) void warmVoice();
       // The screen goes with the message only when the message is about it,
       // you're showing something, or the last turn was: reading it costs
       // seconds that plain chat shouldn't pay.
@@ -729,20 +884,23 @@ export function Companion(props: CompanionProps) {
         screenyRef.current ||
         wantsSight(body);
       const sight = withSight ? await screenNow() : null;
-      const res = await persunaChatAction(body, clock(), sight, { show: opts?.show ?? false });
-      console.info(
-        `[persuna] typed turn total=${Math.round(performance.now() - started)}ms sight=${withSight}`,
-      );
-      setBusy("idle");
-      if (!res.ok) {
-        setMessages((all) => all.filter((m) => m.id !== pending.id));
+      const writing = `${pending.id}-reply`;
+      streamAbort.current?.abort();
+      const failure = await streamTurn({ text: body }, sight, {
+        lead,
+        show: opts?.show,
+        onWords: (soFar) =>
+          setMessages((all) => [
+            ...all.filter((m) => m.id !== writing),
+            { id: writing, role: "assistant", kind: "chat", content: soFar },
+          ]),
+        onEnd: () =>
+          setMessages((all) => all.filter((m) => m.id !== pending.id && m.id !== writing)),
+      });
+      if (failure) {
         setText(body);
-        setError(res.error);
-        return;
+        setError(failure);
       }
-      setMessages((all) => all.filter((m) => m.id !== pending.id));
-      screenyRef.current = withSight || Boolean(res.value.drawing || res.value.point);
-      answered(res.value, lead);
     },
     // setupReply and answered read live state through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -948,8 +1106,7 @@ export function Companion(props: CompanionProps) {
     async (audio: Blob, end: UtteranceEnd = "pause") => {
       lastHeard.current = Date.now();
       setBusy("hearing");
-      const controller = new AbortController();
-      let queue: SpeechQueue | null = null;
+      if (live.current.voiceOn) void warmVoice();
       try {
         const wav = await toTranscribableWav(audio, "persuna");
         const form = new FormData();
@@ -964,144 +1121,21 @@ export function Companion(props: CompanionProps) {
           if (res.value.trim()) await send(res.value, lead);
           return;
         }
-        // Heard and answered as it streams: each sentence is spoken while
-        // the rest is still being written. The screen read started when the
+        // Heard and answered as it streams. The screen read started when the
         // key went down (or a moment ago).
         streamAbort.current?.abort();
         stopSpeaking();
-        const started = performance.now();
         const sight = await screenNow();
-        if (sight?.image) form.append("screen", sight.image);
-        if (sight?.scene) form.append("scene", JSON.stringify(sight.scene));
-        if (sight?.circled) form.append("circled", "1");
-        const { day, now, offset } = clock();
-        form.append("day", day);
-        form.append("now", now);
-        form.append("offset", String(offset));
-        streamAbort.current = controller;
-        const res = await fetch("/api/persuna/chat-stream", {
-          method: "POST",
-          body: form,
-          signal: controller.signal,
-        });
-        if (!res.ok || !res.body) {
-          setBusy("idle");
-          return setError(
-            res.status === 401 ? "Sign in first" : "The voice service didn't answer.",
-          );
-        }
-        let soFar = "";
-        let firstAudioLogged = false;
-        if (live.current.voiceOn) {
-          speaking.current += 1;
-          talkingNow.current = true;
-          setTalking(true);
-          queue = createSpeechQueue({
-            onLevel: setLevel,
-            onSpoken: (piece) => {
-              if (!firstAudioLogged) {
-                firstAudioLogged = true;
-                console.info(
-                  `[persuna] voice first-audio=${Math.round(performance.now() - started)}ms`,
-                );
-              }
-              soFar = soFar ? `${soFar} ${piece}` : piece;
-              showCaption(soFar);
-              spokenChars.current += piece.length;
-              if (speakTotal.current > 0) {
-                setSpeakProgress(Math.min(1, spokenChars.current / speakTotal.current));
-              }
-            },
-          });
-          if (lead) queue.push(lead);
-        }
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = "";
-        let result: ChatResult | null = null;
-        let failed: string | null = null;
-        let firstSentenceLogged = false;
-        try {
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (value) buf += decoder.decode(value, { stream: true });
-            if (done) buf += decoder.decode();
-            let idx: number;
-            while ((idx = buf.indexOf("\n\n")) >= 0) {
-              const event = parseStreamEvent<ChatResult>(buf.slice(0, idx));
-              buf = buf.slice(idx + 2);
-              if (event?.name === "sentence") {
-                if (!firstSentenceLogged) {
-                  firstSentenceLogged = true;
-                  console.info(
-                    `[persuna] voice first-sentence=${Math.round(performance.now() - started)}ms`,
-                  );
-                }
-                queue?.push(event.text);
-              } else if (event?.name === "heard") showCaption(`“${event.text}”`);
-              else if (event?.name === "done") result = event.result;
-              else if (event?.name === "error") failed = event.message;
-            }
-            if (done) break;
-          }
-        } finally {
-          reader.releaseLock();
-        }
-        console.info(
-          `[persuna] voice turn total=${Math.round(performance.now() - started)}ms sight=${Boolean(sight)}`,
-        );
-        setBusy("idle");
-        if (streamAbort.current === controller) streamAbort.current = null;
-        if (failed || !result) {
-          stopSpeaking();
-          if (queue) {
-            const settled = queue;
-            queue = null;
-            void settled.finish();
-            speaking.current = Math.max(0, speaking.current - 1);
-            if (speaking.current === 0) {
-              talkingNow.current = false;
-              setTalking(false);
-            }
-          }
-          return setError(failed ?? "The voice service didn't answer.");
-        }
-        setError(null);
-        screenyRef.current = Boolean(sight) || Boolean(result.drawing || result.point);
-        if (queue) {
-          // The reply is already being spoken; show the messages and cards.
-          const settled = queue;
-          queue = null;
-          void settled.finish().then(() => {
-            speaking.current = Math.max(0, speaking.current - 1);
-            if (speaking.current === 0) {
-              talkingNow.current = false;
-              setTalking(false);
-            }
-          });
-          answered(result, "", true);
-        } else {
-          answered(result, lead);
-        }
+        const failure = await streamTurn({ audio: wav }, sight, { lead });
+        if (failure) setError(failure);
       } catch {
         setBusy("idle");
-        if (streamAbort.current === controller) streamAbort.current = null;
-        if (queue) {
-          // Died mid-read (aborted or cut off): settle the speech it started.
-          void queue.finish();
-          speaking.current = Math.max(0, speaking.current - 1);
-          if (speaking.current === 0) {
-            talkingNow.current = false;
-            setTalking(false);
-          }
-        }
-        // Talking over Persuna stops its turn silently; anything else is news.
-        if (!controller.signal.aborted) setError("I couldn't make that out. Try again?");
+        setError("I couldn't make that out. Try again?");
       }
     },
     // answered reads live state through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [send],
+    [send, streamTurn],
   );
 
   function endConversation() {
@@ -1190,6 +1224,7 @@ export function Companion(props: CompanionProps) {
   function holdStart() {
     if (holdRec.current) return;
     lastTalked.current = Date.now();
+    if (live.current.voiceOn) void warmVoice();
     // No microphone yet: the island asks for it instead of recording silence.
     if (perms.current && perms.current.mic !== "granted") {
       setNeed("mic");

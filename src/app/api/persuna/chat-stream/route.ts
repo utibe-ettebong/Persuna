@@ -4,13 +4,16 @@ import { actorOf, getUser } from "@/lib/auth/session";
 import { createModelClient, createTranscriber } from "@/lib/models";
 import { ModelError } from "@/lib/models/gateway";
 import { readAudio } from "@/lib/models/transcribe";
-import { chatFromVoiceStream } from "@/lib/persuna/service";
+import { chatFromVoiceStream, chatStream } from "@/lib/persuna/service";
+
+const ROUTE = "/api/persuna/chat-stream";
 
 /**
- * A spoken turn, streamed: the recording goes up as form audio (with the
- * screen read and clock, like the voice action) and Server-Sent Events come
- * back — heard, then each sentence as it's written, then done with the saved
- * result, or error when the turn fails. Signed-in users only.
+ * A turn, streamed. The message goes up as form audio or text (with the screen
+ * read and clock) and Server-Sent Events come back: heard, then each sentence
+ * as it's written, then done with the saved result, or error when the turn
+ * fails. look-closer ends a turn early: nothing is saved, and the client sends
+ * the screenshot it held back, with what was heard and said. Signed-in users only.
  */
 export async function POST(request: Request) {
   const user = await getUser();
@@ -22,7 +25,9 @@ export async function POST(request: Request) {
     return new Response("Nothing was recorded", { status: 400 });
   }
   const audio = readAudio(form.get("audio"));
-  if (!audio) return new Response("Nothing was recorded", { status: 400 });
+  const text = form.get("text");
+  const typed = typeof text === "string" ? text.trim().slice(0, 4000) : "";
+  if (!audio && !typed) return new Response("Nothing was recorded", { status: 400 });
   const clock = clockField.safeParse({
     day: form.get("day"),
     now: form.get("now"),
@@ -42,6 +47,16 @@ export async function POST(request: Request) {
     return new Response("That screen read couldn't be used", { status: 400 });
   }
 
+  const said = form.get("said-first");
+  const turn = {
+    clock: clock.data,
+    actor: actorOf(user),
+    sight,
+    show: form.get("show") === "1",
+    pictureHeld: form.get("picture-held") === "1",
+    saidFirst: typeof said === "string" ? said.slice(0, 4000) : undefined,
+  };
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (event: string, data: unknown) =>
@@ -49,14 +64,13 @@ export async function POST(request: Request) {
           new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
         );
       try {
-        for await (const turnEvent of chatFromVoiceStream(
-          createModelClient(user),
-          createTranscriber(user),
-          user.id,
-          { audio, clock: clock.data, actor: actorOf(user), sight },
-          "/api/persuna/chat-stream",
-        )) {
+        const client = createModelClient(user);
+        const events = audio
+          ? chatFromVoiceStream(client, createTranscriber(user), user.id, { audio, ...turn }, ROUTE)
+          : chatStream(client, user.id, { text: typed, ...turn }, ROUTE);
+        for await (const turnEvent of events) {
           if (turnEvent.type === "done") send("done", turnEvent.result);
+          else if (turnEvent.type === "look-closer") send("look-closer", turnEvent);
           else send(turnEvent.type, { text: turnEvent.text });
         }
       } catch (error) {
