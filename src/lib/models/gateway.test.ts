@@ -236,6 +236,18 @@ describe("createGateway", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("skips reasoning when the call asks for none", async () => {
+    const fetchImpl = vi.fn(async () => ok(reply));
+    const client = createGateway(
+      () => ({ ...config, reasoningEffort: "max" as const }),
+      fetchImpl as typeof fetch,
+    );
+    await client.complete("draft", [], { reasoningOff: true });
+
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).not.toHaveProperty("reasoning_effort");
+  });
+
   it("asks for JSON mode when told to, and drops it if the provider refuses", async () => {
     const fetchImpl = vi
       .fn()
@@ -390,6 +402,23 @@ describe("completeStream", () => {
     expect(sent).toHaveLength(2);
     expect(sent[0].max_tokens).toBe(4096);
     expect(sent[1].max_tokens).toBe(4096 * 3);
+  });
+
+  it("skips reasoning in streams when the call asks for none", async () => {
+    const fetchImpl = vi.fn(async () => sse(`${event({ content: "hi" })}${DONE}`));
+    const client = createGateway(
+      () => ({ ...config, reasoningEffort: "max" as const }),
+      fetchImpl as typeof fetch,
+    );
+    if (!client.completeStream) throw new Error("test client must stream");
+    const chunks: string[] = [];
+    for await (const chunk of client.completeStream("draft", [], { reasoningOff: true })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual(["hi"]);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).not.toHaveProperty("reasoning_effort");
   });
 
   it("retries without reasoning_effort when the provider refuses it", async () => {

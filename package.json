@@ -24,7 +24,8 @@
     "db:studio": "drizzle-kit studio",
     "skill": "tsx --env-file-if-exists=.env scripts/skill.ts",
     "demo:seed": "tsx --env-file-if-exists=.env scripts/demo-seed.ts",
-    "voice:agent": "tsx --env-file-if-exists=.env scripts/voice-agent.ts"
+    "voice:agent": "tsx --env-file-if-exists=.env scripts/voice-agent.ts",
+    "voice:latency": "tsx --env-file-if-exists=.env scripts/voice-latency.ts"
   },
   "dependencies": {
     "@elevenlabs/client": "1.28.0",

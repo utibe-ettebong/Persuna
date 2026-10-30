@@ -991,6 +991,7 @@ export function Companion(props: CompanionProps) {
           );
         }
         let soFar = "";
+        let firstAudioLogged = false;
         if (live.current.voiceOn) {
           speaking.current += 1;
           talkingNow.current = true;
@@ -998,6 +999,12 @@ export function Companion(props: CompanionProps) {
           queue = createSpeechQueue({
             onLevel: setLevel,
             onSpoken: (piece) => {
+              if (!firstAudioLogged) {
+                firstAudioLogged = true;
+                console.info(
+                  `[persuna] voice first-audio=${Math.round(performance.now() - started)}ms`,
+                );
+              }
               soFar = soFar ? `${soFar} ${piece}` : piece;
               showCaption(soFar);
               spokenChars.current += piece.length;
@@ -1013,6 +1020,7 @@ export function Companion(props: CompanionProps) {
         let buf = "";
         let result: ChatResult | null = null;
         let failed: string | null = null;
+        let firstSentenceLogged = false;
         try {
           for (;;) {
             const { done, value } = await reader.read();
@@ -1022,8 +1030,15 @@ export function Companion(props: CompanionProps) {
             while ((idx = buf.indexOf("\n\n")) >= 0) {
               const event = parseStreamEvent<ChatResult>(buf.slice(0, idx));
               buf = buf.slice(idx + 2);
-              if (event?.name === "sentence") queue?.push(event.text);
-              else if (event?.name === "heard") showCaption(`“${event.text}”`);
+              if (event?.name === "sentence") {
+                if (!firstSentenceLogged) {
+                  firstSentenceLogged = true;
+                  console.info(
+                    `[persuna] voice first-sentence=${Math.round(performance.now() - started)}ms`,
+                  );
+                }
+                queue?.push(event.text);
+              } else if (event?.name === "heard") showCaption(`“${event.text}”`);
               else if (event?.name === "done") result = event.result;
               else if (event?.name === "error") failed = event.message;
             }
