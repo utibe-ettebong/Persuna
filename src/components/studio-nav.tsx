@@ -7,7 +7,7 @@ export interface NavItem {
   href: string;
   label: string;
   /** Which group of the sidebar it sits in (default: Workspace). */
-  section?: "Workspace" | "Marketplace" | "Account";
+  section?: "Workspace" | "Marketplace" | "Account" | "Admin";
   adminOnly?: boolean;
 }
 
@@ -24,9 +24,10 @@ export const NAV: NavItem[] = [
   { href: "/profile", label: "Profile", section: "Account" },
   { href: "/audit", label: "Audit log", section: "Account" },
   { href: "/settings", label: "Models & keys", section: "Account", adminOnly: true },
+  { href: "/admin", label: "Admin", section: "Admin", adminOnly: true },
 ];
 
-const SECTIONS = ["Workspace", "Marketplace", "Account"] as const;
+const SECTIONS = ["Workspace", "Marketplace", "Account", "Admin"] as const;
 
 /** Small line icons, one per section of the studio. */
 const ICONS: Record<string, string> = {
@@ -42,6 +43,7 @@ const ICONS: Record<string, string> = {
   "/audit": "M6 3h9l4 4v14H6zM9 11h7M9 15h7M9 7h3",
   "/settings":
     "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19 12l2-1-1-3-2 .5-1.5-1.5.5-2-3-1-1 2h-2l-1-2-3 1 .5 2L6 9.5 4 9l-1 3 2 1v2l-2 1 1 3 2-.5 1.5 1.5-.5 2 3 1 1-2h2l1 2 3-1-.5-2 1.5-1.5 2 .5 1-3-2-1z",
+  "/admin": "M12 3l7 3v5c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6zM9 12l2 2 4-4",
 };
 
 function NavIcon({ href }: { href: string }) {

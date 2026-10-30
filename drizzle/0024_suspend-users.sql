@@ -1,0 +1,1 @@
+ALTER TABLE "auth_user" ADD COLUMN "suspended" boolean DEFAULT false NOT NULL;

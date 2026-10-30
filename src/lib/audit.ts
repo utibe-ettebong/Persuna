@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 
 const { auditEvents } = schema;
@@ -34,7 +34,8 @@ export interface AuditInput {
     | "org_skill"
     | "handbook_note"
     | "playbook"
-    | "onboarding";
+    | "onboarding"
+    | "user";
   entityId?: string | null;
   skillId?: string | null;
   /** Small facts only (ids, scores, statuses). Never job text or pair content. */
@@ -60,7 +61,15 @@ export async function audit(event: AuditInput, tx: Executor = db()) {
  * (what a non-admin may see). No filter returns everything (admins).
  */
 export async function listAuditEvents(
-  filter: { skillId?: string; skillIds?: string[]; actor?: string; limit?: number } = {},
+  filter: {
+    skillId?: string;
+    skillIds?: string[];
+    actor?: string;
+    actorLike?: string;
+    actionLike?: string;
+    entityLike?: string;
+    limit?: number;
+  } = {},
 ) {
   const where: SQL[] = [];
   if (filter.skillId) where.push(eq(auditEvents.skillId, filter.skillId));
@@ -71,6 +80,11 @@ export async function listAuditEvents(
     ];
     where.push(mine.length ? or(...mine)! : sql`false`);
   }
+  // Forgiving contains-filters for the admin console. Non-admin callers keep
+  // the exact `actor` match above, so they never see other actors' events.
+  if (filter.actorLike) where.push(ilike(auditEvents.actor, `%${filter.actorLike}%`));
+  if (filter.actionLike) where.push(ilike(auditEvents.action, `%${filter.actionLike}%`));
+  if (filter.entityLike) where.push(ilike(auditEvents.entityType, `%${filter.entityLike}%`));
   return db()
     .select()
     .from(auditEvents)

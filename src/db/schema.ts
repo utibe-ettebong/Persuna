@@ -66,6 +66,8 @@ export const authUsers = pgTable("auth_user", {
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
+  /** Set by a platform admin; suspended accounts read as signed out. Extra column beyond Better Auth's core schema. */
+  suspended: boolean("suspended").notNull().default(false),
   ...authTimestamps(),
 });
 
