@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelRole } from "@/env";
-import { createGateway, ModelError, type ChatMessage, type ModelClient } from "./gateway";
+import {
+  createGateway,
+  MODEL_OUTAGE_COOLDOWN_MS,
+  ModelError,
+  type ChatMessage,
+  type ModelClient,
+} from "./gateway";
 
 const config = { baseUrl: "https://models.example/v1/", apiKey: "k", model: "m" };
 const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
@@ -520,6 +526,47 @@ describe("completeStream", () => {
     const spoken = collectStream(client, "listen", audio).catch((e) => e);
     await vi.runAllTimersAsync();
     expect(await spoken).toMatchObject({ modelMissing: true });
+  });
+
+  it("goes straight to the backup during an outage, then tries the provider again", async () => {
+    const meta = { ...config, baseUrl: "https://outage-meta.example/v1", model: "muse" };
+    const backup = { ...config, baseUrl: "https://outage-backup.example/v1", model: "open" };
+    const resolve = (role: string) => (role === "draft" ? backup : meta);
+    let metaDown = true;
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.startsWith("https://outage-meta") && metaDown
+        ? new Response('{"error":{"code":"model_not_found"}}', { status: 404 })
+        : sse(`${event({ content: "hello" })}${DONE}`),
+    );
+    const client = createGateway(resolve as never, fetchImpl as unknown as typeof fetch);
+    const words: ChatMessage[] = [{ role: "user", content: "hi" }];
+    const toMeta = () =>
+      fetchImpl.mock.calls.filter(([url]) => url.startsWith("https://outage-meta")).length;
+
+    const first = collectStream(client, "listen", words);
+    await vi.runAllTimersAsync();
+    await first;
+    const failedCalls = toMeta();
+    expect(failedCalls).toBeGreaterThan(0);
+
+    await expect(collectStream(client, "listen", words)).resolves.toEqual(["hello"]);
+    expect(toMeta()).toBe(failedCalls);
+
+    // Audio has no backup, so it still tries.
+    const spoken = collectStream(client, "listen", [
+      {
+        role: "user",
+        content: [{ type: "input_audio", input_audio: { data: "x", format: "wav" } }],
+      },
+    ]).catch((e) => e);
+    await vi.runAllTimersAsync();
+    expect(await spoken).toMatchObject({ modelMissing: true });
+
+    metaDown = false;
+    await vi.advanceTimersByTimeAsync(MODEL_OUTAGE_COOLDOWN_MS + 1);
+    const before = toMeta();
+    await collectStream(client, "listen", words);
+    expect(toMeta()).toBe(before + 1);
   });
 
   it("falls back to EXTRACT on a rejected key, then keeps using it", async () => {

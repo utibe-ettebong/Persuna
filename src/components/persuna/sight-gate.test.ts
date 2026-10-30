@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { wantsSight } from "./sight-gate";
+import { stayOnScreen, wantsSight } from "./sight-gate";
 
 describe("wantsSight", () => {
   it("sends the screen for questions about what's on it", () => {
@@ -32,5 +32,18 @@ describe("wantsSight", () => {
     ]) {
       expect(wantsSight(text), text).toBe(false);
     }
+  });
+});
+
+describe("stayOnScreen", () => {
+  it("keeps the screen for the turn after one about it, then lets go", () => {
+    expect(stayOnScreen("what is this error?", false, false)).toBe(true);
+    expect(stayOnScreen("thanks, draft an email", false, false)).toBe(false);
+  });
+
+  it("stays when something was circled or shown, or the words aren't known", () => {
+    expect(stayOnScreen("thanks", true, false)).toBe(true);
+    expect(stayOnScreen("thanks", false, true)).toBe(true);
+    expect(stayOnScreen(null, false, false)).toBe(true);
   });
 });

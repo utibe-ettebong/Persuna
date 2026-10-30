@@ -29,3 +29,12 @@ const SCREENISH = new RegExp(
 export function wantsSight(text: string): boolean {
   return SCREENISH.test(text);
 }
+
+/**
+ * Should the next turn take the screen too? Yes straight after a turn about it
+ * (a follow-up like "and the other one?"), not forever after. `words` is null
+ * when they aren't known yet: a recording the server will hear.
+ */
+export function stayOnScreen(words: string | null, circled: boolean, showed: boolean): boolean {
+  return showed || circled || words === null || wantsSight(words);
+}

@@ -48,7 +48,8 @@ import { TaskComposer } from "./task-composer";
 import { MadeFileCard } from "./made-file";
 import { WorkDot, type DotTone } from "./work-dot";
 import { dotLine, islandQuiet, talkStatus } from "./dot-talk";
-import { wantsSight } from "./sight-gate";
+import { stayOnScreen, wantsSight } from "./sight-gate";
+import { FRESH_CHECK_MS, shouldRefresh } from "./fresh";
 import { CircleLayer, CircledMark, DrawingLayer, cropPicture, type Area } from "./screen-drawing";
 import {
   WORK_EVERY_MS,
@@ -101,6 +102,8 @@ export interface CompanionProps {
   standalone?: boolean;
   /** Inside Persuna Desktop's see-through layer over the whole screen. */
   overlay?: boolean;
+  /** The deployment this page came from, to notice a newer one (see fresh.ts). */
+  build?: string | null;
   /** How the server hears speech (VOICE_MODE): "agent" offers ElevenLabs Agents calls. */
   voiceMode?: "listen" | "transcribe" | "agent";
   /** The signed-in person's name, for greetings. */
@@ -401,10 +404,31 @@ export function Companion(props: CompanionProps) {
     talking,
     name,
     focusName: focusSkill?.name ?? null,
+    panel,
   });
   useEffect(() => {
-    live.current = { voiceOn, busy, talking, name, focusName: focusSkill?.name ?? null };
-  }, [voiceOn, busy, talking, name, focusSkill]);
+    live.current = { voiceOn, busy, talking, name, focusName: focusSkill?.name ?? null, panel };
+  }, [voiceOn, busy, talking, name, focusSkill, panel]);
+
+  // The desktop keeps this page open for days: pick up new versions, and have
+  // the address for hearing you ready before the first turn.
+  useEffect(() => {
+    if (!props.overlay) return;
+    void warmHearing();
+    const timer = window.setInterval(async () => {
+      const res = await fetch("/api/health").catch(() => null);
+      const { build } = res?.ok ? ((await res.json()) as { build?: unknown }) : { build: null };
+      const { busy, talking, panel } = live.current;
+      const occupied =
+        busy !== "idle" ||
+        talking ||
+        panel ||
+        Boolean(holdRec.current || conversation.current || agentCall.current);
+      const quietFor = Date.now() - Math.max(lastTalked.current, lastHeard.current);
+      if (shouldRefresh(props.build, build, quietFor, occupied)) window.location.reload();
+    }, FRESH_CHECK_MS);
+    return () => window.clearInterval(timer);
+  }, [props.overlay, props.build]);
 
   /* ---------- Speaking ---------- */
 
@@ -835,7 +859,11 @@ export function Companion(props: CompanionProps) {
           return failed ?? "The voice service didn't answer.";
         }
         setError(null);
-        screenyRef.current = Boolean(sight) || Boolean(result.drawing || result.point);
+        screenyRef.current = stayOnScreen(
+          typed,
+          Boolean(sight?.circled),
+          Boolean(result.drawing || result.point),
+        );
         if (queue) {
           // The reply is already being spoken; show the messages and cards.
           void settleSpeech();
@@ -1147,7 +1175,11 @@ export function Companion(props: CompanionProps) {
         // down (or a moment ago).
         streamAbort.current?.abort();
         stopSpeaking();
-        const sight = await screenNow();
+        // With your words already known, plain talk skips the screen, as typing does.
+        const withSight =
+          !said || Boolean(circledRef.current) || screenyRef.current || wantsSight(said);
+        const sight = withSight ? await screenNow() : null;
+        if (!withSight) sightPromise.current = null;
         const failure = await streamTurn(
           said ? { text: said, heardLive: true } : { audio: await recording() },
           sight,

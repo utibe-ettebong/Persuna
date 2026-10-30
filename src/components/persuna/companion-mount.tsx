@@ -8,11 +8,13 @@ export async function CompanionMount({
   userName,
   standalone = false,
   overlay = false,
+  build = null,
 }: {
   userId: string;
   userName?: string;
   standalone?: boolean;
   overlay?: boolean;
+  build?: string | null;
 }) {
   const persuna = await companion(userId);
   return (
@@ -26,6 +28,7 @@ export async function CompanionMount({
       skills={persuna.skills}
       standalone={standalone}
       overlay={overlay}
+      build={build}
       voiceMode={voiceMode()}
       userName={userName}
       messages={persuna.messages.map((m) => ({
