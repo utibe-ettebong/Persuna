@@ -22,6 +22,7 @@ import type { ChatJob, ChatResult, Drawing, MadeFile, PublishConfirm } from "@/l
 import type { AppConfirm } from "@/lib/connections/service";
 import type { McpConfirm } from "@/lib/mcp/service";
 import { parseFastIntent } from "@/lib/persuna/intents";
+import { warmHearing } from "@/components/persuna/live-hearing";
 import {
   pictureNeeded,
   sceneIsThin,
@@ -61,6 +62,7 @@ import {
   createSpeechQueue,
   readTurnStream,
   warmVoice,
+  ackTick,
   speak,
   startConversation,
   startHoldRecording,
@@ -712,7 +714,7 @@ export function Companion(props: CompanionProps) {
    */
   const streamTurn = useCallback(
     async (
-      message: { audio: File } | { text: string },
+      message: { audio: File } | { text: string; heardLive?: boolean },
       sight: Awaited<ReturnType<typeof screenNow>>,
       opts: {
         lead?: string;
@@ -724,7 +726,8 @@ export function Companion(props: CompanionProps) {
       const controller = new AbortController();
       streamAbort.current = controller;
       const typed = "text" in message ? message.text : null;
-      const label = typed === null ? "voice" : "typed";
+      const heardLive = "text" in message && Boolean(message.heardLive);
+      const label = typed === null || heardLive ? "voice" : "typed";
       const started = performance.now();
       const post = (form: FormData, withPicture: boolean) => {
         if (sight?.scene) form.append("scene", JSON.stringify(sight.scene));
@@ -732,6 +735,7 @@ export function Companion(props: CompanionProps) {
         if (sight?.image && withPicture) form.append("screen", sight.image);
         else if (sight?.image) form.append("picture-held", "1");
         if (opts.show) form.append("show", "1");
+        if (heardLive) form.append("heard-live", "1");
         const { day, now, offset } = clock();
         form.append("day", day);
         form.append("now", now);
@@ -1103,30 +1107,52 @@ export function Companion(props: CompanionProps) {
   }
 
   const hear = useCallback(
-    async (audio: Blob, end: UtteranceEnd = "pause") => {
+    async (
+      audio: Blob,
+      end: UtteranceEnd = "pause",
+      words: Promise<string | null> | null = null,
+    ) => {
       lastHeard.current = Date.now();
-      setBusy("hearing");
+      // Straight away, before anything travels: you've been heard.
+      ackTick();
+      setBusy(words && setupRef.current.done ? "thinking" : "hearing");
       if (live.current.voiceOn) void warmVoice();
       try {
-        const wav = await toTranscribableWav(audio, "persuna");
-        const form = new FormData();
-        form.append("audio", wav);
         // A very long turn: Persuna cut in, and says so.
         const lead = end === "long" ? CUT_IN : "";
+        const said = words ? await words : null;
+        if (said) showCaption(`“${said}”`);
+        const recording = async () => {
+          setBusy("hearing");
+          return toTranscribableWav(audio, "persuna");
+        };
         if (!setupRef.current.done) {
           // The first meeting is scripted here, so it needs the words.
-          const res = await persunaTranscribeAction(form);
+          let spoken = said;
+          if (!spoken) {
+            const form = new FormData();
+            form.append("audio", await recording());
+            const res = await persunaTranscribeAction(form);
+            if (!res.ok) {
+              setBusy("idle");
+              return setError(res.error);
+            }
+            spoken = res.value.trim();
+          }
           setBusy("idle");
-          if (!res.ok) return setError(res.error);
-          if (res.value.trim()) await send(res.value, lead);
+          if (spoken) await send(spoken, lead);
           return;
         }
-        // Heard and answered as it streams. The screen read started when the
-        // key went down (or a moment ago).
+        // Answered as it streams. The screen read started when the key went
+        // down (or a moment ago).
         streamAbort.current?.abort();
         stopSpeaking();
         const sight = await screenNow();
-        const failure = await streamTurn({ audio: wav }, sight, { lead });
+        const failure = await streamTurn(
+          said ? { text: said, heardLive: true } : { audio: await recording() },
+          sight,
+          { lead },
+        );
         if (failure) setError(failure);
       } catch {
         setBusy("idle");
@@ -1135,7 +1161,7 @@ export function Companion(props: CompanionProps) {
     },
     // answered reads live state through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [send, streamTurn],
+    [send, showCaption, streamTurn],
   );
 
   function endConversation() {
@@ -1206,7 +1232,8 @@ export function Companion(props: CompanionProps) {
     try {
       conversation.current = await startConversation({
         onLevel: (l) => !talkingNow.current && setLevel(l),
-        onUtterance: (audio, end) => void hear(audio, end),
+        onUtterance: (audio, end, words) => void hear(audio, end, words),
+        onWords: showCaption,
         speaking: () => talkingNow.current,
         busy: () => live.current.busy !== "idle",
         onBargeIn: interrupt,
@@ -1242,7 +1269,8 @@ export function Companion(props: CompanionProps) {
     // Start reading the screen now, while you're still talking, so it's
     // ready the moment you let go instead of costing seconds then.
     sightPromise.current ??= lookNow();
-    holdRec.current = startHoldRecording(setLevel).catch(() => {
+    void warmHearing();
+    holdRec.current = startHoldRecording(setLevel, showCaption).catch(() => {
       setError("Microphone access was blocked.");
       return null;
     });
@@ -1252,9 +1280,9 @@ export function Companion(props: CompanionProps) {
     const pending = holdRec.current;
     holdRec.current = null;
     setHolding(false);
-    const audio = await (await pending)?.stop();
+    const heard = await (await pending)?.stop();
     // Too short or silent: a slip of the finger, not a question.
-    if (audio) void hear(audio);
+    if (heard) void hear(heard.audio, "pause", heard.words);
   }
 
   function holdCancel() {

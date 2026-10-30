@@ -731,8 +731,8 @@ function Answer({
     rec.current = null;
     hold(false);
     if (!pending) return;
-    const audio = await (await pending)?.stop();
-    if (!audio) {
+    const heard = await (await pending)?.stop();
+    if (!heard) {
       setOrb("idle");
       setNote("That was quick. Keep holding while you talk.");
       return;
@@ -741,7 +741,12 @@ function Answer({
     setWorking(true);
     try {
       const form = new FormData();
-      form.append("audio", await toTranscribableWav(audio, "setup"));
+      const said = await heard.words;
+      if (said) {
+        live.current.onAnswer(said);
+        return;
+      }
+      form.append("audio", await toTranscribableWav(heard.audio, "setup"));
       const res = await persunaTranscribeAction(form);
       if (!res.ok || !res.value.trim()) setNote("I didn't catch that. Try again?");
       else live.current.onAnswer(res.value.trim());

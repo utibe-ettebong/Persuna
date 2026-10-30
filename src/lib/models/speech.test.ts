@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { speechConfig, type SpeechConfig } from "@/env";
-import { MAX_SPOKEN_CHARS, createSpeaker, directSpeechUrl, spokenPart } from "./speech";
+import {
+  MAX_SPOKEN_CHARS,
+  createSpeaker,
+  directHearingUrl,
+  directSpeechUrl,
+  spokenPart,
+} from "./speech";
 
 vi.mock("@/env", async (original) => ({
   ...(await original<typeof import("@/env")>()),
@@ -117,7 +123,24 @@ describe("directSpeechUrl", () => {
     const fetchImpl = vi.fn();
     const other = { ...eleven, api: "openai" as const };
     expect(await directSpeechUrl(other, fetchImpl as unknown as typeof fetch)).toBeNull();
+    expect(await directHearingUrl(other, fetchImpl as unknown as typeof fetch)).toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("makes a live hearing address the same way, never with the key", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ token: "once" })));
+    const url = new URL((await directHearingUrl(eleven, fetchImpl as unknown as typeof fetch))!);
+
+    expect(url.protocol).toBe("wss:");
+    expect(url.pathname).toBe("/v1/speech-to-text/realtime");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      model_id: "scribe_v2_realtime",
+      audio_format: "pcm_16000",
+      commit_strategy: "manual",
+      token: "once",
+    });
+    const [called] = fetchImpl.mock.calls[0] as unknown as [string];
+    expect(called).toBe("https://api.elevenlabs.io/v1/single-use-token/realtime_scribe");
   });
 
   it("fails loudly if the provider refuses", async () => {
