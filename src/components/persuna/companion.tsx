@@ -181,8 +181,10 @@ interface UpdateState {
 type Permission = "mic" | "screen" | "keyboard";
 const NEEDS: Record<Permission, string> = {
   mic: "I need your microphone to hear you.",
-  screen: "I need Screen Recording to see your screen. Switch Persuna on, then reopen it.",
-  keyboard: "I need Accessibility for the talk key and pasting. Switch Persuna on.",
+  screen:
+    "I need Screen Recording to see your screen. Switch Persuna on in the list that opens, then quit and reopen Persuna.",
+  keyboard:
+    "I need Accessibility for the talk key, reading apps and pasting. Switch Persuna on in the list that opens.",
 };
 
 const WRAP_UP_OFFER = "It's getting late. Want a wrap-up of today?";
@@ -1221,7 +1223,11 @@ export function Companion(props: CompanionProps) {
     desktop?.onCircle?.(() => void startCircle());
     void desktop?.updateState?.().then((state) => state && setUpdate(state));
     desktop?.onUpdate?.(setUpdate);
-    void checkPerms();
+    // Without Accessibility the talk key can't work: say so in the island
+    // straight away (only on the desktop, and only once set up).
+    void checkPerms().then((now) => {
+      if (now?.keyboard && now.keyboard !== "granted" && setupRef.current.done) setNeed("keyboard");
+    });
     desktop?.onHoldKey?.(setHoldLabel);
     void desktop?.shortcut?.().then(setDesktopShortcut);
     desktop?.onShortcut?.(setDesktopShortcut);

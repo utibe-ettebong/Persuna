@@ -1,6 +1,6 @@
 {
   "name": "persuna-desktop",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "description": "Persuna, your AI assistant, over your whole screen.",
   "main": "main.js",
@@ -119,7 +119,8 @@
         "repo": "Persuna",
         "releaseType": "release"
       }
-    ]
+    ],
+    "afterSign": "sign-mac.js"
   },
   "dependencies": {
     "uiohook-napi": "1.5.5",
