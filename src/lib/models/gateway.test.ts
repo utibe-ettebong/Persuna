@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createGateway, ModelError } from "./gateway";
+import type { ModelRole } from "@/env";
+import { createGateway, ModelError, type ChatMessage, type ModelClient } from "./gateway";
 
 const config = { baseUrl: "https://models.example/v1/", apiKey: "k", model: "m" };
 const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
@@ -251,5 +252,204 @@ describe("createGateway", () => {
     const sent = fetchImpl.mock.calls.map((c) => JSON.parse((c[1] as RequestInit).body as string));
     expect(sent[0].response_format).toEqual({ type: "json_object" });
     expect(sent[1]).not.toHaveProperty("response_format");
+  });
+});
+
+const sse = (body: string) =>
+  new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+const event = (delta: unknown, finish: string | null = null) =>
+  `data: ${JSON.stringify({ choices: [{ delta, finish_reason: finish }] })}\n\n`;
+const DONE = "data: [DONE]\n\n";
+/** An SSE body delivered in awkward pieces, splitting mid-line and mid-event. */
+const splitStream = (parts: string[]) =>
+  new Response(
+    new ReadableStream({
+      start(controller) {
+        for (const part of parts) controller.enqueue(new TextEncoder().encode(part));
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "text/event-stream" } },
+  );
+const collect = async (stream: AsyncGenerator<string>) => {
+  const chunks: string[] = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  return chunks;
+};
+const collectStream = (client: ModelClient, role: ModelRole, messages: ChatMessage[]) => {
+  if (!client.completeStream) throw new Error("test client must stream");
+  return collect(client.completeStream(role, messages));
+};
+const sentBodies = (fetchImpl: ReturnType<typeof vi.fn>) =>
+  fetchImpl.mock.calls.map((c) => JSON.parse((c[1] as RequestInit).body as string));
+
+describe("completeStream", () => {
+  it("asks for a stream and yields each text delta", async () => {
+    const fetchImpl = vi.fn(async () =>
+      sse(`${event({ content: "Hel" })}${event({ content: "lo" })}${DONE}`),
+    );
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+    const chunks = await collectStream(client, "draft", [{ role: "user", content: "hi" }]);
+
+    expect(chunks).toEqual(["Hel", "lo"]);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toMatchObject({ stream: true });
+  });
+
+  it("reassembles events split across reads", async () => {
+    const body = `${event({ content: "Hello" })}${event({ content: " there" })}${DONE}`;
+    const fetchImpl = vi.fn(async () =>
+      splitStream([body.slice(0, 17), body.slice(17, 41), body.slice(41)]),
+    );
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+
+    await expect(collectStream(client, "draft", [])).resolves.toEqual(["Hello", " there"]);
+  });
+
+  it("drops reasoning deltas and stops at [DONE]", async () => {
+    const fetchImpl = vi.fn(async () =>
+      sse(
+        `${event({ content: "Hi", reasoning_content: "secret plan" })}${event({ reasoning: "more thinking" })}${DONE}${event({ content: "late" })}`,
+      ),
+    );
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+
+    await expect(collectStream(client, "draft", [])).resolves.toEqual(["Hi"]);
+  });
+
+  it("reads a lone event with no trailing blank line", async () => {
+    const fetchImpl = vi.fn(async () => sse(event({ content: "solo" }).trimEnd()));
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+
+    await expect(collectStream(client, "draft", [])).resolves.toEqual(["solo"]);
+  });
+
+  it("yields one chunk when the provider answers without SSE", async () => {
+    const fetchImpl = vi.fn(async () => ok(reply));
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+
+    await expect(collectStream(client, "draft", [])).resolves.toEqual(["hello"]);
+  });
+
+  it("retries without the stream flag when the provider refuses it", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response('{"error":{"message":"stream is not supported for this model"}}', {
+          status: 400,
+        }),
+      )
+      .mockResolvedValueOnce(ok(reply));
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+
+    await expect(collectStream(client, "draft", [])).resolves.toEqual(["hello"]);
+    const sent = sentBodies(fetchImpl);
+    expect(sent).toHaveLength(2);
+    expect(sent[0].stream).toBe(true);
+    expect(sent[1]).not.toHaveProperty("stream");
+  });
+
+  it("retries rate limits before the first token", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("slow down", { status: 429 }))
+      .mockResolvedValueOnce(sse(`${event({ content: "hi" })}${DONE}`));
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+    const pending = collectStream(client, "draft", []);
+    await vi.runAllTimersAsync();
+
+    await expect(pending).resolves.toEqual(["hi"]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces mid-stream errors without retrying", async () => {
+    const fetchImpl = vi.fn(async () =>
+      sse(
+        `${event({ content: "hi" })}data: ${JSON.stringify({ error: { message: "cut off" } })}\n\n`,
+      ),
+    );
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+
+    await expect(collectStream(client, "draft", [])).rejects.toMatchObject({
+      name: "ModelError",
+      keyRejected: false,
+      modelMissing: false,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("restarts roomier when the stream ends empty at the length limit", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(sse(event({}, "length")))
+      .mockResolvedValueOnce(sse(`${event({ content: "finally" })}${DONE}`));
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+
+    await expect(collectStream(client, "draft", [])).resolves.toEqual(["finally"]);
+    const sent = sentBodies(fetchImpl);
+    expect(sent).toHaveLength(2);
+    expect(sent[0].max_tokens).toBe(4096);
+    expect(sent[1].max_tokens).toBe(4096 * 3);
+  });
+
+  it("retries without reasoning_effort when the provider refuses it", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response('{"error":{"message":"reasoning_effort is not supported"}}', { status: 400 }),
+      )
+      .mockResolvedValueOnce(sse(`${event({ content: "hi" })}${DONE}`));
+    const client = createGateway(
+      () => ({ ...config, reasoningEffort: "max" as const }),
+      fetchImpl as typeof fetch,
+    );
+
+    await expect(collectStream(client, "extract", [])).resolves.toEqual(["hi"]);
+    const sent = sentBodies(fetchImpl);
+    expect(sent[0].reasoning_effort).toBe("max");
+    expect(sent[1]).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("falls back to the next model when the first is missing", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response('{"error":{"message":"model_not_found"}}', { status: 404 }),
+    );
+    const client = createGateway(
+      () => ({ ...config, fallbackModel: "backup" }),
+      fetchImpl as typeof fetch,
+    );
+    const pending = collectStream(client, "draft", []);
+    const assertion = expect(pending).rejects.toMatchObject({ modelMissing: true });
+    await vi.runAllTimersAsync();
+    await assertion;
+    const sent = sentBodies(fetchImpl);
+    expect(sent.map((b) => b.model)).toEqual(["m", "m", "backup"]);
+  });
+
+  it("falls back to EXTRACT on a rejected key, then keeps using it", async () => {
+    const meta = { baseUrl: "https://stream-meta.example/v1", apiKey: "good", model: "muse" };
+    const baseten = {
+      baseUrl: "https://stream-baseten.example/v1",
+      apiKey: "revoked",
+      model: "open",
+    };
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.startsWith("https://stream-baseten")
+        ? new Response("revoked", { status: 403 })
+        : sse(`${event({ content: "hi" })}${DONE}`),
+    );
+    const client = createGateway(
+      (role) => (role === "extract" ? meta : baseten),
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    await expect(collectStream(client, "draft", [])).resolves.toEqual(["hi"]);
+    await collectStream(client, "draft", []);
+    const urls = fetchImpl.mock.calls.map((c) => String(c[0]));
+    expect(urls).toEqual([
+      "https://stream-baseten.example/v1/chat/completions",
+      "https://stream-meta.example/v1/chat/completions",
+      "https://stream-meta.example/v1/chat/completions",
+    ]);
   });
 });
