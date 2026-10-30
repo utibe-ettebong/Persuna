@@ -3,6 +3,7 @@
 # dependencies
 /node_modules
 /desktop/node_modules
+/livekit-trial/node_modules
 /.pnp
 .pnp.*
 .yarn/*

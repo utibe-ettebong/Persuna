@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // The desktop app is a separate Electron project with its own dependencies.
     "desktop/**",
+    // The LiveKit trial is a separate Node project with its own dependencies.
+    "livekit-trial/**",
   ]),
 ]);
 
