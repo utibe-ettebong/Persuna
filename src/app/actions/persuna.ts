@@ -10,6 +10,14 @@ import { actorOf, requireUser } from "@/lib/auth/session";
 import { createModelClient, createTranscriber } from "@/lib/models";
 import { ModelError } from "@/lib/models/gateway";
 import { sceneSchema } from "@/lib/persuna/scene";
+import {
+  FRAME_TYPES,
+  MAX_FRAME_CHARS,
+  clockField,
+  dayField,
+  screenField,
+  sightField,
+} from "@/lib/persuna/fields";
 import { MAX_FIRST_SKILLS } from "@/lib/persuna/onboarding";
 import { readAudio } from "@/lib/models/transcribe";
 import { takeTurns } from "@/lib/persuna/voice-agent";
@@ -66,34 +74,6 @@ async function run<T>(work: () => Promise<T>): Promise<Result<T>> {
     return { ok: false, error: error instanceof Error ? error.message : "Something went wrong." };
   }
 }
-
-const dayField = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const FRAME_TYPES = /^data:image\/(jpeg|png|webp);base64,/;
-/** About 1.5 MB of image once decoded. */
-const MAX_FRAME_CHARS = 2_000_000;
-
-const clockField = z.object({
-  day: dayField,
-  now: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/),
-  offset: z.number().int().min(-900).max(900),
-});
-
-/** A screenshot sent with a turn: a JPEG, PNG or WebP data URL of a sensible size, or nothing. */
-const screenField = z
-  .string()
-  .regex(FRAME_TYPES, "That screen image couldn't be read")
-  .max(MAX_FRAME_CHARS)
-  .nullish();
-
-/** What Persuna may see with a message (Persuna Desktop): a screenshot and the list of the screen. */
-const sightField = z
-  .object({ image: screenField, scene: sceneSchema.nullish(), circled: z.boolean().optional() })
-  .nullish()
-  .transform((s) =>
-    s && (s.image || s.scene)
-      ? { image: s.image ?? null, scene: s.scene ?? null, circled: Boolean(s.circled) }
-      : null,
-  );
 
 /** Pictures handed to Persuna are looked at as they are; other files are read into text. */
 const PICTURE_FILE = /\.(png|jpe?g|webp|gif)$/i;

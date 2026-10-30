@@ -30,19 +30,24 @@ export const VOICE_TURN_INSTRUCTIONS = [
   ACTIONS_OPEN,
   '[{"type": "...", ...}]',
   FENCE_CLOSE,
-  "Close the fence. No prose after the fence.",
+  "Close the fence. If you asked an interview question, add its key on a line after the fence: Asked: <key>. Otherwise no prose after the fence.",
 ].join("\n");
+
+export const ASKED_PREFIX = "Asked:";
 
 export type TurnEvent =
   | { type: "heard"; text: string }
   | { type: "prose"; text: string }
   | { type: "actions"; actions: Record<string, unknown>[] }
+  | { type: "asked"; key: string }
   | { type: "malformed-tail"; raw: string };
 
 export interface TextTurn {
   heard: string | null;
   prose: string;
   actions: Record<string, unknown>[];
+  /** The interview question asked, from the Asked line after the fence. */
+  asked: string | null;
   /** The actions fence never closed or never parsed; prose still stands. */
   malformedTail: boolean;
 }
@@ -51,11 +56,12 @@ const actionSchema = z.object({ type: z.string() }).passthrough();
 
 /** Parses one complete protocol reply. Streaming callers use the splitter. */
 export function parseTextTurn(reply: string): TextTurn {
-  const turn: TextTurn = { heard: null, prose: "", actions: [], malformedTail: false };
+  const turn: TextTurn = { heard: null, prose: "", actions: [], asked: null, malformedTail: false };
   const splitter = createTurnSplitter((event) => {
     if (event.type === "heard") turn.heard = event.text;
     else if (event.type === "prose") turn.prose += event.text;
     else if (event.type === "actions") turn.actions = event.actions;
+    else if (event.type === "asked") turn.asked = event.key;
     else turn.malformedTail = true;
   });
   splitter.feed(reply);
@@ -83,6 +89,7 @@ export function createTurnSplitter(onEvent: (event: TurnEvent) => void): TurnSpl
   let buf = "";
   let heardDone = false;
   let inActions = false;
+  let fenced = false;
   let finished = false;
 
   const emitProse = (text: string) => {
@@ -132,23 +139,38 @@ export function createTurnSplitter(onEvent: (event: TurnEvent) => void): TurnSpl
     if (!closed) onEvent({ type: "malformed-tail", raw: body });
   };
 
+  /** Reads the Asked line out of the post-fence trailer; the rest stays prose. */
+  const emitTrailer = (trailer: string) => {
+    const rest: string[] = [];
+    for (const line of trailer.split("\n")) {
+      if (line.trim().startsWith(ASKED_PREFIX)) {
+        const key = line.trim().slice(ASKED_PREFIX.length).trim();
+        if (key) onEvent({ type: "asked", key });
+      } else {
+        rest.push(line);
+      }
+    }
+    const prose = rest.join("\n").trim();
+    if (prose) emitProse(prose);
+  };
+
   return {
     feed(chunk) {
       if (finished || !chunk) return;
       buf += chunk;
+      // Past the fence, everything waits for finish(): the Asked line must be
+      // read out of the trailer, never spoken.
+      if (fenced) return;
       if (!heardDone) settleHeard();
-      if (!heardDone || inActions) {
-        if (inActions) {
-          const close = buf.indexOf(FENCE_CLOSE);
-          if (close >= 0) {
-            const body = buf.slice(0, close);
-            buf = buf.slice(close + FENCE_CLOSE.length);
-            inActions = false;
-            closeActions(body, true);
-            if (!heardDone) settleHeard();
-            emitProseUpToFence();
-          }
-        }
+      if (!heardDone) return;
+      if (inActions) {
+        const close = buf.indexOf(FENCE_CLOSE);
+        if (close < 0) return;
+        const body = buf.slice(0, close);
+        buf = buf.slice(close + FENCE_CLOSE.length);
+        inActions = false;
+        fenced = true;
+        closeActions(body, true);
         return;
       }
       emitProseUpToFence();
@@ -167,6 +189,11 @@ export function createTurnSplitter(onEvent: (event: TurnEvent) => void): TurnSpl
         }
         heardDone = true;
       }
+      if (fenced) {
+        emitTrailer(buf);
+        buf = "";
+        return;
+      }
       if (!inActions) {
         const fence = buf.indexOf(ACTIONS_OPEN);
         if (fence >= 0) {
@@ -181,8 +208,7 @@ export function createTurnSplitter(onEvent: (event: TurnEvent) => void): TurnSpl
       const close = buf.indexOf(FENCE_CLOSE);
       if (close >= 0) {
         closeActions(buf.slice(0, close), true);
-        const rest = buf.slice(close + FENCE_CLOSE.length).trim();
-        if (rest) emitProse(rest);
+        emitTrailer(buf.slice(close + FENCE_CLOSE.length));
       } else {
         closeActions(buf, false);
       }

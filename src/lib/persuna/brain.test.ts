@@ -1,8 +1,18 @@
 import { describe, expect, it } from "vitest";
-import type { ModelClient } from "@/lib/models/gateway";
+import { textOf, type ChatMessage, type ModelClient } from "@/lib/models/gateway";
+import type { ModelRole } from "@/env";
 import { sceneSchema } from "./scene";
 import { createMockClient } from "@/lib/models/mock";
-import { TURN_TIMEOUT_MS, persunaObserve, persunaTurn, persunaWorkLook, tidyReply } from "./brain";
+import {
+  TURN_TIMEOUT_MS,
+  collectTurn,
+  persunaObserve,
+  persunaTurn,
+  persunaTurnStream,
+  persunaWorkLook,
+  tidyReply,
+  type TurnStreamEvent,
+} from "./brain";
 import type { PersunaState } from "./types";
 
 const state = (over: Partial<PersunaState> = {}): PersunaState => ({
@@ -689,5 +699,142 @@ describe("Work mode's dot: the pointer, corrections and fit", () => {
       mayInterrupt: true,
     });
     expect(seen).toMatchObject({ mode: "correct", fit: "off", point: "e1" });
+  });
+});
+
+describe("persunaTurnStream", () => {
+  const streamingClient = (text: string, chunkSize = 7) => {
+    const seen: { role: ModelRole; messages: ChatMessage[] }[] = [];
+    const client: ModelClient = {
+      async complete() {
+        throw new Error("should stream, not complete");
+      },
+      async *completeStream(role, messages) {
+        seen.push({ role, messages });
+        for (let i = 0; i < text.length; i += chunkSize) yield text.slice(i, i + chunkSize);
+      },
+    };
+    return { client, seen };
+  };
+  const collectTurn = async (gen: AsyncGenerator<TurnStreamEvent>) => {
+    const events: TurnStreamEvent[] = [];
+    for await (const event of gen) events.push(event);
+    return events;
+  };
+  const sentencesOf = (events: TurnStreamEvent[]) =>
+    events.filter((e) => e.type === "sentence").map((e) => (e as { text: string }).text);
+
+  it("streams heard, sentences, then tidied actions with the voice prompt", async () => {
+    const { client, seen } = streamingClient(
+      'Heard: "remind me to stretch"\nOkay. I will remind you to stretch every hour.\n```actions\n[{"type": "remind", "text": "stretch", "at": null}]\n```',
+    );
+    const events = await collectTurn(
+      persunaTurnStream(client, state(), [], "remind me to stretch"),
+    );
+
+    expect(events[0]).toEqual({ type: "started" });
+    expect(events).toContainEqual({ type: "heard", text: "remind me to stretch" });
+    expect(sentencesOf(events)).toEqual(["Okay.", "I will remind you to stretch every hour."]);
+    expect(events).toContainEqual({
+      type: "prose",
+      text: "Okay. I will remind you to stretch every hour.",
+    });
+    expect(events).toContainEqual({
+      type: "actions",
+      actions: [{ type: "remind", text: "stretch", at: null }],
+    });
+    expect(events).toContainEqual({ type: "asked", key: null });
+    expect(events.some((e) => e.type === "malformed-tail")).toBe(false);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].role).toBe("draft");
+    const system = textOf(seen[0].messages.find((m) => m.role === "system")?.content ?? "");
+    expect(system).toContain("```actions");
+    expect(system).not.toContain("Reply with one JSON object");
+  });
+
+  it("hears recordings on the listen role", async () => {
+    const { client, seen } = streamingClient('Heard: "hi"\nHello.');
+    await collectTurn(persunaTurnStream(client, state(), [], { audio: "AAA" }));
+    expect(seen[0].role).toBe("listen");
+  });
+
+  it("replays a whole JSON reply as the same events without streams", async () => {
+    const events = await collectTurn(
+      persunaTurnStream(createMockClient(), state(), [], "remind me to stretch"),
+    );
+
+    expect(events[0]).toEqual({ type: "started" });
+    expect(events.some((e) => e.type === "heard")).toBe(false);
+    const prose = events.find((e) => e.type === "prose") as { text: string };
+    expect(prose.text.length).toBeGreaterThan(0);
+    expect(sentencesOf(events).join(" ")).toBe(prose.text);
+    const actions = events.find((e) => e.type === "actions") as {
+      actions: { type: string }[];
+    };
+    expect(actions.actions.map((a) => a.type)).toContain("remind");
+    expect(events).toContainEqual({ type: "asked", key: null });
+  });
+
+  it("flags a malformed tail and still speaks the prose", async () => {
+    const { client } = streamingClient('Heard: "go"\nOn it.\n```actions\n[{"type": "wrap_up"}]');
+    const events = await collectTurn(persunaTurnStream(client, state(), [], "go"));
+
+    expect(sentencesOf(events)).toEqual(["On it."]);
+    expect(events).toContainEqual({ type: "malformed-tail" });
+    expect(events).toContainEqual({ type: "actions", actions: [{ type: "wrap_up" }] });
+  });
+
+  it("drops invalid actions and tidies the rest like a typed turn", async () => {
+    const { client } = streamingClient(
+      'Done.\n```actions\n[{"type": "nope"}, {"type": "point", "item": "e1", "thing": null}, {"type": "remind", "text": "x", "at": null}]\n```',
+    );
+    const events = await collectTurn(persunaTurnStream(client, state(), [], "do it"));
+
+    // Unknown shapes never parse; pointing needs a screen it can't see.
+    expect(events).toContainEqual({
+      type: "actions",
+      actions: [{ type: "remind", text: "x", at: null }],
+    });
+  });
+
+  it("asks with the Asked line, kept only while unanswered", async () => {
+    const asking = (key: string) =>
+      streamingClient(`How do you start?\n\`\`\`actions\n[]\n\`\`\`\nAsked: ${key}`).client;
+    const keep = await collectTurn(persunaTurnStream(asking("steps"), training, [], "teach me"));
+    expect(keep).toContainEqual({ type: "asked", key: "steps" });
+    const drop = await collectTurn(persunaTurnStream(asking("naming"), training, [], "teach me"));
+    expect(drop).toContainEqual({ type: "asked", key: null });
+  });
+});
+
+describe("collectTurn", () => {
+  it("gathers the end state and skips speaking events", () => {
+    expect(
+      collectTurn([
+        { type: "started" },
+        { type: "heard", text: "hi" },
+        { type: "sentence", text: "Hello." },
+        { type: "prose", text: "Hello." },
+        { type: "actions", actions: [{ type: "wrap_up" }] },
+        { type: "asked", key: null },
+      ]),
+    ).toEqual({
+      heard: "hi",
+      prose: "Hello.",
+      actions: [{ type: "wrap_up" }],
+      asked: null,
+      malformed: false,
+    });
+  });
+
+  it("starts empty and flags malformed tails", () => {
+    expect(collectTurn([])).toEqual({
+      heard: null,
+      prose: "",
+      actions: [],
+      asked: null,
+      malformed: false,
+    });
+    expect(collectTurn([{ type: "malformed-tail" }]).malformed).toBe(true);
   });
 });

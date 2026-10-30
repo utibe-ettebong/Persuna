@@ -85,6 +85,8 @@ let cloudOff = false;
 let cloudFailures = 0;
 let playing: HTMLAudioElement | null = null;
 let audioCtx: AudioContext | null = null;
+/** Wakes speech queues waiting for their next sentence (see stopSpeaking). */
+const queueWaiters = new Set<() => void>();
 
 /** Assumed loudness of the browser's voice, which can't be measured. */
 const BROWSER_VOICE_LEVEL = 0.2;
@@ -365,6 +367,152 @@ export function stopSpeaking() {
   lastLevel = 0;
   stopAudio();
   if (canSpeak()) speechSynthesis.cancel();
+  for (const wake of queueWaiters) wake();
+  queueWaiters.clear();
+}
+
+/* ---------- Streaming speech ---------- */
+
+export interface SpeechQueue {
+  /** Hands one sentence to the queue, in order. */
+  push(sentence: string): void;
+  /** No more sentences: resolves when the queue has spoken them all. */
+  finish(): Promise<void>;
+}
+
+/**
+ * Speaks sentences as they arrive over the stream: the first is fetched as
+ * soon as it's written, each next one while the previous plays, so streamed
+ * replies sound continuous. Falls back to the browser's voice exactly like
+ * {@link speak} when the cloud voice is off or fails. Stopped by
+ * {@link stopSpeaking}, like anything being said.
+ */
+export function createSpeechQueue(
+  handlers: SpeakHandlers,
+  deps: {
+    fetchSpeech?: (text: string) => Promise<Response | null>;
+    playSpeech?: (
+      res: Response,
+      onLevel: (level: number) => void,
+      mine: number,
+    ) => Promise<boolean>;
+    speakBrowser?: (sentences: string[], handlers: SpeakHandlers, mine: number) => Promise<void>;
+  } = {},
+): SpeechQueue {
+  const mine = generation;
+  const fetchAudio = deps.fetchSpeech ?? fetchSpeech;
+  const playAudio = deps.playSpeech ?? play;
+  const speakIn = deps.speakBrowser ?? speakInBrowser;
+  const pending: string[] = [];
+  let done = false;
+  let waiter: (() => void) | null = null;
+  const wake = () => {
+    const woken = waiter;
+    waiter = null;
+    woken?.();
+  };
+  queueWaiters.add(wake);
+  const take = (): Promise<string | null> => {
+    const next = pending.shift();
+    if (next !== undefined) return Promise.resolve(next);
+    if (done || mine !== generation) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      waiter = () => resolve(take());
+    });
+  };
+  const finished = (async () => {
+    try {
+      if (cloudOff) {
+        for (let text = await take(); text !== null; text = await take()) {
+          if (mine !== generation) return;
+          await speakIn([text], handlers, mine);
+        }
+        return;
+      }
+      let current = await take();
+      if (current === null || mine !== generation) return;
+      let res = await fetchAudio(current);
+      for (;;) {
+        if (mine !== generation) {
+          void res?.body?.cancel();
+          return;
+        }
+        if (!res) {
+          // The cloud voice failed: the rest goes in the browser's voice.
+          for (let text: string | null = current; text !== null; text = await take()) {
+            if (mine !== generation) return;
+            await speakIn([text], handlers, mine);
+          }
+          return;
+        }
+        const following = take();
+        handlers.onSpoken?.(current);
+        const played = playAudio(res, handlers.onLevel, mine);
+        const nextText = await following;
+        const nextFetch = nextText === null ? null : fetchAudio(nextText);
+        if (!(await played)) {
+          // Playback failed: current and everything after it in the browser's voice.
+          const rest = nextText === null ? [] : [nextText];
+          for (;;) {
+            const text = await take();
+            if (text === null) break;
+            rest.push(text);
+          }
+          await speakIn([current, ...rest], handlers, mine);
+          return;
+        }
+        if (nextText === null || mine !== generation) {
+          void nextFetch?.then((r) => r?.body?.cancel());
+          return;
+        }
+        current = nextText;
+        res = await nextFetch;
+      }
+    } finally {
+      queueWaiters.delete(wake);
+    }
+  })();
+  return {
+    push(sentence) {
+      pending.push(sentence);
+      wake();
+    },
+    finish() {
+      done = true;
+      wake();
+      return finished;
+    },
+  };
+}
+
+/* ---------- Streamed turns ---------- */
+
+/** One event from the streamed voice turn (POST /api/persuna/chat-stream). */
+export type StreamEvent<T = unknown> =
+  | { name: "heard"; text: string }
+  | { name: "sentence"; text: string }
+  | { name: "done"; result: T }
+  | { name: "error"; message: string };
+
+/** Reads one SSE event block; null when it isn't one of ours. */
+export function parseStreamEvent<T = unknown>(raw: string): StreamEvent<T> | null {
+  const name = /^event: (\w+)$/m.exec(raw)?.[1];
+  const data = /^data: (.*)$/m.exec(raw)?.[1];
+  if (!name || data === undefined) return null;
+  try {
+    const json = JSON.parse(data) as { text?: unknown; message?: unknown };
+    if (name === "done") return { name, result: json as T };
+    if (name === "error")
+      return {
+        name,
+        message: typeof json.message === "string" ? json.message : "Something went wrong.",
+      };
+    if ((name === "heard" || name === "sentence") && typeof json.text === "string")
+      return { name, text: json.text };
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /* ---------- Hands-free listening ---------- */

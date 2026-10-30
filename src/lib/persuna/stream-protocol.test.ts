@@ -23,6 +23,7 @@ describe("parseTextTurn", () => {
       heard: "remind me tomorrow at nine",
       prose: "Okay, I'll remind you at 9 tomorrow.",
       actions: [{ type: "remind", text: "standup", at: "tomorrow 9am" }],
+      asked: null,
       malformedTail: false,
     });
   });
@@ -32,6 +33,7 @@ describe("parseTextTurn", () => {
       heard: "hi",
       prose: "Hello there.",
       actions: [],
+      asked: null,
       malformedTail: false,
     });
   });
@@ -48,6 +50,7 @@ describe("parseTextTurn", () => {
       heard: "stop",
       prose: "",
       actions: [],
+      asked: null,
       malformedTail: false,
     });
   });
@@ -60,6 +63,7 @@ describe("parseTextTurn", () => {
     const turn = parseTextTurn('Heard: "go"\nOn it.\n```actions\n[{"type": "wrap_up"}]');
     expect(turn.actions).toEqual([{ type: "wrap_up" }]);
     expect(turn.malformedTail).toBe(true);
+    expect(turn.asked).toBeNull();
     expect(turn.prose).toBe("On it.");
   });
 
@@ -67,6 +71,7 @@ describe("parseTextTurn", () => {
     const turn = parseTextTurn('Thinking.\n```actions\n[{"type": "remind",');
     expect(turn.actions).toEqual([]);
     expect(turn.malformedTail).toBe(true);
+    expect(turn.asked).toBeNull();
     expect(turn.prose).toBe("Thinking.");
   });
 
@@ -84,6 +89,20 @@ describe("parseTextTurn", () => {
     const turn = parseTextTurn("Done.\n```actions\n[]\n```\nAnything else?");
     expect(turn.prose).toBe("Done.\nAnything else?");
     expect(turn.actions).toEqual([]);
+  });
+
+  it("reads the Asked line after the fence, never as prose", () => {
+    const turn = parseTextTurn("How do you start?\n```actions\n[]\n```\nAsked: steps");
+    expect(turn.asked).toBe("steps");
+    expect(turn.prose).toBe("How do you start?");
+  });
+
+  it("leaves an Asked line in fenceless prose alone", () => {
+    // Without a fence the line already streamed as speech; the prompt tells
+    // the model to always fence when it asks.
+    const turn = parseTextTurn("How do you start?\nAsked: steps");
+    expect(turn.asked).toBeNull();
+    expect(turn.prose).toContain("Asked: steps");
   });
 });
 
@@ -154,7 +173,26 @@ describe("createTurnSplitter", () => {
       heard: null,
       prose: "",
       actions: [],
+      asked: null,
       malformedTail: false,
     });
+  });
+
+  it("holds the trailer until finish so Asked is never spoken", () => {
+    const events: TurnEvent[] = [];
+    const splitter = createTurnSplitter((event) => events.push(event));
+    const proseSoFar = () =>
+      events
+        .filter((e) => e.type === "prose")
+        .map((e) => (e as { text: string }).text)
+        .join("");
+    splitter.feed("How do you start?\n```actions\n[]\n```\nAsked: ");
+    expect(events.some((e) => e.type === "asked")).toBe(false);
+    expect(proseSoFar()).not.toContain("Asked");
+
+    splitter.feed("steps");
+    splitter.finish();
+    expect(events).toContainEqual({ type: "asked", key: "steps" });
+    expect(proseSoFar()).not.toContain("Asked");
   });
 });
