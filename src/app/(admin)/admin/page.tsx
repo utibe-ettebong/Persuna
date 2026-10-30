@@ -12,22 +12,35 @@ export default async function AdminPage() {
   const stats = await platformStats();
   const figures = [
     { label: "Accounts", value: stats.users.toLocaleString(), href: "/admin/users" },
-    { label: "Live listings", value: stats.liveListings.toLocaleString() },
+    {
+      label: "Live listings",
+      value: stats.liveListings.toLocaleString(),
+      href: "/admin/moderation",
+    },
     { label: "Open projects", value: stats.openProjects.toLocaleString() },
     {
       label: "Disputed projects",
       value: stats.disputedProjects.toLocaleString(),
+      href: "/admin/disputes",
       alert: stats.disputedProjects > 0,
     },
-    { label: "Held in escrow", value: formatUsd(stats.escrowHeldCents) },
-    { label: "Model calls today", value: stats.modelCallsToday.toLocaleString() },
+    {
+      label: "Held in escrow",
+      value: formatUsd(stats.escrowHeldCents),
+      href: "/admin/transactions",
+    },
+    {
+      label: "Model calls today",
+      value: stats.modelCallsToday.toLocaleString(),
+      href: "/admin/usage",
+    },
   ];
   return (
     <div className="space-y-6">
       <PageHeader
         eyebrow="Admin"
         title="Overview"
-        description="The whole platform at a glance. Moderation, disputes, money and models each get their own section next."
+        description="The whole platform at a glance. Models and agents get their own section next."
       />
       <div className="grid gap-px overflow-hidden rounded-md border border-line bg-line sm:grid-cols-2 lg:grid-cols-3">
         {figures.map((f) => {
@@ -71,6 +84,30 @@ export default async function AdminPage() {
             Audit log
           </Link>{" "}
           <span className="text-muted">— everything anyone did, filterable.</span>
+        </p>
+        <p>
+          <Link href="/admin/moderation" className="text-accent hover:underline">
+            Moderation
+          </Link>{" "}
+          <span className="text-muted">— every listing, with takedown and reinstate.</span>
+        </p>
+        <p>
+          <Link href="/admin/disputes" className="text-accent hover:underline">
+            Disputes
+          </Link>{" "}
+          <span className="text-muted">— settle milestones, resume projects.</span>
+        </p>
+        <p>
+          <Link href="/admin/transactions" className="text-accent hover:underline">
+            Transactions
+          </Link>{" "}
+          <span className="text-muted">— every payment, with refunds.</span>
+        </p>
+        <p>
+          <Link href="/admin/usage" className="text-accent hover:underline">
+            Model usage
+          </Link>{" "}
+          <span className="text-muted">— calls by role, user and day.</span>
         </p>
       </Card>
     </div>
