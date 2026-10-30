@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { disputeTotals, fillDaySeries, listingStatus } from "./rules";
+import { agentKeyStatus, disputeTotals, fillDaySeries, listingStatus } from "./rules";
 
 describe("listingStatus", () => {
   it("reads one status from three fields", () => {
@@ -29,6 +29,14 @@ describe("disputeTotals", () => {
 
   it("starts empty", () => {
     expect(disputeTotals([])).toEqual({ held: 0, settled: 0, heldCents: 0 });
+  });
+});
+
+describe("agentKeyStatus", () => {
+  it("reads revoked, unused and active keys", () => {
+    expect(agentKeyStatus({ revokedAt: new Date(), lastUsedAt: new Date() })).toBe("revoked");
+    expect(agentKeyStatus({ revokedAt: null, lastUsedAt: null })).toBe("unused");
+    expect(agentKeyStatus({ revokedAt: null, lastUsedAt: new Date() })).toBe("active");
   });
 });
 

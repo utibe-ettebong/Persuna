@@ -35,7 +35,8 @@ export interface AuditInput {
     | "handbook_note"
     | "playbook"
     | "onboarding"
-    | "user";
+    | "user"
+    | "platform_model";
   entityId?: string | null;
   skillId?: string | null;
   /** Small facts only (ids, scores, statuses). Never job text or pair content. */

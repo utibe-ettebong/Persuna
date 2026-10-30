@@ -49,7 +49,7 @@ import {
   type SkillImport,
 } from "./rules";
 
-const { agentKeys, agentImports, skills } = schema;
+const { agentKeys, agentImports, skills, authUsers } = schema;
 
 const IN_FLIGHT = ["received", "training", "testing"] as const;
 
@@ -92,6 +92,37 @@ export async function revokeAgentKey(userId: string, keyId: string, actor: Actor
     .update(agentKeys)
     .set({ revokedAt: new Date() })
     .where(and(eq(agentKeys.id, keyId), eq(agentKeys.userId, userId), isNull(agentKeys.revokedAt)))
+    .returning();
+  if (!key) throw new NotFoundError("No such key");
+  await audit({
+    actor,
+    action: "agent_key.revoked",
+    entityType: "agent_key",
+    entityId: key.id,
+    details: { agent: key.agentName },
+  });
+}
+
+/** Every agent key with its owner, newest first. Admins only. */
+export interface AdminAgentKeyRow {
+  key: AgentKey;
+  ownerEmail: string | null;
+}
+
+export async function listAllAgentKeys(): Promise<AdminAgentKeyRow[]> {
+  return db()
+    .select({ key: agentKeys, ownerEmail: authUsers.email })
+    .from(agentKeys)
+    .leftJoin(authUsers, eq(agentKeys.userId, authUsers.id))
+    .orderBy(desc(agentKeys.createdAt));
+}
+
+/** Revokes any account's agent key. Admins only. */
+export async function revokeAnyAgentKey(keyId: string, actor: Actor) {
+  const [key] = await db()
+    .update(agentKeys)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(agentKeys.id, keyId), isNull(agentKeys.revokedAt)))
     .returning();
   if (!key) throw new NotFoundError("No such key");
   await audit({
@@ -570,6 +601,66 @@ async function ownedImport(userId: string, importId: string) {
  */
 export async function retryImport(userId: string, importId: string, actor: Actor) {
   const row = await ownedImport(userId, importId);
+  if (row.status !== "failed") throw new Error("Only failed imports can be retried");
+  if (!row.skillId)
+    throw new Error("Nothing was saved from this import; ask the agent to send it again");
+  await db()
+    .update(agentImports)
+    .set({ status: "received", error: null, updatedAt: new Date() })
+    .where(and(eq(agentImports.id, importId), eq(agentImports.status, "failed")));
+  await audit({
+    actor,
+    action: "agent_import.retried",
+    entityType: "agent_import",
+    entityId: importId,
+    skillId: row.skillId,
+  });
+}
+
+/**
+ * Every import with its owner and key, newest first. Payloads are never
+ * selected. Admins only.
+ */
+export interface AdminImportRow {
+  id: string;
+  agentName: string;
+  status: AgentImport["status"];
+  error: string | null;
+  skillId: string | null;
+  report: ImportReport;
+  createdAt: Date;
+  updatedAt: Date;
+  ownerEmail: string | null;
+  keyName: string | null;
+}
+
+export async function listAllImports(limit = 200): Promise<AdminImportRow[]> {
+  return db()
+    .select({
+      id: agentImports.id,
+      agentName: agentImports.agentName,
+      status: agentImports.status,
+      error: agentImports.error,
+      skillId: agentImports.skillId,
+      report: agentImports.report,
+      createdAt: agentImports.createdAt,
+      updatedAt: agentImports.updatedAt,
+      ownerEmail: authUsers.email,
+      keyName: agentKeys.agentName,
+    })
+    .from(agentImports)
+    .leftJoin(authUsers, eq(agentImports.userId, authUsers.id))
+    .leftJoin(agentKeys, eq(agentImports.agentKeyId, agentKeys.id))
+    .orderBy(desc(agentImports.updatedAt))
+    .limit(limit);
+}
+
+/** Retries any account's failed import. Admins only. Caller retriggers processing. */
+export async function retryAnyImport(importId: string, actor: Actor) {
+  const row = await db().query.agentImports.findFirst({
+    where: eq(agentImports.id, importId),
+  });
+  if (!row) throw new NotFoundError("No such import");
   if (row.status !== "failed") throw new Error("Only failed imports can be retried");
   if (!row.skillId)
     throw new Error("Nothing was saved from this import; ask the agent to send it again");
