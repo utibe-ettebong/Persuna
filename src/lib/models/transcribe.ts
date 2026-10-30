@@ -48,11 +48,12 @@ export function readAudio(value: FormDataEntryValue | null): File | null {
 export function createTranscriber(
   resolve: () => ModelRoleConfig = transcriptionConfig,
   fetchImpl: typeof fetch = fetch,
+  override: (config: ModelRoleConfig) => ModelRoleConfig | Promise<ModelRoleConfig> = (c) => c,
 ): Transcriber {
   if (modelProvider() === "mock") return mockTranscriber;
   return {
     async transcribe(audio, filename) {
-      const config = resolve();
+      const config = await override(resolve());
       const base = config.baseUrl.replace(/\/+$/, "");
       return isMetaAsr(base)
         ? metaTranscribe(base, config, audio, filename, fetchImpl)

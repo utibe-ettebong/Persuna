@@ -49,7 +49,15 @@ import {
 } from "./rules";
 import type { PlanMilestone, ProjectPlan } from "./types";
 
-const { projects, projectMilestones, projectProposals, projectUpdates, listings, skills } = schema;
+const {
+  projects,
+  projectMilestones,
+  projectProposals,
+  projectUpdates,
+  listings,
+  skills,
+  authUsers,
+} = schema;
 
 /** Who is looking: a signed-in person, or nobody. */
 export type Viewer = { id: string; email: string; name: string; isAdmin: boolean } | null;
@@ -296,6 +304,38 @@ async function proposalCounts(projectIds: string[]) {
   const counts = new Map<string, number>();
   for (const r of rows) counts.set(r.projectId, (counts.get(r.projectId) ?? 0) + 1);
   return counts;
+}
+
+/** Every disputed project with its milestones, newest first. Admins only. */
+export interface DisputedProject {
+  project: Project;
+  posterEmail: string | null;
+  milestones: ProjectMilestone[];
+}
+
+export async function listDisputedProjects(): Promise<DisputedProject[]> {
+  const rows = await db()
+    .select({ project: projects, posterEmail: authUsers.email })
+    .from(projects)
+    .leftJoin(authUsers, eq(projects.posterId, authUsers.id))
+    .where(eq(projects.status, "disputed"))
+    .orderBy(desc(projects.updatedAt));
+  if (!rows.length) return [];
+  const milestones = await db()
+    .select()
+    .from(projectMilestones)
+    .where(
+      inArray(
+        projectMilestones.projectId,
+        rows.map((r) => r.project.id),
+      ),
+    )
+    .orderBy(asc(projectMilestones.position));
+  return rows.map(({ project, posterEmail }) => ({
+    project,
+    posterEmail,
+    milestones: milestones.filter((m) => m.projectId === project.id),
+  }));
 }
 
 /** Projects this person posted, and ones they proposed on. */
