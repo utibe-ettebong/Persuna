@@ -236,7 +236,7 @@ describe("createGateway", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("skips reasoning when the call asks for none", async () => {
+  it("asks for the least reasoning when the call wants none, rather than the model's default", async () => {
     const fetchImpl = vi.fn(async () => ok(reply));
     const client = createGateway(
       () => ({ ...config, reasoningEffort: "max" as const }),
@@ -245,7 +245,22 @@ describe("createGateway", () => {
     await client.complete("draft", [], { reasoningOff: true });
 
     const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).not.toHaveProperty("reasoning_effort");
+    expect(JSON.parse(init.body as string).reasoning_effort).toBe("minimal");
+  });
+
+  it("drops the least-reasoning ask if the provider refuses it", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response('{"error":{"message":"reasoning_effort is not supported"}}', { status: 400 }),
+      )
+      .mockResolvedValueOnce(ok(reply));
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+    await client.complete("draft", [], { reasoningOff: true });
+
+    const sent = fetchImpl.mock.calls.map((c) => JSON.parse((c[1] as RequestInit).body as string));
+    expect(sent[0].reasoning_effort).toBe("minimal");
+    expect(sent[1]).not.toHaveProperty("reasoning_effort");
   });
 
   it("asks for JSON mode when told to, and drops it if the provider refuses", async () => {
@@ -418,7 +433,24 @@ describe("completeStream", () => {
 
     expect(chunks).toEqual(["hi"]);
     const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).not.toHaveProperty("reasoning_effort");
+    expect(JSON.parse(init.body as string).reasoning_effort).toBe("minimal");
+  });
+
+  it("drops the least-reasoning ask from a stream if the provider refuses it", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response('{"error":{"message":"reasoning_effort is not supported"}}', { status: 400 }),
+      )
+      .mockResolvedValueOnce(sse(`${event({ content: "hi" })}${DONE}`));
+    const client = createGateway(() => config, fetchImpl as typeof fetch);
+    if (!client.completeStream) throw new Error("test client must stream");
+    const chunks = await collect(client.completeStream("draft", [], { reasoningOff: true }));
+
+    expect(chunks).toEqual(["hi"]);
+    const sent = sentBodies(fetchImpl);
+    expect(sent[0].reasoning_effort).toBe("minimal");
+    expect(sent[1]).not.toHaveProperty("reasoning_effort");
   });
 
   it("retries without reasoning_effort when the provider refuses it", async () => {
@@ -453,6 +485,41 @@ describe("completeStream", () => {
     await assertion;
     const sent = sentBodies(fetchImpl);
     expect(sent.map((b) => b.model)).toEqual(["m", "m", "backup"]);
+  });
+
+  it("streams from the DRAFT provider when Meta has no model at all, but never audio", async () => {
+    const meta = { ...config, baseUrl: "https://api.meta.ai/v1", model: "muse-spark-1.3" };
+    const backup = {
+      ...config,
+      baseUrl: "https://inference.baseten.co/v1",
+      model: "open",
+      reasoningEffort: "low",
+    };
+    const resolve = (role: string) => (role === "draft" ? backup : meta);
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.startsWith("https://api.meta.ai")
+        ? new Response('{"error":{"code":"model_not_found"}}', { status: 404 })
+        : sse(`${event({ content: "hello" })}${DONE}`),
+    );
+    const client = createGateway(resolve as never, fetchImpl as unknown as typeof fetch);
+    const image: ChatMessage[] = [
+      { role: "user", content: [{ type: "image_url", image_url: { url: "data:," } }] },
+    ];
+    const pending = collectStream(client, "listen", image);
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toEqual(["hello"]);
+    expect(fetchImpl.mock.calls.at(-1)![0]).toMatch(/^https:\/\/inference\.baseten\.co/);
+    expect(sentBodies(fetchImpl).at(-1)).not.toHaveProperty("reasoning_effort");
+
+    const audio: ChatMessage[] = [
+      {
+        role: "user",
+        content: [{ type: "input_audio", input_audio: { data: "x", format: "wav" } }],
+      },
+    ];
+    const spoken = collectStream(client, "listen", audio).catch((e) => e);
+    await vi.runAllTimersAsync();
+    expect(await spoken).toMatchObject({ modelMissing: true });
   });
 
   it("falls back to EXTRACT on a rejected key, then keeps using it", async () => {

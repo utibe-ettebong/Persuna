@@ -36,7 +36,7 @@ export interface CompleteOptions {
   maxTokens?: number;
   /** Ask the provider for a guaranteed JSON object (response_format json_object). */
   json?: boolean;
-  /** Skip reasoning for this call, even if the role configures it: thinking delays the first word. */
+  /** Reason as little as the model allows, whatever the role configures: thinking delays the first word. */
   reasoningOff?: boolean;
   /**
    * Give up on each attempt after this long instead of MODEL_TIMEOUT_MS.
@@ -173,8 +173,8 @@ export function createGateway(
      * Token stream for one completion. Retries and key-fallbacks only happen
      * before the first token; once text flows, errors surface to the caller.
      * Providers without SSE get one chunk with the whole reply, so callers
-     * can always iterate. (No DRAFT backup here: streamed callers are voice
-     * turns, which carry audio, and the backup path excludes audio turns.)
+     * can always iterate. Same DRAFT backup as complete(), for the same outage:
+     * a voice turn that fell back to transcribing has no audio left to carry.
      */
     async *completeStream(role, messages, options = {}) {
       const own = await resolve(role);
@@ -189,6 +189,26 @@ export function createGateway(
       try {
         yield* streamOnce(own, role, messages, options, fetchImpl);
       } catch (error) {
+        const backup = role === "draft" ? null : await resolve("draft");
+        if (
+          error instanceof ModelError &&
+          error.modelMissing &&
+          backup &&
+          backup.baseUrl !== own.baseUrl &&
+          !hasAudio(messages)
+        ) {
+          console.warn(
+            `[models] ${own.baseUrl} has no model right now; using DRAFT_* for this ${role} call.`,
+          );
+          yield* streamOnce(
+            { ...backup, reasoningEffort: undefined },
+            role,
+            messages,
+            options,
+            fetchImpl,
+          );
+          return;
+        }
         if (!(error instanceof ModelError) || !error.keyRejected || !different) throw error;
         console.warn(
           `[models] ${role} key was rejected by ${own.baseUrl}; using EXTRACT_* for ${role} for the next ${REJECTED_KEY_COOLDOWN_MS / 60_000} minutes. Fix ${role.toUpperCase()}_API_KEY.`,
@@ -264,6 +284,13 @@ async function postFindingModel(
 }
 
 /**
+ * The reasoning setting for a call. "As little as possible" has to be asked
+ * for: left out, a model thinks for its default, seconds longer on Meta's.
+ */
+const effortFor = (config: ModelRoleConfig, options: CompleteOptions) =>
+  options.reasoningOff ? "minimal" : config.reasoningEffort;
+
+/**
  * Not every model takes every reasoning setting (Meta's muse-spark-1.2 has no
  * "max") or offers JSON mode. If the provider refuses either, ask again
  * without it rather than fail.
@@ -280,15 +307,16 @@ async function postKeepingEffort(
     return await post(config, role, messages, options, maxTokens, fetchImpl);
   } catch (error) {
     if (!(error instanceof ModelError)) throw error;
-    if (error.effortRejected && config.reasoningEffort) {
+    const effort = effortFor(config, options);
+    if (error.effortRejected && effort) {
       console.warn(
-        `[models] ${config.model} doesn't accept reasoning_effort "${config.reasoningEffort}"; asking without it.`,
+        `[models] ${config.model} doesn't accept reasoning_effort "${effort}"; asking without it.`,
       );
       return postKeepingEffort(
         { ...config, reasoningEffort: undefined },
         role,
         messages,
-        options,
+        { ...options, reasoningOff: false },
         maxTokens,
         fetchImpl,
       );
@@ -318,7 +346,7 @@ async function post(
   fetchImpl: typeof fetch,
 ): Promise<{ completion: Completion; text: string; finish: string | null }> {
   const url = `${config.baseUrl.replace(/\/+$/, "")}/chat/completions`;
-  const effort = options.reasoningOff ? undefined : config.reasoningEffort;
+  const effort = effortFor(config, options);
   const body = JSON.stringify({
     model: config.model,
     messages,
@@ -420,13 +448,13 @@ async function* postStreamKeepingEffort(
     yield* postStream(config, role, messages, options, maxTokens, fetchImpl);
   } catch (error) {
     if (!(error instanceof ModelError)) throw error;
-    if (error.effortRejected && config.reasoningEffort) {
+    if (error.effortRejected && effortFor(config, options)) {
       console.warn(`[models] ${config.model} refused reasoning_effort; retrying without it.`);
       yield* postStream(
         { ...config, reasoningEffort: undefined },
         role,
         messages,
-        options,
+        { ...options, reasoningOff: false },
         maxTokens,
         fetchImpl,
       );
@@ -495,7 +523,7 @@ async function fetchStreamAttempt(
   // No stream_options: usage comes from the non-streaming path, and extra
   // flags are one more thing a provider can reject.
   let wantStream = true;
-  const effort = options.reasoningOff ? undefined : config.reasoningEffort;
+  const effort = effortFor(config, options);
   for (let attempt = 1; ; attempt++) {
     const body = JSON.stringify({
       model: config.model,
