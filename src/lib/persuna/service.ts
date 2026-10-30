@@ -859,7 +859,7 @@ export async function* chatStream(
     for (const sentence of splitSentences(chunk)) yield { type: "sentence", text: sentence };
   }
   timer.mark("end");
-  logVoiceTurn(logRoute, timer);
+  logVoiceTurn(logRoute, timer, { spoken: prep.spoken, picture: prep.picture });
   yield { type: "done", result };
 }
 

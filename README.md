@@ -157,6 +157,7 @@ data/skills/meeting-minutes/     skill.json + pairs/train and pairs/test (*.inpu
 drizzle/                         generated SQL migrations (commit these)
 scripts/skill.ts                 CLI for the training loop
 scripts/migrate.mjs              applies migrations (Railway pre-deploy)
+scripts/voice-latency.ts         voice latency probe: streamed turns + first-sound estimate (needs live keys)
 src/lib/skill/engine.ts          the loop itself, with no storage: extract, draft, score, correct
 src/lib/skill/service.ts         skills, pairs, versions, test runs, corrections, publishing (Postgres)
 src/lib/skill/prompts.ts         every prompt in one place
@@ -208,6 +209,14 @@ npm run skill -- report         # score per version (* working, P published)
 ```
 
 The UI does the same steps through the same functions.
+
+### Voice latency probe
+
+```bash
+npm run voice:latency -- --turns 5 --budget-ms 8000
+```
+
+Times streamed voice turns against the live models (text turns plus one spoken turn, voiced by Persuna itself) and estimates end-of-speech to first-sound with p50/p95. Needs live `*_API_KEY`s and a configured speaker; exits 1 when a turn never streams or the p95 estimate passes the budget.
 
 ## Adding your pairs
 

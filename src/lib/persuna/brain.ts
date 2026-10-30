@@ -3,7 +3,7 @@
  * screen. Like the training engine, it takes a {@link ModelClient} so tests
  * and the offline mock run the same code as live models.
  */
-import type { ChatMessage, ModelClient } from "@/lib/models/gateway";
+import type { ChatMessage, CompleteOptions, ModelClient } from "@/lib/models/gateway";
 import { completeJson } from "@/lib/models/json";
 import {
   persunaChatMessages,
@@ -99,6 +99,8 @@ export async function persunaTurn(
   file: PersunaFile | null = null,
   /** The user pressed "Show me": the reply must show, not just tell. */
   show = false,
+  /** Per-call model options (voice turns pass reasoningOff: thinking delays speech). */
+  options: CompleteOptions = {},
 ): Promise<PersunaReply> {
   const { value } = await completeJson(
     client,
@@ -107,7 +109,7 @@ export async function persunaTurn(
     persunaReply,
     // Room for "thinking" models to reason before the short reply; a stuck
     // provider fails in seconds, not the training budget's minutes.
-    { maxTokens: 4096, timeoutMs: TURN_TIMEOUT_MS },
+    { maxTokens: 4096, timeoutMs: TURN_TIMEOUT_MS, ...options },
   );
   return tidyReply(value, state, sight);
 }
@@ -137,7 +139,9 @@ export async function* persunaTurnStream(
   show = false,
 ): AsyncGenerator<TurnStreamEvent> {
   if (!client.completeStream) {
-    const reply = await persunaTurn(client, state, history, message, sight, file, show);
+    const reply = await persunaTurn(client, state, history, message, sight, file, show, {
+      reasoningOff: true,
+    });
     yield { type: "started" };
     if (reply.heard) yield { type: "heard", text: reply.heard };
     for (const sentence of splitSentences(reply.reply)) {
@@ -151,7 +155,9 @@ export async function* persunaTurnStream(
   const stream = client.completeStream(
     turnRole(message, sight, file),
     turnMessages(state, history, message, sight, file, show, true),
-    { maxTokens: 4096, timeoutMs: TURN_TIMEOUT_MS },
+    // No reasoning on the conversational path: heavy thinking can happen
+    // after a spoken "let me look", never before the first word.
+    { maxTokens: 4096, timeoutMs: TURN_TIMEOUT_MS, reasoningOff: true },
   );
   const queued: TurnEvent[] = [];
   const splitter = createTurnSplitter((event) => queued.push(event));

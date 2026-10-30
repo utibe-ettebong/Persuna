@@ -50,7 +50,11 @@ export function startTurn(now: () => number = () => performance.now()): TurnTime
   };
 }
 
-/** One JSON line per turn; the measurement gate in slice C scrapes these. */
-export function logVoiceTurn(route: string, timer: TurnTimer): void {
-  console.log(JSON.stringify({ scope: "voice-turn", route, ...timer.summary() }));
+/** One JSON line per turn; the measurement script scrapes these. */
+export function logVoiceTurn(
+  route: string,
+  timer: TurnTimer,
+  extra: Record<string, unknown> = {},
+): void {
+  console.log(JSON.stringify({ scope: "voice-turn", route, ...timer.summary(), ...extra }));
 }

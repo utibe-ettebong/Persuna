@@ -36,6 +36,8 @@ export interface CompleteOptions {
   maxTokens?: number;
   /** Ask the provider for a guaranteed JSON object (response_format json_object). */
   json?: boolean;
+  /** Skip reasoning for this call, even if the role configures it: thinking delays the first word. */
+  reasoningOff?: boolean;
   /**
    * Give up on each attempt after this long instead of MODEL_TIMEOUT_MS.
    * Interactive turns (Persuna chat) pass a short budget so a stuck provider
@@ -316,12 +318,13 @@ async function post(
   fetchImpl: typeof fetch,
 ): Promise<{ completion: Completion; text: string; finish: string | null }> {
   const url = `${config.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+  const effort = options.reasoningOff ? undefined : config.reasoningEffort;
   const body = JSON.stringify({
     model: config.model,
     messages,
     temperature: options.temperature ?? 0,
     max_tokens: maxTokens,
-    ...(config.reasoningEffort && { reasoning_effort: config.reasoningEffort }),
+    ...(effort && { reasoning_effort: effort }),
     ...(options.json && { response_format: { type: "json_object" } }),
   });
 
@@ -492,13 +495,14 @@ async function fetchStreamAttempt(
   // No stream_options: usage comes from the non-streaming path, and extra
   // flags are one more thing a provider can reject.
   let wantStream = true;
+  const effort = options.reasoningOff ? undefined : config.reasoningEffort;
   for (let attempt = 1; ; attempt++) {
     const body = JSON.stringify({
       model: config.model,
       messages,
       temperature: options.temperature ?? 0,
       max_tokens: tokens,
-      ...(config.reasoningEffort && { reasoning_effort: config.reasoningEffort }),
+      ...(effort && { reasoning_effort: effort }),
       ...(options.json && { response_format: { type: "json_object" } }),
       ...(wantStream && { stream: true }),
     });
