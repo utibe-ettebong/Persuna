@@ -13,7 +13,7 @@ import { userById } from "@/lib/auth/users";
 import { createModelClient } from "@/lib/models";
 import { UsageLimitError } from "@/lib/models/usage";
 import { utcToLocal } from "./when";
-import { chat, type ChatResult } from "./service";
+import { chatStream, type ChatResult } from "./service";
 
 /** How long a voice session token is good for. */
 export const SESSION_TTL_MS = 30 * 60_000;
@@ -76,17 +76,24 @@ export function lastUserText(messages: unknown): string {
   return "";
 }
 
+/** One Chat Completions chunk of the custom-LLM stream ElevenLabs reads. */
+function replyChunk(delta: object, finish: string | null, model = "persuna"): string {
+  return `data: ${JSON.stringify({
+    id: "persuna",
+    object: "chat.completion.chunk",
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [{ index: 0, delta, finish_reason: finish }],
+  })}\n\n`;
+}
+
 /** A reply as a Chat Completions stream (Server-Sent Events), which ElevenLabs reads. */
 export function streamReply(text: string, model = "persuna"): string {
-  const chunk = (delta: object, finish: string | null) =>
-    `data: ${JSON.stringify({
-      id: "persuna",
-      object: "chat.completion.chunk",
-      created: Math.floor(Date.now() / 1000),
-      model,
-      choices: [{ index: 0, delta, finish_reason: finish }],
-    })}\n\n`;
-  return chunk({ role: "assistant", content: text }, null) + chunk({}, "stop") + "data: [DONE]\n\n";
+  return (
+    replyChunk({ role: "assistant", content: text }, null, model) +
+    replyChunk({}, "stop", model) +
+    "data: [DONE]\n\n"
+  );
 }
 
 /*
@@ -140,15 +147,16 @@ export function plainSpeech(text: string): string {
 
 /**
  * One turn from ElevenLabs: check it's really ElevenLabs (the shared
- * secret) and who is talking (the session token), run the same chat as
- * typing, keep what it set up on screen for the page, and stream back the
- * words to say. Returns null when the call isn't allowed.
+ * secret) and who is talking (the session token), then stream the answer
+ * back sentence by sentence as it's written, so ElevenLabs starts speaking
+ * in about a second. What the turn set up on screen is kept for the page.
+ * Returns null when the call isn't allowed.
  */
-export async function answerAgentCall(
+export async function answerAgentCallStream(
   authorization: string | null,
   body: { messages?: unknown; elevenlabs_extra_body?: { session?: unknown } } | null,
   now = new Date(),
-): Promise<string | null> {
+): Promise<Response | null> {
   const config = agentConfig();
   if (!config || !body) return null;
   const expected = Buffer.from(`Bearer ${config.llmSecret}`);
@@ -159,22 +167,68 @@ export async function answerAgentCall(
   if (!session || !user) return null;
 
   const text = lastUserText(body.messages);
-  if (!text) return streamReply("Sorry, I didn't catch that.");
+  if (!text) return sseResponse(streamReply("Sorry, I didn't catch that."));
   const local = utcToLocal(now, session.offset);
-  try {
-    const result = await chat(createModelClient(user), user.id, {
-      text,
-      clock: { day: local.slice(0, 10), now: local, offset: session.offset },
-      actor: actorOf(user),
-    });
-    rememberTurn(user.id, result);
-    return streamReply(plainSpeech(result.messages[1].content));
-  } catch (error) {
-    if (error instanceof UsageLimitError) return streamReply(error.message);
-    console.error(error);
-    return streamReply("Sorry, something went wrong on my side. Try again?");
-  }
+  const clock = { day: local.slice(0, 10), now: local, offset: session.offset };
+  const actor = actorOf(user);
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (chunk: string) => controller.enqueue(new TextEncoder().encode(chunk));
+      let said = false;
+      const say = (sentence: string) => {
+        const words = plainSpeech(sentence);
+        if (!words) return;
+        said = true;
+        send(replyChunk({ content: words }, null));
+      };
+      const close = () => {
+        send(replyChunk({}, "stop"));
+        send("data: [DONE]\n\n");
+        controller.close();
+      };
+      try {
+        for await (const event of chatStream(
+          createModelClient(user),
+          user.id,
+          { text, clock, actor },
+          "/api/persuna/llm",
+        )) {
+          if (event.type === "sentence") say(event.text);
+          else if (event.type === "done") {
+            rememberTurn(user.id, event.result);
+            close();
+          }
+        }
+      } catch (error) {
+        if (!said) {
+          // Nothing spoken yet: the whole reply is the apology, as before.
+          send(
+            replyChunk(
+              {
+                role: "assistant",
+                content:
+                  error instanceof UsageLimitError
+                    ? error.message
+                    : "Sorry, something went wrong on my side. Try again?",
+              },
+              null,
+            ),
+          );
+          if (!(error instanceof UsageLimitError)) console.error(error);
+        } else {
+          say("Sorry, I lost my train of thought there.");
+        }
+        close();
+      }
+    },
+  });
+  return sseResponse(stream);
 }
+
+const sseResponse = (body: ReadableStream<Uint8Array> | string) =>
+  new Response(body, {
+    headers: { "content-type": "text/event-stream", "cache-control": "no-store" },
+  });
 
 /** The speech model for an English ElevenLabs agent. */
 export const AGENT_TTS_MODEL = "eleven_flash_v2";
