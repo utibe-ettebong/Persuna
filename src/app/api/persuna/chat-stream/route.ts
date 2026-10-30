@@ -54,6 +54,7 @@ export async function POST(request: Request) {
     sight,
     show: form.get("show") === "1",
     pictureHeld: form.get("picture-held") === "1",
+    heardLive: form.get("heard-live") === "1",
     saidFirst: typeof said === "string" ? said.slice(0, 4000) : undefined,
   };
 

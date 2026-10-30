@@ -3,7 +3,12 @@ import { createGateway, type ModelClient } from "./gateway";
 import { createMockClient } from "./mock";
 import { withModelOverride, withSpeechOverride } from "./selection";
 import { createTranscriber as liveOrMockTranscriber, type Transcriber } from "./transcribe";
-import { createSpeaker as liveSpeaker, directSpeechUrl, type Speaker } from "./speech";
+import {
+  createSpeaker as liveSpeaker,
+  directHearingUrl,
+  directSpeechUrl,
+  type Speaker,
+} from "./speech";
 import {
   type Caller,
   meteredClient,
@@ -45,4 +50,11 @@ export async function directSpeech(caller: Caller): Promise<string | null> {
   if (!voice || voice.api !== "elevenlabs") return null;
   const config = await withSpeechOverride(voice);
   return meteredSpeech(caller, () => directSpeechUrl(config));
+}
+
+/** An address for the signed-in user's app to be transcribed live, or null for other voices. */
+export async function directHearing(caller: Caller): Promise<string | null> {
+  const voice = speechConfig();
+  if (!voice || voice.api !== "elevenlabs") return null;
+  return meteredSpeech(caller, () => directHearingUrl(voice), "transcribe");
 }

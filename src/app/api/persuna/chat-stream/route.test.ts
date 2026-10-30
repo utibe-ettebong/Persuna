@@ -51,6 +51,18 @@ describe("POST /api/persuna/chat-stream", () => {
     });
   });
 
+  it("marks words the client already heard live", async () => {
+    vi.mocked(chatStream).mockImplementation(async function* () {
+      yield { type: "done", result: { messages: [] } as never };
+    });
+    await (await POST(form({ text: "what's next?", "heard-live": "1" }))).text();
+
+    expect(vi.mocked(chatStream).mock.calls[0][2]).toMatchObject({
+      text: "what's next?",
+      heardLive: true,
+    });
+  });
+
   it("passes a look-closer request on to the client", async () => {
     vi.mocked(chatStream).mockImplementation(async function* () {
       yield { type: "look-closer", heard: "What's this?", said: "Let me look." };

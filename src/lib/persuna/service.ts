@@ -359,6 +359,8 @@ export interface ChatInput {
   pictureHeld?: boolean;
   /** The second pass of a turn that asked for the picture: what Persuna had already said. */
   saidFirst?: string;
+  /** Spoken, and already transcribed live as the user talked. */
+  heardLive?: boolean;
 }
 
 export type ChatMessageInput = ({ text: string } | { audio: string }) & ChatInput;
@@ -879,7 +881,11 @@ export async function* chatStream(
     for (const sentence of splitSentences(chunk)) yield { type: "sentence", text: sentence };
   }
   timer.mark("end");
-  logVoiceTurn(logRoute, timer, { spoken: prep.spoken, picture: prep.picture });
+  logVoiceTurn(logRoute, timer, {
+    spoken: prep.spoken || Boolean(input.heardLive),
+    heardLive: Boolean(input.heardLive),
+    picture: prep.picture,
+  });
   yield { type: "done", result };
 }
 

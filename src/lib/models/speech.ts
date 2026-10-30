@@ -14,6 +14,7 @@ export interface Speaker {
 }
 
 const TOKEN_TIMEOUT_MS = 5000;
+const HEARING_MODEL = "scribe_v2_realtime";
 const speechToken = z.object({ token: z.string().min(1) });
 
 /** Longest reply spoken in one go; anything past it is cut at a sentence end. */
@@ -91,7 +92,43 @@ export async function directSpeechUrl(
   fetchImpl: typeof fetch = fetch,
 ): Promise<string | null> {
   if (config.api !== "elevenlabs") return null;
-  const res = await fetchImpl(`${config.baseUrl}/single-use-token/tts_websocket`, {
+  const query = new URLSearchParams({
+    model_id: config.model,
+    output_format: "mp3_44100_128",
+    inactivity_timeout: "180",
+    single_use_token: await singleUseToken(config, "tts_websocket", fetchImpl),
+  });
+  const voice = encodeURIComponent(config.voice);
+  return `${socketBase(config)}/text-to-speech/${voice}/stream-input?${query}`;
+}
+
+/**
+ * Where the app can stream the microphone to be transcribed as you talk, or
+ * null for other voices. As with speech, the key stays on the server. The app
+ * says when you've finished (manual commit), since it knows before any model.
+ */
+export async function directHearingUrl(
+  config: SpeechConfig,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string | null> {
+  if (config.api !== "elevenlabs") return null;
+  const query = new URLSearchParams({
+    model_id: HEARING_MODEL,
+    audio_format: "pcm_16000",
+    commit_strategy: "manual",
+    token: await singleUseToken(config, "realtime_scribe", fetchImpl),
+  });
+  return `${socketBase(config)}/speech-to-text/realtime?${query}`;
+}
+
+const socketBase = (config: SpeechConfig) => config.baseUrl.replace(/^http/, "ws");
+
+async function singleUseToken(
+  config: SpeechConfig,
+  kind: "tts_websocket" | "realtime_scribe",
+  fetchImpl: typeof fetch,
+): Promise<string> {
+  const res = await fetchImpl(`${config.baseUrl}/single-use-token/${kind}`, {
     method: "POST",
     headers: { "xi-api-key": config.apiKey },
     signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
@@ -99,13 +136,5 @@ export async function directSpeechUrl(
   if (!res.ok) {
     throw new Error(`Speech token failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
   }
-  const { token } = speechToken.parse(await res.json());
-  const query = new URLSearchParams({
-    model_id: config.model,
-    output_format: "mp3_44100_128",
-    inactivity_timeout: "180",
-    single_use_token: token,
-  });
-  const voice = encodeURIComponent(config.voice);
-  return `${config.baseUrl.replace(/^http/, "ws")}/text-to-speech/${voice}/stream-input?${query}`;
+  return speechToken.parse(await res.json()).token;
 }

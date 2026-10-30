@@ -78,9 +78,13 @@ export function meteredSpeaker(speaker: Speaker, caller: Caller): Speaker {
 }
 
 /** One piece of speech against the caller's allowance, however it reaches them. */
-export async function meteredSpeech<T>(caller: Caller, speak: () => Promise<T>): Promise<T> {
+export async function meteredSpeech<T>(
+  caller: Caller,
+  speak: () => Promise<T>,
+  role: "speech" | "transcribe" = "speech",
+): Promise<T> {
   await checkAllowance(caller);
   const result = await speak();
-  await record(caller, "speech");
+  await record(caller, role);
   return result;
 }

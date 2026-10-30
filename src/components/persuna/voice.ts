@@ -9,6 +9,8 @@
  * listens for you talking over it, judged against its own voice's loudness.
  */
 
+import { startLiveHearing, type LiveHearing } from "./live-hearing";
+
 const PREFERRED = [
   /natural/i,
   /neural/i,
@@ -462,6 +464,26 @@ export function chime(up = true) {
   }
 }
 
+/** A soft tick the moment you finish talking: heard, on the way. No network involved. */
+export function ackTick() {
+  try {
+    audioCtx ??= new AudioContext();
+    const ctx = audioCtx;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const at = ctx.currentTime;
+    osc.frequency.value = 1180;
+    gain.gain.setValueAtTime(0.0001, at);
+    gain.gain.exponentialRampToValueAtTime(0.06, at + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.07);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(at);
+    osc.stop(at + 0.08);
+  } catch {
+    // No audio output: the island still changes straight away.
+  }
+}
+
 /** Stops speaking now and drops anything waiting to be said. */
 export function stopSpeaking() {
   generation++;
@@ -701,7 +723,9 @@ export type UtteranceEnd = "pause" | "long" | "persuna";
  */
 export async function startConversation(handlers: {
   onLevel: (level: number) => void;
-  onUtterance: (audio: Blob, end: UtteranceEnd) => void;
+  onUtterance: (audio: Blob, end: UtteranceEnd, words: Promise<string | null> | null) => void;
+  /** What's been understood so far, as you talk. */
+  onWords?: (soFar: string) => void;
   /** Persuna is speaking. */
   speaking: () => boolean;
   /** Persuna is thinking: don't start a new turn. */
@@ -718,6 +742,7 @@ export async function startConversation(handlers: {
   const data = new Float32Array(analyser.fftSize);
 
   let recorder: MediaRecorder | null = null;
+  let hearing: LiveHearing | null = null;
   let chunks: Blob[] = [];
   let speechStart = 0;
   let lastLoud = 0;
@@ -731,6 +756,7 @@ export async function startConversation(handlers: {
     recorder = new MediaRecorder(stream);
     recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
     recorder.start(200);
+    hearing = startLiveHearing(stream, (soFar) => handlers.onWords?.(soFar));
     speechStart = performance.now();
     lastLoud = speechStart;
   };
@@ -739,9 +765,13 @@ export async function startConversation(handlers: {
     recorder = null;
     if (!rec || rec.state === "inactive") return;
     const spoke = lastLoud - speechStart >= MIN_SPEECH_MS || why !== "pause";
+    const live = hearing;
+    hearing = null;
+    const words = spoke && !stopped ? (live?.finish() ?? null) : null;
+    if (!words) live?.cancel();
     rec.onstop = () => {
       if (!stopped && spoke && chunks.length) {
-        handlers.onUtterance(new Blob(chunks, { type: rec.mimeType || "audio/webm" }), why);
+        handlers.onUtterance(new Blob(chunks, { type: rec.mimeType || "audio/webm" }), why, words);
       }
     };
     rec.stop();
@@ -861,13 +891,19 @@ export async function meterMic(
 export const MIN_HOLD_MS = 350;
 
 export interface HoldRecording {
-  /** Let go: the recording, or null if it was too short or silent. */
-  stop(): Promise<Blob | null>;
+  /**
+   * Let go: the recording and the words heard live (which arrive a moment
+   * later), or null if it was too short or silent.
+   */
+  stop(): Promise<{ audio: Blob; words: Promise<string | null> | null } | null>;
   cancel(): void;
 }
 
-/** Records for as long as the talk key is held. */
-export async function startHoldRecording(onLevel: (level: number) => void): Promise<HoldRecording> {
+/** Records for as long as the talk key is held, hearing the words as they're said. */
+export async function startHoldRecording(
+  onLevel: (level: number) => void,
+  onWords?: (soFar: string) => void,
+): Promise<HoldRecording> {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints() });
   const ctx = new AudioContext();
   const analyser = ctx.createAnalyser();
@@ -878,6 +914,7 @@ export async function startHoldRecording(onLevel: (level: number) => void): Prom
   const recorder = new MediaRecorder(stream);
   recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   recorder.start(200);
+  const live = startLiveHearing(stream, (soFar) => onWords?.(soFar));
   const startedAt = performance.now();
   let loudest = 0;
   const timer = window.setInterval(() => {
@@ -897,12 +934,14 @@ export async function startHoldRecording(onLevel: (level: number) => void): Prom
   return {
     stop: () =>
       new Promise((resolve) => {
-        const long = performance.now() - startedAt >= MIN_HOLD_MS;
+        const heardVoice = performance.now() - startedAt >= MIN_HOLD_MS && loudest > START_LEVEL;
+        const words = heardVoice ? (live?.finish() ?? null) : null;
+        if (!heardVoice) live?.cancel();
         recorder.onstop = () => {
           close();
           resolve(
-            long && loudest > START_LEVEL && chunks.length
-              ? new Blob(chunks, { type: recorder.mimeType || "audio/webm" })
+            heardVoice && chunks.length
+              ? { audio: new Blob(chunks, { type: recorder.mimeType || "audio/webm" }), words }
               : null,
           );
         };
@@ -912,6 +951,7 @@ export async function startHoldRecording(onLevel: (level: number) => void): Prom
     cancel() {
       recorder.onstop = null;
       if (recorder.state !== "inactive") recorder.stop();
+      live?.cancel();
       close();
     },
   };
