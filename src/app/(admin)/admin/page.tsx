@@ -37,11 +37,7 @@ export default async function AdminPage() {
   ];
   return (
     <div className="space-y-6">
-      <PageHeader
-        eyebrow="Admin"
-        title="Overview"
-        description="The whole platform at a glance. Models and agents get their own section next."
-      />
+      <PageHeader eyebrow="Admin" title="Overview" description="The whole platform at a glance." />
       <div className="grid gap-px overflow-hidden rounded-md border border-line bg-line sm:grid-cols-2 lg:grid-cols-3">
         {figures.map((f) => {
           const body = (
@@ -108,6 +104,18 @@ export default async function AdminPage() {
             Model usage
           </Link>{" "}
           <span className="text-muted">— calls by role, user and day.</span>
+        </p>
+        <p>
+          <Link href="/admin/models" className="text-accent hover:underline">
+            Models
+          </Link>{" "}
+          <span className="text-muted">— which model id serves each role.</span>
+        </p>
+        <p>
+          <Link href="/admin/agents" className="text-accent hover:underline">
+            Agents
+          </Link>{" "}
+          <span className="text-muted">— every agent key and import.</span>
         </p>
       </Card>
     </div>

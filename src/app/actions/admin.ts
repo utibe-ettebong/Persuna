@@ -1,11 +1,22 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { unstable_rethrow } from "next/navigation";
+import { after } from "next/server";
+import { z } from "zod";
 import { attempt, type ActionState } from "@/lib/action-state";
 import {
+  parseCatalogEntryForm,
+  parseCatalogToggleForm,
+  parseDeleteEntryForm,
   parseDisputeForm,
+  parseProbeForm,
   parseRefundForm,
   parseResumeForm,
+  parseRetryImportForm,
+  parseRevertForm,
+  parseRevokeKeyForm,
+  parseSelectForm,
   parseTakedownForm,
 } from "@/lib/admin/forms";
 import { audit } from "@/lib/audit";
@@ -13,8 +24,18 @@ import { actorOf, requireAdmin } from "@/lib/auth/session";
 import { parseSuspendForm, setSuspended } from "@/lib/auth/users";
 import { setListingActive } from "@/lib/market/service";
 import { createModelClient } from "@/lib/models";
+import {
+  addCatalogEntry,
+  deleteCatalogEntry,
+  getCatalogEntry,
+  probeModel,
+  revertRole,
+  selectModel,
+  setCatalogEnabled,
+} from "@/lib/models/selection";
 import { refundForJob } from "@/lib/payments/service";
 import { resolveMilestone, resumeProject } from "@/lib/projects/service";
+import { processImport, retryAnyImport, revokeAnyAgentKey } from "@/lib/agents/service";
 
 const USERS = "/admin/users";
 
@@ -78,5 +99,124 @@ export async function refundJobAction(_: ActionState, form: FormData): Promise<A
     if (!txn) throw new Error("Nothing refundable on this job.");
     revalidatePath("/admin/transactions");
     return "/admin/transactions";
+  });
+}
+
+/** Catalogs a model id for a role. */
+export async function addCatalogEntryAction(_: ActionState, form: FormData): Promise<ActionState> {
+  return attempt(async () => {
+    const admin = await requireAdmin();
+    const input = parseCatalogEntryForm(Object.fromEntries(form));
+    await addCatalogEntry(input, actorOf(admin));
+    revalidatePath("/admin/models");
+    return "/admin/models";
+  });
+}
+
+/** Enables or disables a catalog entry. Disabling the selected one falls back to env. */
+export async function setCatalogEnabledAction(
+  _: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  return attempt(async () => {
+    const admin = await requireAdmin();
+    const { entryId, enabled } = parseCatalogToggleForm(Object.fromEntries(form));
+    await setCatalogEnabled(entryId, enabled, actorOf(admin));
+    revalidatePath("/admin/models");
+    return "/admin/models";
+  });
+}
+
+/** Deletes a catalog entry. Deleting the selected one reverts its role to env. */
+export async function deleteCatalogEntryAction(
+  _: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  return attempt(async () => {
+    const admin = await requireAdmin();
+    const { entryId } = parseDeleteEntryForm(Object.fromEntries(form));
+    await deleteCatalogEntry(entryId, actorOf(admin));
+    revalidatePath("/admin/models");
+    return "/admin/models";
+  });
+}
+
+/** Points a role at a catalog entry, after probing that the id works there. */
+export async function selectModelAction(_: ActionState, form: FormData): Promise<ActionState> {
+  return attempt(async () => {
+    const admin = await requireAdmin();
+    const { role, entryId } = parseSelectForm(Object.fromEntries(form));
+    const entry = await getCatalogEntry(entryId);
+    if (!entry || entry.role !== role) throw new Error("No such catalog entry for that role.");
+    const probed = await probeModel({ role, model: entry.model });
+    if (!probed.ok) throw new Error(`Probe failed, nothing saved: ${probed.detail}`);
+    await selectModel(role, entryId, actorOf(admin));
+    revalidatePath("/admin/models");
+    return "/admin/models";
+  });
+}
+
+/** Drops a role's selection; env settings serve it again. */
+export async function revertRoleAction(_: ActionState, form: FormData): Promise<ActionState> {
+  return attempt(async () => {
+    const admin = await requireAdmin();
+    const { role } = parseRevertForm(Object.fromEntries(form));
+    await revertRole(role, actorOf(admin));
+    revalidatePath("/admin/models");
+    return "/admin/models";
+  });
+}
+
+export interface ProbeState {
+  error: string | null;
+  result: string | null;
+}
+
+/** Tests a model id against its role's live settings without saving anything. */
+export async function probeModelAction(_: ProbeState, form: FormData): Promise<ProbeState> {
+  try {
+    await requireAdmin();
+    const { role, model } = parseProbeForm(Object.fromEntries(form));
+    const probed = await probeModel({ role, model });
+    return probed.ok
+      ? { error: null, result: probed.detail }
+      : { error: probed.detail, result: null };
+  } catch (error) {
+    unstable_rethrow(error);
+    console.error(error);
+    if (error instanceof z.ZodError)
+      return { error: error.issues[0]?.message ?? "Invalid input.", result: null };
+    return {
+      error: error instanceof Error ? error.message : "Something went wrong.",
+      result: null,
+    };
+  }
+}
+
+/** Revokes any account's agent key. */
+export async function revokeAnyAgentKeyAction(
+  _: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  return attempt(async () => {
+    const admin = await requireAdmin();
+    const { keyId } = parseRevokeKeyForm(Object.fromEntries(form));
+    await revokeAnyAgentKey(keyId, actorOf(admin));
+    revalidatePath("/admin/agents");
+    return "/admin/agents";
+  });
+}
+
+/** Retries any account's failed import and retriggers processing. */
+export async function retryAnyImportAction(_: ActionState, form: FormData): Promise<ActionState> {
+  return attempt(async () => {
+    const admin = await requireAdmin();
+    const { importId } = parseRetryImportForm(Object.fromEntries(form));
+    await retryAnyImport(importId, actorOf(admin));
+    after(async () => {
+      await processImport(importId).catch((e) => console.error("Agent import failed:", e));
+    });
+    revalidatePath("/admin/agents");
+    return "/admin/agents";
   });
 }

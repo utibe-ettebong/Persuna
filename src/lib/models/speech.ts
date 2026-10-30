@@ -26,11 +26,13 @@ export function spokenPart(text: string): string {
 export function createSpeaker(
   resolve: () => SpeechConfig | null = speechConfig,
   fetchImpl: typeof fetch = fetch,
+  override: (config: SpeechConfig) => SpeechConfig | Promise<SpeechConfig> = (c) => c,
 ): Speaker | null {
-  const config = resolve();
-  if (!config) return null;
+  const envConfig = resolve();
+  if (!envConfig) return null;
   return {
     async synthesize(text, style) {
+      const config = await override(envConfig);
       const input = spokenPart(text);
       const res =
         config.api === "elevenlabs"

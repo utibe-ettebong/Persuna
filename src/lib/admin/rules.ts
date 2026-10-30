@@ -31,6 +31,17 @@ export function disputeTotals(
   };
 }
 
+export type AgentKeyStatus = "revoked" | "unused" | "active";
+
+/** What an admin sees for an agent key. */
+export function agentKeyStatus(key: {
+  revokedAt: Date | null;
+  lastUsedAt: Date | null;
+}): AgentKeyStatus {
+  if (key.revokedAt) return "revoked";
+  return key.lastUsedAt ? "active" : "unused";
+}
+
 export interface DayPoint {
   day: string;
   calls: number;

@@ -543,6 +543,30 @@ export type PersunaNote = typeof persunaNotes.$inferSelect;
 export type PersunaReminder = typeof persunaReminders.$inferSelect;
 
 /**
+ * One model an admin cataloged for a role, selectable without touching env.
+ * Keys stay env vars: a selection overrides the model id only, and must work
+ * with the role's configured key (saving probes that first).
+ */
+export const platformModels = pgTable(
+  "platform_models",
+  {
+    id: id(),
+    /** Role this entry can serve: extract, draft, evaluate, listen, transcribe or speech. */
+    role: text("role").notNull(),
+    /** Admin's label, e.g. "Spark 1.3 (current)". */
+    label: text("label").notNull(),
+    /** Provider model id, e.g. "muse-spark-1.3". */
+    model: text("model").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    /** The selected entry per role; at most one (enforced in service, not here). */
+    selected: boolean("selected").notNull().default(false),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.role, t.selected)],
+);
+
+/**
  * Apps Persuna may use for the user (Google for Gmail and Calendar, Notion),
  * connected by OAuth. Tokens are encrypted at rest (CONNECTIONS_KEY) and
  * never leave the server.

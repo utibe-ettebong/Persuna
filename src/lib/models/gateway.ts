@@ -92,13 +92,13 @@ const rejected = new Map<string, number>();
  * the app. The failure is logged so the key gets fixed.
  */
 export function createGateway(
-  resolve: (role: ModelRole) => ModelRoleConfig = modelConfig,
+  resolve: (role: ModelRole) => ModelRoleConfig | Promise<ModelRoleConfig> = modelConfig,
   fetchImpl: typeof fetch = fetch,
 ): ModelClient {
   return {
     async complete(role, messages, options = {}) {
-      const own = resolve(role);
-      const fallback = role === "extract" ? null : resolve("extract");
+      const own = await resolve(role);
+      const fallback = role === "extract" ? null : await resolve("extract");
       const different =
         fallback && (fallback.baseUrl !== own.baseUrl || fallback.apiKey !== own.apiKey);
       const key = `${role}:${own.baseUrl}`;
@@ -110,7 +110,7 @@ export function createGateway(
       } catch (error) {
         // Meta's API sometimes answers "model not found" for every model for a few
         // minutes. Calls that don't carry audio go to the DRAFT provider meanwhile.
-        const backup = role === "draft" ? null : resolve("draft");
+        const backup = role === "draft" ? null : await resolve("draft");
         if (
           error instanceof ModelError &&
           error.modelMissing &&
