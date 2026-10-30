@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CLOUD_CHUNK_CHARS,
   createSpeechQueue,
   parseStreamEvent,
+  readTurnStream,
   speakable,
+  speakOverSocket,
   speechChunks,
   stopSpeaking,
 } from "./voice";
@@ -182,6 +184,12 @@ describe("parseStreamEvent", () => {
     });
   });
 
+  it("reads a request to look closer", () => {
+    expect(
+      parseStreamEvent(frame("look-closer", { heard: "What's this?", said: "Let me look." })),
+    ).toEqual({ name: "look-closer", heard: "What's this?", said: "Let me look." });
+  });
+
   it("ignores anything else", () => {
     expect(parseStreamEvent(": keep-alive")).toBeNull();
     expect(parseStreamEvent(frame("sentence", { text: 42 }))).toBeNull();
@@ -190,5 +198,108 @@ describe("parseStreamEvent", () => {
       name: "error",
       message: "Something went wrong.",
     });
+  });
+});
+
+describe("readTurnStream", () => {
+  const frames = (...parts: [string, unknown][]) =>
+    new Blob(parts.map(([e, d]) => `event: ${e}\ndata: ${JSON.stringify(d)}\n\n`)).stream();
+
+  it("reports words as they come and ends with the saved result", async () => {
+    const said: string[] = [];
+    const outcome = await readTurnStream<{ ok: boolean }>(
+      frames(["heard", { text: "hi" }], ["sentence", { text: "Hello." }], ["done", { ok: true }]),
+      { heard: (t) => said.push(`heard:${t}`), sentence: (t) => said.push(t) },
+    );
+    expect(said).toEqual(["heard:hi", "Hello."]);
+    expect(outcome).toEqual({ result: { ok: true }, failed: null, closer: null });
+  });
+
+  it("hands back a request for the picture", async () => {
+    const outcome = await readTurnStream(
+      frames(
+        ["sentence", { text: "Let me look." }],
+        ["look-closer", { heard: "Hm?", said: "Let me look." }],
+      ),
+      { heard: () => {}, sentence: () => {} },
+    );
+    expect(outcome.closer).toEqual({ heard: "Hm?", said: "Let me look." });
+    expect(outcome.result).toBeNull();
+  });
+});
+
+describe("speakOverSocket", () => {
+  const socket = () => {
+    const sent: string[] = [];
+    const fake = {
+      sent,
+      closed: false,
+      onmessage: null as ((e: MessageEvent) => void) | null,
+      onclose: null as (() => void) | null,
+      send: (data: string) => void sent.push(data),
+      close() {
+        fake.closed = true;
+      },
+      say: (message: unknown) =>
+        fake.onmessage?.({ data: JSON.stringify(message) } as MessageEvent),
+    };
+    return fake;
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal("window", globalThis);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("streams the audio as a Response like the server route's", async () => {
+    const fake = socket();
+    const pending = speakOverSocket(fake as never, "Hello.");
+    expect(fake.sent.map((s) => JSON.parse(s).text)).toEqual(["Hello. ", ""]);
+    fake.say({ audio: btoa("one") });
+    const res = await pending;
+    fake.say({ audio: btoa("two") });
+    fake.say({ isFinal: true });
+
+    expect(res?.headers.get("content-type")).toBe("audio/mpeg");
+    expect(await res?.text()).toBe("onetwo");
+    expect(fake.closed).toBe(true);
+  });
+
+  it("gives way to the server route when no audio comes", async () => {
+    const fake = socket();
+    const pending = speakOverSocket(fake as never, "Hello.", 100);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await pending).toBeNull();
+    expect(fake.closed).toBe(true);
+  });
+
+  it("gives way if the connection drops before any audio", async () => {
+    const fake = socket();
+    const pending = speakOverSocket(fake as never, "Hello.");
+    fake.onclose?.();
+    expect(await pending).toBeNull();
+  });
+
+  it("stops cleanly when playback is cancelled", async () => {
+    const fake = socket();
+    const pending = speakOverSocket(fake as never, "Hello.");
+    fake.say({ audio: btoa("one") });
+    const res = await pending;
+    await res?.body?.cancel();
+    expect(fake.closed).toBe(true);
+    expect(() => fake.onclose?.()).not.toThrow();
+  });
+
+  it("ends the speech where it got to if the connection drops midway", async () => {
+    const fake = socket();
+    const pending = speakOverSocket(fake as never, "Hello.");
+    fake.say({ audio: btoa("one") });
+    const res = await pending;
+    fake.onclose?.();
+    expect(await res?.text()).toBe("one");
   });
 });

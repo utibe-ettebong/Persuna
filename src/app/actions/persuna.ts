@@ -81,25 +81,6 @@ const MAX_PICTURE_BYTES = 8 * 1024 * 1024;
 /** Enough of a long document for one turn. */
 const MAX_FILE_CHARS = 24_000;
 
-export async function persunaChatAction(
-  text: string,
-  clock: z.input<typeof clockField>,
-  sight?: z.input<typeof sightField>,
-  options?: { show?: boolean },
-) {
-  return run(async () => {
-    const user = await requireUser();
-    const message = z.string().trim().min(1, "Say something first").max(4000).parse(text);
-    return chat(createModelClient(user), user.id, {
-      text: message,
-      clock: clockField.parse(clock),
-      actor: actorOf(user),
-      sight: sightField.parse(sight),
-      show: options?.show ?? false,
-    });
-  });
-}
-
 /**
  * A message with a file (a picture, PDF, Word document or text file) dropped
  * on Persuna or chosen in its panel. The file is read for this turn only; just
