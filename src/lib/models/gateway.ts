@@ -47,6 +47,8 @@ export interface CompleteOptions {
 /**
  * The only thing the training engine knows about models. Tests pass a fake;
  * the app passes {@link createGateway}. Swapping providers never touches a skill.
+ * Streaming is optional: callers that need it fall back to {@link complete}
+ * when a client only answers whole replies.
  */
 export interface ModelClient {
   complete(
@@ -54,6 +56,11 @@ export interface ModelClient {
     messages: ChatMessage[],
     options?: CompleteOptions,
   ): Promise<Completion>;
+  completeStream?(
+    role: ModelRole,
+    messages: ChatMessage[],
+    options?: CompleteOptions,
+  ): AsyncGenerator<string, void, void>;
 }
 
 const completionResponse = z.object({
@@ -70,6 +77,28 @@ const completionResponse = z.object({
     .object({ prompt_tokens: z.number().optional(), completion_tokens: z.number().optional() })
     .optional(),
 });
+
+const streamChunk = z.object({
+  choices: z
+    .array(
+      z.object({
+        delta: z
+          .object({
+            content: z.string().nullish(),
+            reasoning_content: z.string().nullish(),
+            reasoning: z.string().nullish(),
+          })
+          .passthrough(),
+        finish_reason: z.string().nullish(),
+      }),
+    )
+    .optional(),
+  usage: z
+    .object({ prompt_tokens: z.number().optional(), completion_tokens: z.number().optional() })
+    .optional(),
+});
+
+const streamError = z.object({ error: z.object({ message: z.string().optional() }).passthrough() });
 
 const RETRYABLE = new Set([408, 409, 429, 500, 502, 503, 504]);
 /**
@@ -137,6 +166,35 @@ export function createGateway(
         return callOnce(fallback, role, messages, options, fetchImpl);
       }
     },
+
+    /**
+     * Token stream for one completion. Retries and key-fallbacks only happen
+     * before the first token; once text flows, errors surface to the caller.
+     * Providers without SSE get one chunk with the whole reply, so callers
+     * can always iterate. (No DRAFT backup here: streamed callers are voice
+     * turns, which carry audio, and the backup path excludes audio turns.)
+     */
+    async *completeStream(role, messages, options = {}) {
+      const own = await resolve(role);
+      const fallback = role === "extract" ? null : await resolve("extract");
+      const different =
+        fallback && (fallback.baseUrl !== own.baseUrl || fallback.apiKey !== own.apiKey);
+      const key = `${role}:${own.baseUrl}`;
+      if (different && (rejected.get(key) ?? 0) > Date.now()) {
+        yield* streamOnce(fallback, role, messages, options, fetchImpl);
+        return;
+      }
+      try {
+        yield* streamOnce(own, role, messages, options, fetchImpl);
+      } catch (error) {
+        if (!(error instanceof ModelError) || !error.keyRejected || !different) throw error;
+        console.warn(
+          `[models] ${role} key was rejected by ${own.baseUrl}; using EXTRACT_* for ${role} for the next ${REJECTED_KEY_COOLDOWN_MS / 60_000} minutes. Fix ${role.toUpperCase()}_API_KEY.`,
+        );
+        rejected.set(key, Date.now() + REJECTED_KEY_COOLDOWN_MS);
+        yield* streamOnce(fallback, role, messages, options, fetchImpl);
+      }
+    },
   };
 }
 
@@ -150,7 +208,7 @@ async function callOnce(
   options: CompleteOptions,
   fetchImpl: typeof fetch,
 ): Promise<Completion> {
-  const maxTokens = options.maxTokens ?? 4096;
+  const maxTokens = budgetFor(options);
   const first = await postFindingModel(config, role, messages, options, maxTokens, fetchImpl);
   if (first.text.trim() || first.finish !== "length" || maxTokens >= MAX_TOKENS_CAP) {
     return first.completion;
@@ -292,16 +350,7 @@ async function post(
         await backoff(attempt);
         continue;
       }
-      // Provider error bodies can echo the request; keep only a short prefix.
-      const detail = (await response.text()).slice(0, 300);
-      throw new ModelError(
-        role,
-        `HTTP ${response.status}: ${detail}`,
-        response.status === 401 || response.status === 403,
-        response.status === 404 && /model_not_found|model.*not.*found/i.test(detail),
-        response.status === 400 && /reasoning_effort/i.test(detail),
-        response.status === 400 && /response_format|json_object|json mode/i.test(detail),
-      );
+      throw await errorFor(role, response);
     }
 
     const parsed = completionResponse.safeParse(await response.json());
@@ -320,6 +369,283 @@ async function post(
     };
   }
 }
+
+async function* streamOnce(
+  config: ModelRoleConfig,
+  role: ModelRole,
+  messages: ChatMessage[],
+  options: CompleteOptions,
+  fetchImpl: typeof fetch,
+): AsyncGenerator<string, void, void> {
+  const maxTokens = budgetFor(options);
+  // The wrappers below only retry errors thrown before the first token:
+  // modelMissing, effortRejected, and jsonModeRejected all come from the
+  // HTTP status, and the stream parser never sets those flags.
+  try {
+    yield* postStreamKeepingEffort(config, role, messages, options, maxTokens, fetchImpl);
+  } catch (error) {
+    if (!(error instanceof ModelError) || !error.modelMissing) throw error;
+    await backoff(1);
+    try {
+      yield* postStreamKeepingEffort(config, role, messages, options, maxTokens, fetchImpl);
+    } catch (again) {
+      if (!(again instanceof ModelError) || !again.modelMissing || !config.fallbackModel) {
+        throw again;
+      }
+      console.warn(`[models] ${config.model} is missing; using ${config.fallbackModel}.`);
+      yield* postStreamKeepingEffort(
+        { ...config, model: config.fallbackModel },
+        role,
+        messages,
+        options,
+        maxTokens,
+        fetchImpl,
+      );
+    }
+  }
+}
+
+async function* postStreamKeepingEffort(
+  config: ModelRoleConfig,
+  role: ModelRole,
+  messages: ChatMessage[],
+  options: CompleteOptions,
+  maxTokens: number,
+  fetchImpl: typeof fetch,
+): AsyncGenerator<string, void, void> {
+  try {
+    yield* postStream(config, role, messages, options, maxTokens, fetchImpl);
+  } catch (error) {
+    if (!(error instanceof ModelError)) throw error;
+    if (error.effortRejected && config.reasoningEffort) {
+      console.warn(`[models] ${config.model} refused reasoning_effort; retrying without it.`);
+      yield* postStream(
+        { ...config, reasoningEffort: undefined },
+        role,
+        messages,
+        options,
+        maxTokens,
+        fetchImpl,
+      );
+      return;
+    }
+    if (error.jsonModeRejected && options.json) {
+      console.warn(`[models] ${config.model} doesn't offer JSON mode; asking without it.`);
+      yield* postStream(config, role, messages, { ...options, json: false }, maxTokens, fetchImpl);
+      return;
+    }
+    throw error;
+  }
+}
+
+async function* postStream(
+  config: ModelRoleConfig,
+  role: ModelRole,
+  messages: ChatMessage[],
+  options: CompleteOptions,
+  maxTokens: number,
+  fetchImpl: typeof fetch,
+): AsyncGenerator<string, void, void> {
+  const url = `${config.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+  let tokens = maxTokens;
+  for (;;) {
+    const response = await fetchStreamAttempt(
+      config,
+      role,
+      messages,
+      options,
+      tokens,
+      fetchImpl,
+      url,
+    );
+    if (!isSSE(response)) {
+      const parsed = completionResponse.safeParse(await response.json());
+      if (!parsed.success) throw new ModelError(role, "unexpected response shape");
+      const text = parsed.data.choices[0].message.content ?? "";
+      const finish = parsed.data.choices[0].finish_reason ?? null;
+      if (text === "" && finish === "length" && tokens < MAX_TOKENS_CAP) {
+        tokens = Math.min(tokens * THINKING_ROOM_FACTOR, MAX_TOKENS_CAP);
+        continue;
+      }
+      if (text) yield text;
+      return;
+    }
+    if (!response.body) throw new ModelError(role, "empty stream body");
+    const summary = yield* drain(response.body, role);
+    if (summary.empty && summary.finish === "length" && tokens < MAX_TOKENS_CAP) {
+      tokens = Math.min(tokens * THINKING_ROOM_FACTOR, MAX_TOKENS_CAP);
+      continue;
+    }
+    return;
+  }
+}
+
+async function fetchStreamAttempt(
+  config: ModelRoleConfig,
+  role: ModelRole,
+  messages: ChatMessage[],
+  options: CompleteOptions,
+  tokens: number,
+  fetchImpl: typeof fetch,
+  url: string,
+): Promise<Response> {
+  // No stream_options: usage comes from the non-streaming path, and extra
+  // flags are one more thing a provider can reject.
+  let wantStream = true;
+  for (let attempt = 1; ; attempt++) {
+    const body = JSON.stringify({
+      model: config.model,
+      messages,
+      temperature: options.temperature ?? 0,
+      max_tokens: tokens,
+      ...(config.reasoningEffort && { reasoning_effort: config.reasoningEffort }),
+      ...(options.json && { response_format: { type: "json_object" } }),
+      ...(wantStream && { stream: true }),
+    });
+    let response: Response;
+    try {
+      response = await fetchImpl(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${config.apiKey}`,
+        },
+        body,
+        signal: AbortSignal.timeout(options.timeoutMs ?? env().MODEL_TIMEOUT_MS),
+      });
+    } catch (error) {
+      if (attempt < MAX_ATTEMPTS) {
+        await backoff(attempt);
+        continue;
+      }
+      throw new ModelError(role, `request failed: ${(error as Error).message}`);
+    }
+    if (response.ok) return response;
+    if (RETRYABLE.has(response.status) && attempt < MAX_ATTEMPTS) {
+      await backoff(attempt);
+      continue;
+    }
+    if (wantStream && response.status === 400 && (await rejectsStream(response))) {
+      wantStream = false;
+      continue;
+    }
+    throw await errorFor(role, response);
+  }
+}
+
+/** True when a 400 body reads as "I don't do streaming", not another error. */
+async function rejectsStream(response: Response): Promise<boolean> {
+  const peek = await response.clone().text();
+  return (
+    /stream/i.test(peek) &&
+    /not supported|unknown|unexpected|invalid|unrecogni[sz]ed|not allowed|unsupported/i.test(peek)
+  );
+}
+
+const isSSE = (response: Response) =>
+  response.headers.get("content-type")?.includes("text/event-stream") ?? false;
+
+/**
+ * Reads SSE events into text chunks. Reasoning deltas are dropped so spoken
+ * replies never leak thinking. Mid-stream errors throw a plain ModelError:
+ * deliberately no flags, so the retry wrappers above never refire mid-stream.
+ */
+async function* drain(
+  body: ReadableStream<Uint8Array>,
+  role: ModelRole,
+): AsyncGenerator<string, { empty: boolean; finish: string | null }, void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let text = "";
+  let finish: string | null = null;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value) buf += decoder.decode(value, { stream: true });
+      if (done) buf += decoder.decode();
+      let idx: number;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const event = parseEvent(buf.slice(0, idx), role);
+        buf = buf.slice(idx + 2);
+        if (event.text) {
+          text += event.text;
+          yield event.text;
+        }
+        if (event.finish) finish = event.finish;
+        if (event.end) return { empty: text === "", finish };
+      }
+      if (done) {
+        if (buf.trim()) {
+          const event = parseEvent(buf, role);
+          if (event.text) {
+            text += event.text;
+            yield event.text;
+          }
+          if (event.finish) finish = event.finish;
+        }
+        return { empty: text === "", finish };
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function parseEvent(
+  raw: string,
+  role: ModelRole,
+): { text: string; finish: string | null; end: boolean } {
+  let text = "";
+  let finish: string | null = null;
+  let end = false;
+  const lines = raw
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trim());
+  for (const line of lines) {
+    if (line === "[DONE]") {
+      end = true;
+      continue;
+    }
+    let json: unknown;
+    try {
+      json = JSON.parse(line);
+    } catch {
+      console.warn("[models] skipping an unreadable stream line.");
+      continue;
+    }
+    const failed = streamError.safeParse(json);
+    if (failed.success) {
+      throw new ModelError(role, `stream error: ${failed.data.error.message ?? "unknown"}`);
+    }
+    const chunk = streamChunk.safeParse(json);
+    if (!chunk.success) {
+      console.warn("[models] skipping an unexpected stream line.");
+      continue;
+    }
+    const choice = chunk.data.choices?.[0];
+    if (!choice) continue;
+    text += choice.delta.content ?? "";
+    if (choice.finish_reason) finish = choice.finish_reason;
+  }
+  return { text, finish, end };
+}
+
+async function errorFor(role: ModelRole, response: Response): Promise<ModelError> {
+  // Provider error bodies can echo the request; keep only a short prefix.
+  const detail = (await response.text()).slice(0, 300);
+  return new ModelError(
+    role,
+    `HTTP ${response.status}: ${detail}`,
+    response.status === 401 || response.status === 403,
+    response.status === 404 && /model_not_found|model.*not.*found/i.test(detail),
+    response.status === 400 && /reasoning_effort/i.test(detail),
+    response.status === 400 && /response_format|json_object|json mode/i.test(detail),
+  );
+}
+
+const budgetFor = (options: CompleteOptions) => options.maxTokens ?? 4096;
 
 export class ModelError extends Error {
   constructor(

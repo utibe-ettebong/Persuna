@@ -44,6 +44,19 @@ export function meteredClient(client: ModelClient, caller: Caller): ModelClient 
       await record(caller, role);
       return result;
     },
+    async *completeStream(role, messages, options) {
+      if (!client.completeStream) {
+        await checkAllowance(caller);
+        const result = await client.complete(role, messages, options);
+        await record(caller, role);
+        yield result.text;
+        return;
+      }
+      await checkAllowance(caller);
+      yield* client.completeStream(role, messages, options);
+      // Counted once the stream is fully read; an abandoned stream costs nothing.
+      await record(caller, role);
+    },
   };
 }
 
