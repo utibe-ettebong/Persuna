@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { cache } from "react";
 import { auth } from "./index";
 import { matchesList, parseList } from "./policy";
+import { isSuspended } from "./users";
 
 export interface SessionUser {
   id: string;
@@ -18,6 +19,8 @@ export const getUser = cache(async (): Promise<SessionUser | null> => {
   const session = await auth().api.getSession({ headers: requestHeaders });
   if (!session) return null;
   const { id, name, email } = session.user;
+  // Suspended reads as signed out: no access anywhere, and no hint why.
+  if (await isSuspended(id)) return null;
   return { id, name, email, isAdmin: matchesList(email, parseList(process.env.ADMIN_EMAILS)) };
 });
 

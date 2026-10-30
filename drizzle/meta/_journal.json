@@ -169,6 +169,13 @@
       "when": 1793298585800,
       "tag": "0023_mcp-servers",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793357569785,
+      "tag": "0024_suspend-users",
+      "breakpoints": true
     }
   ]
 }
