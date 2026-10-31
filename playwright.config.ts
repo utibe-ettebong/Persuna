@@ -1,4 +1,35 @@
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defineConfig } from "@playwright/test";
+
+/**
+ * A fake microphone that sounds like a turn: two seconds of voice-level tone,
+ * then silence. Chromium's default beeps are too short to count as speech.
+ */
+function fakeSpeech(): string {
+  const rate = 16_000;
+  const samples = rate * 6;
+  const wav = Buffer.alloc(44 + samples * 2);
+  wav.write("RIFF", 0);
+  wav.writeUInt32LE(36 + samples * 2, 4);
+  wav.write("WAVEfmt ", 8);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(rate, 24);
+  wav.writeUInt32LE(rate * 2, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write("data", 36);
+  wav.writeUInt32LE(samples * 2, 40);
+  for (let i = 0; i < rate * 2; i++) {
+    wav.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 220 * i) / rate) * 12_000), 44 + i * 2);
+  }
+  const file = join(tmpdir(), "persuna-fake-speech.wav");
+  writeFileSync(file, wav);
+  return file;
+}
 
 /**
  * Browser tests (plan §7): the voice path with a fake microphone, against
@@ -14,7 +45,11 @@ export default defineConfig({
     trace: "on-first-retry",
     baseURL: "http://127.0.0.1:3110",
     launchOptions: {
-      args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
+      args: [
+        "--use-fake-device-for-media-stream",
+        "--use-fake-ui-for-media-stream",
+        `--use-file-for-fake-audio-capture=${fakeSpeech()}`,
+      ],
     },
   },
   webServer: {

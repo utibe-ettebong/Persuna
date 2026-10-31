@@ -17,19 +17,23 @@ test("a spoken question on a fake mic gets a reply", async ({ page, context }) =
   await page.waitForURL(/\/companion/, { timeout: 30_000 });
 
   // The first meeting: a name, a look, and the sample task.
-  const input = page.getByPlaceholder("Type, or hold to talk");
+  const input = page.getByPlaceholder("Type, or tap me and just talk");
   await expect(input).toBeVisible({ timeout: 30_000 });
   await input.fill("Nova");
   await input.press("Enter");
-  await input.fill("purple");
-  await input.press("Enter");
-  await input.fill("sample");
-  await input.press("Enter");
+  await page
+    .getByRole("button", { name: / look$/ })
+    .first()
+    .click();
+  await page.getByRole("button", { name: "Try the sample" }).click();
 
-  // Talking starts a conversation; the fake mic's beeps end the turn
-  // on a pause (or the long-turn cap) — no second tap: stopping sends nothing.
+  // Talking starts a conversation; the fake mic's pause ends the turn. No
+  // second tap: stopping sends nothing.
   const orb = page.getByTitle(/Tap to talk/);
   await expect(orb).toBeVisible({ timeout: 30_000 });
+  // Persuna may still be saying its welcome, and a tap then only interrupts it.
+  if (/interrupt/.test((await orb.getAttribute("aria-label")) ?? "")) await orb.click();
+  await expect(orb).toHaveAttribute("aria-label", /: talk/, { timeout: 30_000 });
   const streamDone = page.waitForResponse(
     (response) =>
       response.url().includes("/api/persuna/chat-stream") && response.request().method() === "POST",
