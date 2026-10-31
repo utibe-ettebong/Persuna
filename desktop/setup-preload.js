@@ -9,6 +9,8 @@ const bridge = {
   askScreen: () => ipcRenderer.invoke("setup:ask-screen"),
   // A grant gone stale: clear it and start over, in one step.
   resetPermission: (kind) => ipcRenderer.invoke("setup:reset-permission", kind),
+  // Try every permission for real, with plain words when one fails.
+  selfTest: () => ipcRenderer.invoke("setup:self-test"),
   dragApp: () => ipcRenderer.send("setup:drag-app"),
   appIcon: () => ipcRenderer.invoke("setup:app-icon"),
   restart: () => ipcRenderer.send("setup:restart"),

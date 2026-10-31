@@ -3201,15 +3201,21 @@ export function Companion(props: CompanionProps) {
           />
         )}
 
-        {/* The island: on the notch (or hanging from the top centre), solid black.
-            Click it for Persuna, right-click for more, drop a file on it. */}
+        {/* The island: on the notch, or a floating rounded pill that expands
+            on machines without one. Solid black; click for Persuna,
+            right-click for more, drop a file on it. */}
         <div
           style={{
             width,
-            // Like the notch it sits on: tight corners while it's a strip,
-            // rounder only once it has grown down into a card.
-            borderBottomLeftRadius: tall ? 22 : 11,
-            borderBottomRightRadius: tall ? 22 : 11,
+            // On the notch: tight bottom corners while it's a strip, rounder
+            // once grown into a card. Without a notch it floats as a pill,
+            // fully round until it grows down into a card.
+            ...(island.notch
+              ? {
+                  borderBottomLeftRadius: tall ? 22 : 11,
+                  borderBottomRightRadius: tall ? 22 : 11,
+                }
+              : { marginTop: 10, borderRadius: tall ? 22 : 999 }),
           }}
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
@@ -3222,9 +3228,14 @@ export function Companion(props: CompanionProps) {
               : "shadow-[0_10px_30px_-12px_rgba(0,0,0,0.7)]"
           }`}
         >
-          {/* The notch's shoulders: it flares into the menu bar instead of hanging below it. */}
-          <span aria-hidden className="island-shoulder island-shoulder-left" />
-          <span aria-hidden className="island-shoulder island-shoulder-right" />
+          {/* The notch's shoulders: it flares into the menu bar instead of
+              hanging below it. A floating pill has no edge to blend into. */}
+          {island.notch && (
+            <>
+              <span aria-hidden className="island-shoulder island-shoulder-left" />
+              <span aria-hidden className="island-shoulder island-shoulder-right" />
+            </>
+          )}
           <button
             type="button"
             aria-label={`${name}: ${panel ? "close" : "open"} (${barStatus})`}
