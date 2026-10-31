@@ -74,6 +74,7 @@ export default defineRailway(() => {
       DRAFT_FALLBACK_MODEL: preserve(),
       EVAL_FALLBACK_MODEL: preserve(),
       LEARN_PASS_SECRET: preserve(),
+      LIVEKIT_TOOL_SECRET: preserve(),
     },
   });
 
