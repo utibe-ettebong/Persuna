@@ -29,6 +29,7 @@ describe("isPublicPath", () => {
       "/download/mac-arm64",
       "/download/win-x64",
       "/welcome",
+      "/privacy",
       "/desktop/setup",
       "/api/desktop/sign-in",
       "/api/persuna/livekit-tool",
