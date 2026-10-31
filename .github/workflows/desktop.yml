@@ -116,6 +116,9 @@ jobs:
           CSC_FOR_PULL_REQUEST: true
       - name: Check the Mac apps are signed and actually start
         if: runner.os == 'macOS'
+        # A launch that hangs (a startup error shows a dialog nobody can dismiss)
+        # should fail here, not sit until the job is cancelled.
+        timeout-minutes: 8
         run: |
           for app in dist/mac*/Persuna.app; do
             echo "$app"

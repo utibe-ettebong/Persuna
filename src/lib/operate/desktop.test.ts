@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 // The desktop's operate module is plain Node (no Electron), pinned from here.
 import { osaScripts, validOperateAction } from "../../../desktop/operate.js";
 
@@ -56,5 +58,22 @@ describe("the desktop's own check", () => {
     expect(validOperateAction({ kind: "type", text: "a\nb", label: "Type" })).toBeNull();
     expect(validOperateAction({ kind: "type", text: "a\rb", label: "Type" })).toBeNull();
     expect(validOperateAction({ kind: "type", text: "a b", label: "Type" })).not.toBeNull();
+  });
+});
+
+describe("the packaged app", () => {
+  it("includes every file the desktop code requires", () => {
+    const desktop = join(process.cwd(), "desktop");
+    const { build } = JSON.parse(readFileSync(join(desktop, "package.json"), "utf8"));
+    const required = readdirSync(desktop)
+      .filter((file) => file.endsWith(".js") && build.files.includes(file))
+      .flatMap((file) =>
+        [...readFileSync(join(desktop, file), "utf8").matchAll(/require\("\.\/([\w-]+)"\)/g)].map(
+          (match) => `${match[1]}.js`,
+        ),
+      );
+
+    expect(required).toContain("operate.js");
+    for (const file of required) expect(build.files).toContain(file);
   });
 });
