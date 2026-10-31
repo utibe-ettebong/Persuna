@@ -707,6 +707,21 @@ const BARGE_WINDOW_MS = 700;
 const BARGE_SHARE = 0.6;
 /** A pause this long ends your turn; shorter ones are just you thinking. */
 const SILENCE_MS = 1000;
+/**
+ * A finished-sounding sentence needs only this much quiet to end your turn:
+ * the rest of the hush is detection lag, not thinking. Without live words
+ * (or a sentence still going) the full hush stays the backstop.
+ */
+export const EARLY_SILENCE_MS = 450;
+
+/**
+ * Whether what's been heard so far sounds finished: ends with a full stop,
+ * question or exclamation mark, past any closing quotes. Streaming
+ * transcripts punctuate as they go; without punctuation nothing is assumed.
+ */
+export function utteranceComplete(soFar: string): boolean {
+  return /[.!?…]["'”’)\]]*\s*$/.test(soFar.trim()) && soFar.trim().length > 1;
+}
 const MIN_SPEECH_MS = 350;
 /** Persuna cuts in after this much uninterrupted talking. */
 export const LONG_TURN_MS = 25_000;
@@ -723,7 +738,17 @@ export type UtteranceEnd = "pause" | "long" | "persuna";
  */
 export async function startConversation(handlers: {
   onLevel: (level: number) => void;
-  onUtterance: (audio: Blob, end: UtteranceEnd, words: Promise<string | null> | null) => void;
+  /**
+   * An utterance, with when the speech itself ended: the last loud moment for
+   * a pause (detection lags it by the hush), now when Persuna cut in. Turn
+   * timing counts from there, not from when the pause was noticed.
+   */
+  onUtterance: (
+    audio: Blob,
+    end: UtteranceEnd,
+    words: Promise<string | null> | null,
+    speechEnd: number,
+  ) => void;
   /** What's been understood so far, as you talk. */
   onWords?: (soFar: string) => void;
   /** Persuna is speaking. */
@@ -746,6 +771,8 @@ export async function startConversation(handlers: {
   let chunks: Blob[] = [];
   let speechStart = 0;
   let lastLoud = 0;
+  /** What's been understood so far this utterance, for ending it early. */
+  let soFar = "";
   /** Recent moments while Persuna speaks: [time, were you louder than it]. */
   let recent: [number, boolean][] = [];
   let bargeUntil = 0;
@@ -753,10 +780,14 @@ export async function startConversation(handlers: {
 
   const begin = () => {
     chunks = [];
+    soFar = "";
     recorder = new MediaRecorder(stream);
     recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
     recorder.start(200);
-    hearing = startLiveHearing(stream, (soFar) => handlers.onWords?.(soFar));
+    hearing = startLiveHearing(stream, (text) => {
+      soFar = text;
+      handlers.onWords?.(text);
+    });
     speechStart = performance.now();
     lastLoud = speechStart;
   };
@@ -769,9 +800,15 @@ export async function startConversation(handlers: {
     hearing = null;
     const words = spoke && !stopped ? (live?.finish() ?? null) : null;
     if (!words) live?.cancel();
+    const speechEnd = why === "pause" ? lastLoud : performance.now();
     rec.onstop = () => {
       if (!stopped && spoke && chunks.length) {
-        handlers.onUtterance(new Blob(chunks, { type: rec.mimeType || "audio/webm" }), why, words);
+        handlers.onUtterance(
+          new Blob(chunks, { type: rec.mimeType || "audio/webm" }),
+          why,
+          words,
+          speechEnd,
+        );
       }
     };
     rec.stop();
@@ -809,7 +846,9 @@ export async function startConversation(handlers: {
       if (!recorder) begin();
     }
     if (!recorder) return;
-    if (now - lastLoud > SILENCE_MS) end("pause");
+    const hush = now - lastLoud;
+    if (hush > SILENCE_MS) end("pause");
+    else if (hush > EARLY_SILENCE_MS && utteranceComplete(soFar)) end("pause");
     else if (now - speechStart > LONG_TURN_MS) end("long");
   }, 33);
 

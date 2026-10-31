@@ -73,6 +73,7 @@ export async function POST(request: Request) {
   }
 
   const said = form.get("said-first");
+  const turnId = form.get("client-turn");
   const turn = {
     clock: clock.data,
     actor: actorOf(user),
@@ -82,6 +83,8 @@ export async function POST(request: Request) {
     pictureHeld: form.get("picture-held") === "1",
     heardLive: form.get("heard-live") === "1",
     saidFirst: typeof said === "string" ? said.slice(0, 4000) : undefined,
+    clientTurn:
+      typeof turnId === "string" && turnId.length > 0 && turnId.length <= 64 ? turnId : undefined,
   };
 
   const stream = new ReadableStream<Uint8Array>({
