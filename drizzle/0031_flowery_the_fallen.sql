@@ -1,0 +1,1 @@
+ALTER TABLE "voice_turns" ADD COLUMN "client_turn" text;

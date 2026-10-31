@@ -4,6 +4,7 @@
  * slice C's measurement reads the summaries. The clock is injectable so tests
  * use a fake and routes use real time.
  */
+import { and, eq, isNull } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 export type TurnMark = "heard" | "first-token" | "first-sentence" | "first-audio" | "end";
 
@@ -69,6 +70,7 @@ export function recordVoiceTurn(
   route: string,
   timer: TurnTimer,
   spoken: boolean,
+  clientTurn?: string | null,
 ): void {
   try {
     const s = timer.summary();
@@ -78,6 +80,7 @@ export function recordVoiceTurn(
         userId,
         route,
         spoken,
+        clientTurn: clientTurn ?? null,
         heardMs: s.heardMs,
         firstTokenMs: s.firstTokenMs,
         firstSentenceMs: s.firstSentenceMs,
@@ -87,5 +90,35 @@ export function recordVoiceTurn(
       .catch((error) => console.error("voice-turn not recorded:", error));
   } catch (error) {
     console.error("voice-turn not recorded:", error);
+  }
+}
+
+/**
+ * The client's first-sound report, joined to its turn by the client's own id.
+ * Only the turn's owner, only once, and only a sane duration counts — a stray
+ * or replayed report is ignored, never an error. Resolves true when a row took it.
+ */
+export async function reportFirstAudio(
+  userId: string,
+  clientTurn: string,
+  ms: number,
+): Promise<boolean> {
+  if (!clientTurn || !Number.isFinite(ms) || ms < 0 || ms > 10 * 60_000) return false;
+  try {
+    const done = await db()
+      .update(schema.voiceTurns)
+      .set({ firstAudioMs: Math.round(ms * 10) / 10 })
+      .where(
+        and(
+          eq(schema.voiceTurns.userId, userId),
+          eq(schema.voiceTurns.clientTurn, clientTurn),
+          isNull(schema.voiceTurns.firstAudioMs),
+        ),
+      )
+      .returning({ id: schema.voiceTurns.id });
+    return done.length > 0;
+  } catch (error) {
+    console.error("first-audio not recorded:", error);
+    return false;
   }
 }

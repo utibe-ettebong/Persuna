@@ -651,6 +651,8 @@ export const voiceTurns = pgTable(
       .references(() => authUsers.id, { onDelete: "cascade" }),
     route: text("route").notNull(),
     spoken: boolean("spoken").notNull().default(false),
+    /** The client's own id for this turn, so its first-sound report joins this row. */
+    clientTurn: text("client_turn"),
     heardMs: real("heard_ms"),
     firstTokenMs: real("first_token_ms"),
     firstSentenceMs: real("first_sentence_ms"),
