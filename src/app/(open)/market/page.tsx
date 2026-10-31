@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { RatingLine, VerifiedBadge } from "@/components/market";
+import { CompositeLine, RatingLine, VerifiedBadge } from "@/components/market";
 import { PersunaOrb } from "@/components/persuna/orb";
 import { Badge, buttonClass, Card, inputClass, PageHeader } from "@/components/ui";
 import { isFiltered, parseBrowseQuery, SORTS, TURNAROUNDS } from "@/lib/market/browse";
@@ -164,6 +164,7 @@ export default async function MarketPage({ searchParams }: Params) {
                     {r.listing.description}
                   </p>
                   <VerifiedBadge verification={r.verification} verified={r.verified} compact />
+                  <CompositeLine composite={r.composite} />
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
                     <RatingLine average={r.ratings.average} count={r.ratings.count} />
                     <span>

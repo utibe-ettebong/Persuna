@@ -58,14 +58,45 @@ export function parseCatalogEntryForm(input: unknown): {
   role: CatalogRole;
   label: string;
   model: string;
+  provider: string | null;
+  baseUrl: string | null;
+  voice: string | null;
+  reasoningEffort: string | null;
 } {
-  return z
+  const emptyToNull = (max: number, message: string) =>
+    z
+      .string()
+      .trim()
+      .max(max, message)
+      .transform((value) => (value === "" ? null : value));
+  const parsed = z
     .object({
       role: roleField,
       label: z.string().trim().min(2, "Name the entry.").max(60),
       model: z.string().trim().min(1, "Give the provider model id.").max(120),
+      provider: emptyToNull(40, "Unknown provider.").optional(),
+      baseUrl: emptyToNull(300, "That URL is too long.").optional(),
+      voice: emptyToNull(120, "That voice id is too long.").optional(),
+      reasoningEffort: z.enum(["none", "minimal", "low", "medium", "high", "max", ""]).optional(),
     })
     .parse(input);
+  if (parsed.baseUrl) {
+    try {
+      const url = new URL(parsed.baseUrl);
+      if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("url");
+    } catch {
+      throw new Error("The base URL must be an http(s) URL.");
+    }
+  }
+  return {
+    role: parsed.role,
+    label: parsed.label,
+    model: parsed.model,
+    provider: parsed.provider ?? null,
+    baseUrl: parsed.baseUrl ?? null,
+    voice: parsed.voice ?? null,
+    reasoningEffort: parsed.reasoningEffort || null,
+  };
 }
 
 export function parseSelectForm(input: unknown): { role: CatalogRole; entryId: string } {

@@ -183,6 +183,41 @@
       "when": 1793358429858,
       "tag": "0025_platform-models",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1793421188941,
+      "tag": "0026_dashing_wiccan",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1793435643431,
+      "tag": "0027_chief_blonde_phantom",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1793435994717,
+      "tag": "0028_slow_miss_america",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1793436393834,
+      "tag": "0029_sharp_pepper_potts",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1793436604796,
+      "tag": "0030_steady_vapor",
+      "breakpoints": true
     }
   ]
 }

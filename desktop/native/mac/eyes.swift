@@ -71,21 +71,51 @@ func frontApp(skipping skip: pid_t) -> (pid_t, String)? {
   return nil
 }
 
+struct Focus: Encodable {
+  let role: String
+  let label: String
+}
+
 struct Tree: Encodable {
   let trusted: Bool
   let app: String
   let window: String
   let items: [Item]
   var selection = ""
+  var focus: Focus? = nil
+}
+
+func focusedElement(_ app: AXUIElement) -> AXUIElement? {
+  guard let found = attr(app, kAXFocusedUIElementAttribute),
+        CFGetTypeID(found) == AXUIElementGetTypeID() else { return nil }
+  return (found as! AXUIElement)
+}
+
+func isSecure(_ el: AXUIElement) -> Bool {
+  (text(el, kAXSubroleAttribute) ?? "") == "AXSecureTextField"
+}
+
+/// The label an element shows, for the tree and the focused element alike.
+func labelOf(_ el: AXUIElement, _ role: String) -> String? {
+  text(el, kAXTitleAttribute) ?? text(el, kAXDescriptionAttribute)
+    ?? (role == "AXStaticText" || role == "AXTextField" || role == "AXTextArea" || role == "AXHeading" ? text(el, kAXValueAttribute) : nil)
+    ?? text(el, kAXPlaceholderValueAttribute) ?? text(el, kAXHelpAttribute)
 }
 
 /// The text selected in the app's focused field or page ("" when none, or it's a password field).
 func selectedText(_ app: AXUIElement) -> String {
-  guard let focused = attr(app, kAXFocusedUIElementAttribute),
-        CFGetTypeID(focused) == AXUIElementGetTypeID(),
-        (text(focused as! AXUIElement, kAXSubroleAttribute) ?? "") != "AXSecureTextField",
-        let s = attr(focused as! AXUIElement, kAXSelectedTextAttribute) as? String else { return "" }
+  guard let focused = focusedElement(app), !isSecure(focused),
+        let s = attr(focused, kAXSelectedTextAttribute) as? String else { return "" }
   return String(s.trimmingCharacters(in: .whitespacesAndNewlines).prefix(4000))
+}
+
+/// The focused element's role and label (what the user is in), unless it's a password field.
+func focusOf(_ app: AXUIElement) -> Focus? {
+  guard let focused = focusedElement(app), !isSecure(focused),
+        let raw = text(focused, kAXRoleAttribute),
+        let kind = ROLES[raw],
+        let label = labelOf(focused, raw) else { return nil }
+  return Focus(role: kind, label: label)
 }
 
 func readTree(skip: pid_t) -> Tree {
@@ -108,10 +138,7 @@ func readTree(skip: pid_t) -> Tree {
     visits += 1
     let role = text(el, kAXRoleAttribute) ?? ""
     if let kind = ROLES[role], let f = frame(el), f.width > 2, f.height > 2, f.intersects(bounds) {
-      let label = text(el, kAXTitleAttribute) ?? text(el, kAXDescriptionAttribute)
-        ?? (role == "AXStaticText" || role == "AXTextField" || role == "AXTextArea" || role == "AXHeading" ? text(el, kAXValueAttribute) : nil)
-        ?? text(el, kAXPlaceholderValueAttribute) ?? text(el, kAXHelpAttribute)
-      if let label = label {
+      if let label = labelOf(el, role) {
         let key = "\(kind)|\(label)|\(Int(f.minX))|\(Int(f.minY))"
         if !seen.contains(key) {
           seen.insert(key)
@@ -122,7 +149,7 @@ func readTree(skip: pid_t) -> Tree {
     if let kids = attr(el, kAXChildrenAttribute) as? [AXUIElement] { queue.append(contentsOf: kids.prefix(120)) }
   }
   return Tree(trusted: true, app: name, window: text(root, kAXTitleAttribute) ?? "", items: items,
-              selection: selectedText(app))
+              selection: selectedText(app), focus: focusOf(app))
 }
 
 // ---------- Text recognition ----------

@@ -55,4 +55,18 @@ while ($queue.Count -gt 0 -and $items.Count -lt 220 -and $visits -lt 3000 -and (
   while ($child -ne $null -and $n -lt 120) { $queue.Enqueue($child); $child = $walker.GetNextSibling($child); $n++ }
 }
 $proc = Get-Process -Id $root.Current.ProcessId
-[ordered]@{ trusted = $true; app = $proc.ProcessName; window = $root.Current.Name; items = $items } | ConvertTo-Json -Compress -Depth 4
+# The focused element (what the user is in), when it's in the front window.
+$focus = $null
+try {
+  $f = [System.Windows.Automation.AutomationElement]::FocusedElement
+  if ($f -ne $null -and $f.Current.ProcessId -eq $root.Current.ProcessId) {
+    $fc = $f.Current
+    $fkind = $roles[$fc.ControlType.ProgrammaticName]
+    if ($fkind -and $fc.Name) {
+      $flabel = $fc.Name.Trim()
+      if ($flabel.Length -gt 160) { $flabel = $flabel.Substring(0, 160) }
+      $focus = [ordered]@{ role = $fkind; label = $flabel }
+    }
+  }
+} catch {}
+[ordered]@{ trusted = $true; app = $proc.ProcessName; window = $root.Current.Name; items = $items; focus = $focus } | ConvertTo-Json -Compress -Depth 4

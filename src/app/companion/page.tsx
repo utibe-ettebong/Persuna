@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { CompanionMount } from "@/components/persuna/companion-mount";
 import { requireUser } from "@/lib/auth/session";
+import { buildId } from "@/lib/build-id";
 
 export const metadata: Metadata = { title: "Companion" };
 export const dynamic = "force-dynamic";
@@ -23,6 +24,7 @@ export default async function CompanionPage({ searchParams }: Props) {
         userName={user.name}
         standalone={!overlay}
         overlay={Boolean(overlay)}
+        build={buildId()}
       />
     </main>
   );

@@ -1,5 +1,6 @@
 import type { Verification } from "@/lib/market/rules";
 import { plural } from "@/lib/plural";
+import type { Composite } from "@/lib/skill/rating";
 import { Card } from "./ui";
 
 const date = (d: Date) => d.toLocaleDateString("en-GB", { dateStyle: "medium" });
@@ -28,6 +29,50 @@ export function VerifiedBadge({
       <span className="label-mono">{verified ? "✓ Persuna Verified" : "Below the minimum"}</span>
       <span className="tabular-nums">{facts}</span>
       {!compact && <span className="text-muted">verified {date(verification.verifiedAt)}</span>}
+    </span>
+  );
+}
+
+const PARTS: { key: keyof Composite; label: string; hint: string }[] = [
+  {
+    key: "replication",
+    label: "Replication",
+    hint: "Drafts held-back examples like the owner did",
+  },
+  { key: "coverage", label: "Coverage", hint: "Observed work the procedure explains" },
+  { key: "confidence", label: "Confidence", hint: "Rules confirmed by repetition" },
+  { key: "groundedness", label: "Grounded", hint: "Rules traceable to something observed" },
+  { key: "freshness", label: "Fresh", hint: "Recent work still fits the procedure" },
+  { key: "reliability", label: "Reliable", hint: "Jobs delivered without correction" },
+];
+
+const partTone = (value: number | null) =>
+  value === null
+    ? "text-faint"
+    : value >= 80
+      ? "text-good"
+      : value >= 60
+        ? "text-warn"
+        : "text-danger";
+
+/**
+ * The composite rating (plan §4.5): six parts, shown as the parts, never
+ * collapsed to one number. Unmeasured parts show as "not yet".
+ */
+export function CompositeLine({ composite }: { composite: Composite }) {
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+      {PARTS.map((part) => {
+        const value = composite[part.key];
+        return (
+          <span key={part.key} title={part.hint} className="inline-flex items-baseline gap-1">
+            <span className="label-mono text-muted">{part.label}</span>
+            <span className={`font-semibold tabular-nums ${partTone(value)}`}>
+              {value === null ? "not yet" : value.toFixed(0)}
+            </span>
+          </span>
+        );
+      })}
     </span>
   );
 }

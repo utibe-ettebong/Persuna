@@ -90,6 +90,7 @@ function SiteFooter() {
         ["The human approves", "/#trust"],
         ["Method, not material", "/#safeguards"],
         ["FAQ", "/#faq"],
+        ["Privacy", "/privacy"],
       ],
     },
   ];

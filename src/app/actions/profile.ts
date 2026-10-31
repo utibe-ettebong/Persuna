@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { attempt, uuidField, type ActionState } from "@/lib/action-state";
+import { deleteUserData } from "@/lib/account/service";
 import { actorOf, requireUser } from "@/lib/auth/session";
 import { portfolioInput, profileInput } from "@/lib/profile/rules";
 import {
@@ -71,5 +72,14 @@ export async function portfolioOrderAction(_: ActionState, form: FormData): Prom
     else await movePortfolioItem(user.id, id, intent);
     await refresh(user.id);
     return `${PAGE}#portfolio`;
+  });
+}
+
+/** Deletes everything about the user, after they typed the confirmation. */
+export async function deleteAccountAction(_: ActionState, form: FormData): Promise<ActionState> {
+  return attempt(async () => {
+    const user = await requireUser();
+    await deleteUserData(user.id, text(form, "confirmation"));
+    return "/";
   });
 }

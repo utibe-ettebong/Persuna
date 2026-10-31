@@ -11,9 +11,11 @@ import { ProbeForm } from "@/components/admin/probe-form";
 import { Badge, Card, inputClass, PageHeader } from "@/components/ui";
 import { modelConfig, modelProvider, speechConfig, transcriptionConfig } from "@/env";
 import type { ModelRole } from "@/env";
+import { outageStatus } from "@/lib/models/gateway";
 import {
   catalogRoles,
   listCatalog,
+  providerPresets,
   type CatalogEntry,
   type CatalogRole,
 } from "@/lib/models/selection";
@@ -41,6 +43,39 @@ function envModel(role: CatalogRole): string | null {
   }
 }
 
+/** Which providers are being skipped right now (outages and rejected keys). */
+function OutageLine() {
+  const skipped = outageStatus();
+  if (skipped.length === 0) {
+    return (
+      <Card className="p-5">
+        <p className="text-sm text-muted">
+          <Badge tone="good">All providers answering</Badge> No outage or rejected-key cooldowns are
+          skipping anyone.
+        </p>
+      </Card>
+    );
+  }
+  return (
+    <Card className="border-warn/50 p-5">
+      <p className="text-sm">
+        <Badge tone="warn">Skipping {skipped.length}</Badge>{" "}
+        <span className="text-muted">
+          {skipped
+            .map(
+              (entry) =>
+                `${entry.target} (${entry.kind === "outage" ? "outage" : "key rejected"}, retry in ${entry.retryInSec}s)`,
+            )
+            .join(" · ")}
+        </span>
+      </p>
+    </Card>
+  );
+}
+
+const EFFORTS = ["none", "minimal", "low", "medium", "high", "max"] as const;
+const REASONED: CatalogRole[] = ["extract", "draft", "evaluate", "listen"];
+
 /** Which model serves each role, selectable from the catalog. Admins only. */
 export default async function AdminModelsPage() {
   const entries = await listCatalog();
@@ -56,7 +91,7 @@ export default async function AdminModelsPage() {
       <PageHeader
         back={{ href: "/admin", label: "Admin" }}
         title="Models"
-        description="Which model id serves each role. Selections override env and take effect at once; reverting returns to env. Only the model id is overridden — base URLs and keys keep their existing rules, and keys are never stored here."
+        description="Which provider and model id serves each role. Selections override env and take effect at once; reverting returns to env. Providers are the key slots set in Railway; keys are never shown or stored here."
       />
       {mock && (
         <Card className="border-warn/50 p-5">
@@ -66,10 +101,14 @@ export default async function AdminModelsPage() {
           </p>
         </Card>
       )}
+      <OutageLine />
       {ROLES.map(({ id, name, use }) => {
         const roleEntries = byRole.get(id) ?? [];
         const selected = roleEntries.find((e) => e.selected && e.enabled);
         const fallback = envModel(id);
+        const presets = providerPresets(id);
+        const presetLabel = (provider: string | null) =>
+          provider ? (presets.find((preset) => preset.id === provider)?.label ?? provider) : null;
         return (
           <Card key={id} className="space-y-4 p-5">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -110,6 +149,13 @@ export default async function AdminModelsPage() {
                   >
                     <span className="font-medium">{entry.label}</span>
                     <span className="break-all font-mono text-xs text-muted">{entry.model}</span>
+                    {presetLabel(entry.provider) && (
+                      <span className="text-xs text-muted">{presetLabel(entry.provider)}</span>
+                    )}
+                    {entry.voice && <span className="text-xs text-muted">voice {entry.voice}</span>}
+                    {entry.reasoningEffort && (
+                      <span className="text-xs text-muted">{entry.reasoningEffort} thinking</span>
+                    )}
                     {entry.selected && entry.enabled ? (
                       <Badge tone="accent">Selected</Badge>
                     ) : entry.enabled ? null : (
@@ -176,6 +222,53 @@ export default async function AdminModelsPage() {
                   className={inputClass}
                   aria-label={`Model id for a new ${name} model`}
                 />
+                {presets.length > 0 && (
+                  <select
+                    name="provider"
+                    defaultValue=""
+                    className={inputClass}
+                    aria-label={`Provider for a new ${name} model`}
+                  >
+                    <option value="">Provider: env default</option>
+                    {presets.map((preset) => (
+                      <option key={preset.id} value={preset.id}>
+                        {preset.label}
+                        {preset.baseUrl ? ` (${preset.baseUrl})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <input
+                  name="baseUrl"
+                  placeholder="Base URL override (optional)"
+                  maxLength={300}
+                  className={inputClass}
+                  aria-label={`Base URL override for a new ${name} model`}
+                />
+                {id === "speech" && (
+                  <input
+                    name="voice"
+                    placeholder="Voice id (optional)"
+                    maxLength={120}
+                    className={inputClass}
+                    aria-label="Voice id for a new voice model"
+                  />
+                )}
+                {REASONED.includes(id) && (
+                  <select
+                    name="reasoningEffort"
+                    defaultValue=""
+                    className={inputClass}
+                    aria-label={`Reasoning level for a new ${name} model`}
+                  >
+                    <option value="">Thinking: env default</option>
+                    {EFFORTS.map((effort) => (
+                      <option key={effort} value={effort}>
+                        {effort}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
             </ActionForm>
             <p className="text-xs text-faint">

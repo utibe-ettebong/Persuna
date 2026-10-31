@@ -1,5 +1,6 @@
 "use server";
 
+import { audit } from "@/lib/audit";
 import { revalidatePath } from "next/cache";
 import { unstable_rethrow } from "next/navigation";
 import { z } from "zod";
@@ -10,6 +11,7 @@ import { actorOf, requireUser } from "@/lib/auth/session";
 import { createModelClient, createTranscriber } from "@/lib/models";
 import { ModelError } from "@/lib/models/gateway";
 import { sceneSchema } from "@/lib/persuna/scene";
+import type { TurnMode } from "@/lib/persuna/screen-mode";
 import {
   FRAME_TYPES,
   MAX_FRAME_CHARS,
@@ -24,7 +26,19 @@ import { takeTurns } from "@/lib/persuna/voice-agent";
 import { PROVIDER_IDS } from "@/lib/connections/providers";
 import { disconnect } from "@/lib/connections/service";
 import { connectMcpServer, disconnectMcpServer, refreshMcpTools } from "@/lib/mcp/service";
-import { confirmMcpFromChat } from "@/lib/persuna/service";
+import {
+  approveOperateFromChat,
+  cancelOperateFromChat,
+  confirmMcpFromChat,
+  settleOperateFromChat,
+} from "@/lib/persuna/service";
+import { operateOutcome } from "@/lib/operate/service";
+import {
+  appendEpisodeEvents,
+  appendEpisodeFrame,
+  episodeEventsField,
+  finalizeEpisode,
+} from "@/lib/skill/learn";
 import {
   AVATARS,
   addExampleFromChat,
@@ -133,6 +147,12 @@ export async function persunaWorkAction(
   return run(async () => {
     const user = await requireUser();
     const look = workField.parse(input);
+    await audit({
+      actor: actorOf(user),
+      action: "screen.read",
+      entityType: "screen_read",
+      details: { mode: "work", app: look.scene.app ?? null, circled: false, route: "work" },
+    });
     return workLook(createModelClient(user), user.id, {
       clock: clockField.parse(clock),
       scene: look.scene,
@@ -364,16 +384,63 @@ export async function persunaTranscribeAction(form: FormData) {
   });
 }
 
-export async function persunaObserveAction(frame: string, noteId: string | null) {
+export async function persunaObserveAction(frame: string, noteId: string | null, mode: TurnMode) {
   return run(async () => {
     const user = await requireUser();
     if (!FRAME_TYPES.test(frame) || frame.length > MAX_FRAME_CHARS) {
       throw new Error("That screen frame couldn't be read");
     }
+    await audit({
+      actor: actorOf(user),
+      action: "screen.read",
+      entityType: "screen_read",
+      details: { mode, app: null, circled: false, route: "observe" },
+    });
     return observe(createModelClient(user), user.id, {
       frame,
       noteId: noteId ? uuidField.parse(noteId) : null,
+      mode,
     });
+  });
+}
+
+/**
+ * One Learn batch from the desktop stream: observed actions, plus a screenshot
+ * when the step changed. Role, action and time only — never values.
+ */
+export async function persunaEpisodeBatchAction(
+  episodeId: string,
+  events: z.input<typeof episodeEventsField>,
+  frame: { image: string; at: string } | null,
+) {
+  return run(async () => {
+    const user = await requireUser();
+    const id = uuidField.parse(episodeId);
+    const parsed = episodeEventsField.parse(events);
+    await appendEpisodeEvents(user.id, id, parsed);
+    if (frame) {
+      await appendEpisodeFrame(user.id, id, frame.image, new Date(frame.at));
+    }
+    return { received: parsed.length, framed: Boolean(frame) };
+  });
+}
+
+/**
+ * Recording stopped: what was said while doing it goes with the episode, and
+ * the episode is learned from (steps merge, rules proposed, frames deleted).
+ */
+export async function persunaEpisodeFinalizeAction(episodeId: string, narration: string) {
+  return run(async () => {
+    const user = await requireUser();
+    const id = uuidField.parse(episodeId);
+    const { proposalId, steps, newSteps } = await finalizeEpisode(
+      createModelClient(user),
+      user.id,
+      actorOf(user),
+      id,
+      narration,
+    );
+    return { proposalId, steps, newSteps };
   });
 }
 
@@ -497,6 +564,43 @@ export async function persunaMcpConfirmAction(token: string) {
   return run(async () => {
     const user = await requireUser();
     return confirmMcpFromChat(user.id, z.string().min(10).max(20_000).parse(token), actorOf(user));
+  });
+}
+
+/** The user OK'd a proposed desktop action in Work mode: the desktop may run it. */
+export async function persunaOperateApproveAction(token: string) {
+  return run(async () => {
+    const user = await requireUser();
+    return approveOperateFromChat(
+      user.id,
+      z.string().min(10).max(20_000).parse(token),
+      actorOf(user),
+    );
+  });
+}
+
+/** The desktop finished an approved action (or the user took over). */
+export async function persunaOperateSettleAction(execToken: string, outcome: unknown) {
+  return run(async () => {
+    const user = await requireUser();
+    return settleOperateFromChat(
+      user.id,
+      z.string().min(10).max(20_000).parse(execToken),
+      operateOutcome.parse(outcome),
+      actorOf(user),
+    );
+  });
+}
+
+/** The stop word: nothing further runs for this action. */
+export async function persunaOperateCancelAction(token: string) {
+  return run(async () => {
+    const user = await requireUser();
+    return cancelOperateFromChat(
+      user.id,
+      z.string().min(10).max(20_000).parse(token),
+      actorOf(user),
+    );
   });
 }
 

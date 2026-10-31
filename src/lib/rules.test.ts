@@ -150,6 +150,33 @@ describe("listingRequirements", () => {
     expect(() => assertListable("Acme")).toThrow(confidentialListingMessage("Acme"));
     expect(() => assertListable(null)).not.toThrow();
   });
+
+  it("gates unobserved branches and unconfirmed rules, and passes what's unmeasured", () => {
+    const base = {
+      hasPublishedVersion: true,
+      publishedScore: 85,
+      ownershipDeclared: true,
+      minScore: 80,
+      minCoverage: 80,
+      minConfidence: 80,
+    };
+    // Nothing learned yet: both pass, so pre-Phase-3 skills keep listing.
+    expect(listingRequirements(base).every((r) => r.met)).toBe(true);
+    // An unobserved branch pulls coverage below the minimum: blocked.
+    expect(
+      listingRequirements({ ...base, coverage: 50 }).find((r) => r.key === "coverage")?.met,
+    ).toBe(false);
+    // Covered work and confirmed rules: listed.
+    expect(
+      listingRequirements({ ...base, coverage: 90, confidence: 100 }).every((r) => r.met),
+    ).toBe(true);
+    // Rules still single-sourced: blocked.
+    expect(
+      listingRequirements({ ...base, coverage: 90, confidence: 40 }).find(
+        (r) => r.key === "confidence",
+      )?.met,
+    ).toBe(false);
+  });
 });
 
 describe("markdownToDocx", () => {

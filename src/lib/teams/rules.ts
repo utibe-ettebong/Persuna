@@ -194,3 +194,15 @@ export function withoutConfidential<T>(
     return !id || !confidential.has(id);
   });
 }
+
+/**
+ * The team's shared skills: members' skills marked visible to the team, except
+ * ones attached to a role (those are company know-how, shown as Confidential
+ * instead). Sharing never makes a skill confidential or unlistable.
+ */
+export function sharedTeamSkills<T extends { id: string; teamVisible: boolean }>(
+  memberSkills: T[],
+  attachedSkillIds: ReadonlySet<string>,
+): T[] {
+  return memberSkills.filter((skill) => skill.teamVisible && !attachedSkillIds.has(skill.id));
+}

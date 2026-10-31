@@ -33,6 +33,7 @@ import {
   looksLikeToken,
   newInviteToken,
   publicSkillName,
+  sharedTeamSkills,
   withoutConfidential,
   type Membership,
 } from "./rules";
@@ -158,6 +159,18 @@ describe("confidentiality", () => {
   it("never names a confidential skill in public", () => {
     expect(publicSkillName("Brand reviews", true)).toBeNull();
     expect(publicSkillName("Brand reviews", false)).toBe("Brand reviews");
+  });
+
+  it("shares team-visible skills, except ones attached to a role", () => {
+    const memberSkills = [
+      { id: "s1", teamVisible: true },
+      { id: "s2", teamVisible: false },
+      { id: "s3", teamVisible: true },
+    ];
+    expect(sharedTeamSkills(memberSkills, new Set(["s3"]))).toEqual([
+      { id: "s1", teamVisible: true },
+    ]);
+    expect(sharedTeamSkills(memberSkills, new Set())).toHaveLength(2);
   });
 });
 

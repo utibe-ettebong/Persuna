@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { CompositeLine } from "@/components/market";
 import { PersunaOrb } from "@/components/persuna/orb";
 import { ScoreBadge } from "@/components/score-trend";
 import { Badge, Card } from "@/components/ui";
@@ -203,6 +204,7 @@ export default async function PublicProfilePage({ params }: Params) {
                   </div>
                   <p className="font-display text-xl font-medium tracking-[-0.02em]">{s.title}</p>
                   <p className="line-clamp-3 flex-1 text-sm text-muted">{s.description}</p>
+                  <CompositeLine composite={s.composite} />
                   <div className="flex items-end justify-between border-t border-line pt-3">
                     <span>
                       <span className="label-mono block text-faint">Per task</span>

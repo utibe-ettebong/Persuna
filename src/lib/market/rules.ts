@@ -20,7 +20,8 @@ export function splitPayment(amountCents: number, feePercent: number, employerPe
 }
 
 export interface ListingRequirement {
-  key: "confidential" | "published" | "score" | "ownership" | "employer";
+  key:
+    "confidential" | "published" | "score" | "coverage" | "confidence" | "ownership" | "employer";
   label: string;
   met: boolean;
 }
@@ -48,6 +49,12 @@ export function listingRequirements(input: {
   employerApproved?: boolean;
   /** The organisation the skill is confidential to, when it's part of a company role. */
   confidentialTo?: string | null;
+  /** Composite coverage (null when nothing was observed yet): gates unobserved branches. */
+  coverage?: number | null;
+  minCoverage?: number;
+  /** Composite confidence (null when there are no rules yet). */
+  confidence?: number | null;
+  minConfidence?: number;
 }): ListingRequirement[] {
   const confidential: ListingRequirement[] = input.confidentialTo
     ? [
@@ -80,6 +87,26 @@ export function listingRequirements(input: {
       key: "score",
       label: `Published version scores at least ${input.minScore} on held-back examples`,
       met: input.publishedScore !== null && input.publishedScore >= input.minScore,
+    },
+    {
+      key: "coverage",
+      label:
+        input.coverage == null
+          ? "Observed work stays covered (nothing observed yet)"
+          : `Observed work stays covered, every branch seen (at least ${input.minCoverage ?? 0})`,
+      met:
+        input.coverage == null ||
+        (input.minCoverage != null && input.coverage >= input.minCoverage),
+    },
+    {
+      key: "confidence",
+      label:
+        input.confidence == null
+          ? "Rules confirmed by repetition (no rules yet)"
+          : `Rules confirmed by repetition (at least ${input.minConfidence ?? 0})`,
+      met:
+        input.confidence == null ||
+        (input.minConfidence != null && input.confidence >= input.minConfidence),
     },
     {
       key: "ownership",

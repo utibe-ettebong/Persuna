@@ -111,9 +111,46 @@ export const THINKING_ROOM_FACTOR = 3;
 export const MAX_TOKENS_CAP = 16_384;
 const MAX_ATTEMPTS = 3;
 
+/**
+ * After a provider answers "model not found" for every model, calls that have a
+ * backup go straight to it for this long instead of failing through each retry.
+ */
+export const MODEL_OUTAGE_COOLDOWN_MS = 2 * 60_000;
+/** Provider base URL to when its outage is next worth retrying. */
+const outages = new Map<string, number>();
+
 /** A role whose key was rejected is sent to the EXTRACT model for this long. */
 export const REJECTED_KEY_COOLDOWN_MS = 10 * 60_000;
 const rejected = new Map<string, number>();
+
+export interface OutageEntry {
+  kind: "outage" | "rejected-key";
+  /** The base URL being skipped, or role:URL for a rejected key. */
+  target: string;
+  retryInSec: number;
+}
+
+/** Providers being skipped right now, for the Admin status line. */
+export function outageStatus(now: number = Date.now()): OutageEntry[] {
+  const skipped: OutageEntry[] = [];
+  for (const [baseUrl, until] of outages) {
+    if (until > now)
+      skipped.push({
+        kind: "outage",
+        target: baseUrl,
+        retryInSec: Math.ceil((until - now) / 1000),
+      });
+  }
+  for (const [key, until] of rejected) {
+    if (until > now)
+      skipped.push({
+        kind: "rejected-key",
+        target: key,
+        retryInSec: Math.ceil((until - now) / 1000),
+      });
+  }
+  return skipped;
+}
 
 /**
  * OpenAI-compatible chat-completions client, configured per role from env.
@@ -136,29 +173,27 @@ export function createGateway(
       if (different && (rejected.get(key) ?? 0) > Date.now()) {
         return callOnce(fallback, role, messages, options, fetchImpl);
       }
+      const backup = async () => {
+        if (role === "draft" || hasAudio(messages)) return null;
+        const config = await resolve("draft");
+        return config.baseUrl === own.baseUrl ? null : { ...config, reasoningEffort: undefined };
+      };
+      if ((outages.get(own.baseUrl) ?? 0) > Date.now()) {
+        const standIn = await backup();
+        if (standIn) return callOnce(standIn, role, messages, options, fetchImpl);
+      }
       try {
         return await callOnce(own, role, messages, options, fetchImpl);
       } catch (error) {
         // Meta's API sometimes answers "model not found" for every model for a few
         // minutes. Calls that don't carry audio go to the DRAFT provider meanwhile.
-        const backup = role === "draft" ? null : await resolve("draft");
-        if (
-          error instanceof ModelError &&
-          error.modelMissing &&
-          backup &&
-          backup.baseUrl !== own.baseUrl &&
-          !hasAudio(messages)
-        ) {
+        const standIn = error instanceof ModelError && error.modelMissing ? await backup() : null;
+        if (standIn) {
           console.warn(
             `[models] ${own.baseUrl} has no model right now; using DRAFT_* for this ${role} call.`,
           );
-          return callOnce(
-            { ...backup, reasoningEffort: undefined },
-            role,
-            messages,
-            options,
-            fetchImpl,
-          );
+          outages.set(own.baseUrl, Date.now() + MODEL_OUTAGE_COOLDOWN_MS);
+          return callOnce(standIn, role, messages, options, fetchImpl);
         }
         if (!(error instanceof ModelError) || !error.keyRejected || !different) throw error;
         console.warn(
@@ -186,27 +221,28 @@ export function createGateway(
         yield* streamOnce(fallback, role, messages, options, fetchImpl);
         return;
       }
+      const backup = async () => {
+        if (role === "draft" || hasAudio(messages)) return null;
+        const config = await resolve("draft");
+        return config.baseUrl === own.baseUrl ? null : { ...config, reasoningEffort: undefined };
+      };
+      if ((outages.get(own.baseUrl) ?? 0) > Date.now()) {
+        const standIn = await backup();
+        if (standIn) {
+          yield* streamOnce(standIn, role, messages, options, fetchImpl);
+          return;
+        }
+      }
       try {
         yield* streamOnce(own, role, messages, options, fetchImpl);
       } catch (error) {
-        const backup = role === "draft" ? null : await resolve("draft");
-        if (
-          error instanceof ModelError &&
-          error.modelMissing &&
-          backup &&
-          backup.baseUrl !== own.baseUrl &&
-          !hasAudio(messages)
-        ) {
+        const standIn = error instanceof ModelError && error.modelMissing ? await backup() : null;
+        if (standIn) {
           console.warn(
             `[models] ${own.baseUrl} has no model right now; using DRAFT_* for this ${role} call.`,
           );
-          yield* streamOnce(
-            { ...backup, reasoningEffort: undefined },
-            role,
-            messages,
-            options,
-            fetchImpl,
-          );
+          outages.set(own.baseUrl, Date.now() + MODEL_OUTAGE_COOLDOWN_MS);
+          yield* streamOnce(standIn, role, messages, options, fetchImpl);
           return;
         }
         if (!(error instanceof ModelError) || !error.keyRejected || !different) throw error;

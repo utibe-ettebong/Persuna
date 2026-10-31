@@ -80,7 +80,7 @@ export default async function TeamPage({ searchParams }: Props) {
     );
   }
 
-  const { org, admin, myRole, roles, people, onboardings, mySkills, attachable } = current;
+  const { org, admin, myRole, roles, people, onboardings, mySkills, attachable, shared } = current;
   const back = `/team?org=${org.slug}`;
   const active = onboardings.filter((o) => o.status === "active");
   const finished = onboardings.filter((o) => o.status === "completed");
@@ -266,6 +266,29 @@ export default async function TeamPage({ searchParams }: Props) {
           <div className="mt-4">
             <ConfidentialNote />
           </div>
+        </Card>
+      )}
+
+      {shared.length > 0 && (
+        <Card className="p-5">
+          <PanelTitle>Shared by the team</PanelTitle>
+          <p className="mb-3 text-sm text-muted">
+            Teammates&apos; skills they&apos;ve shared. Shared skills stay theirs — still listable,
+            never confidential.
+          </p>
+          <ul className="divide-y divide-line">
+            {shared.map((s) => (
+              <li key={s.id} className="flex items-center justify-between gap-3 py-2">
+                <span className="text-sm">
+                  <Link href={`/skills/${s.slug}`} className="hover:underline">
+                    {s.name}
+                  </Link>{" "}
+                  <span className="text-muted">by {s.mine ? "you" : s.owner}</span>
+                </span>
+                {s.mine && <Badge>Yours</Badge>}
+              </li>
+            ))}
+          </ul>
         </Card>
       )}
 

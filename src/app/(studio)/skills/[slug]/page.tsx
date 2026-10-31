@@ -4,11 +4,15 @@ import {
   extractAction,
   makeCurrentAction,
   publishAction,
+  removeStepAction,
   runTestsAction,
+  setTeamVisibleAction,
 } from "@/app/actions/skills";
 import { ActionForm } from "@/components/action-form";
+import { CompositeLine } from "@/components/market";
 import { ScoreBadge, ScoreTrend } from "@/components/score-trend";
 import { Badge, Card, PageHeader, SkillTabs } from "@/components/ui";
+import { getUser } from "@/lib/auth/session";
 import { orNotFound } from "@/lib/load";
 import { plural } from "@/lib/plural";
 import { getSkillOverview } from "@/lib/skill/service";
@@ -28,9 +32,41 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
   return { title: skill.name };
 }
 
+/** The owner's team switch: teammates see the skill, but it stays theirs. */
+async function TeamCard({
+  skill,
+}: {
+  skill: { id: string; slug: string; ownerId: string | null; teamVisible: boolean };
+}) {
+  const user = await getUser();
+  if (!user || skill.ownerId !== user.id) return null;
+  return (
+    <div>
+      <h2 className="mb-3 font-display text-lg font-medium tracking-[-0.02em]">Team</h2>
+      <Card>
+        <p className="text-sm text-muted">
+          {skill.teamVisible
+            ? "Your team can see this skill. It stays yours: still listable, never confidential."
+            : "Only you can see this skill. Sharing it never makes it confidential or unlistable."}
+        </p>
+        <ActionForm
+          action={setTeamVisibleAction}
+          label={skill.teamVisible ? "Hide from team" : "Share with team"}
+          pendingLabel="Saving…"
+          variant="secondary"
+        >
+          <input type="hidden" name="slug" value={skill.slug} />
+          <input type="hidden" name="intent" value={skill.teamVisible ? "hide" : "show"} />
+        </ActionForm>
+      </Card>
+    </div>
+  );
+}
+
 export default async function SkillPage({ params, searchParams }: Params) {
   const { sample } = await searchParams;
-  const { skill, versions, counts, corrections } = await load((await params).slug);
+  const { skill, versions, counts, corrections, steps, episodes, evidence, fitness, composite } =
+    await load((await params).slug);
   const current = versions.find((v) => v.id === skill.currentVersionId) ?? null;
   const published = versions.find((v) => v.id === skill.publishedVersionId) ?? null;
   const pending = corrections.filter((c) => c.status === "pending");
@@ -40,6 +76,7 @@ export default async function SkillPage({ params, searchParams }: Params) {
     .map((v) => ({ label: `v${v.version}`, score: v.latestRun!.meanScore! }));
   const canTest = counts.train > 0 && counts.test > 0;
   const publishedScore = published?.latestRun?.meanScore ?? null;
+  const tested = versions.some((v) => v.latestRun?.status === "complete");
 
   return (
     <div className="space-y-8">
@@ -55,6 +92,9 @@ export default async function SkillPage({ params, searchParams }: Params) {
               <span className="text-good">v{published.version} published</span>
             ) : (
               "not published yet"
+            )}{" "}
+            {skill.importSource && !tested && (
+              <Badge tone="warn">Imported — test it to verify</Badge>
             )}
           </>
         }
@@ -152,7 +192,15 @@ export default async function SkillPage({ params, searchParams }: Params) {
                       {rules.map((r) => (
                         <li key={r.id} className="flex gap-3">
                           <span className="w-8 shrink-0 font-mono text-xs text-muted">{r.id}</span>
-                          <span>{r.text}</span>
+                          <span className="flex-1">{r.text}</span>
+                          {(evidence[r.id] ?? 0) > 0 && (
+                            <span
+                              className="shrink-0 font-mono text-xs text-muted"
+                              title={`${evidence[r.id]} independent ${evidence[r.id] === 1 ? "source" : "sources"}`}
+                            >
+                              ×{evidence[r.id]}
+                            </span>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -181,6 +229,15 @@ export default async function SkillPage({ params, searchParams }: Params) {
             </h2>
             <ScoreTrend points={trend} />
           </div>
+          <div>
+            <h2 className="mb-3 font-display text-lg font-medium tracking-[-0.02em]">
+              Composite rating
+            </h2>
+            <Card>
+              <CompositeLine composite={composite} />
+            </Card>
+          </div>
+          <TeamCard skill={skill} />
           <div>
             <h2 className="mb-3 font-display text-lg font-medium tracking-[-0.02em]">Versions</h2>
             <Card>
@@ -253,6 +310,99 @@ export default async function SkillPage({ params, searchParams }: Params) {
           </div>
         </aside>
       </section>
+
+      {(steps.length > 0 || episodes.length > 0) && (
+        <section aria-labelledby="procedure-heading">
+          <h2
+            id="procedure-heading"
+            className="mb-1 font-display text-lg font-medium tracking-[-0.02em]"
+          >
+            Procedure
+          </h2>
+          <p className="mb-3 text-sm text-muted">
+            The steps Persuna watched you do
+            {fitness !== null && (
+              <> — the latest episode fits at {Math.round(fitness * 100)}% (90% to trust it)</>
+            )}
+            . Say “learn how I do this” to record another episode.
+          </p>
+          <div className="grid gap-8 lg:grid-cols-2">
+            <Card className="p-5">
+              <h3 className="label-mono text-muted">Steps</h3>
+              {steps.length === 0 ? (
+                <p className="mt-2 text-sm text-muted">None yet.</p>
+              ) : (
+                <ol className="mt-2 space-y-1.5 text-sm">
+                  {steps.map((step) => (
+                    <li key={step.id} className="group flex items-center gap-3">
+                      <span className="w-6 shrink-0 font-mono text-xs text-muted">{step.seq}</span>
+                      <span className="flex-1">
+                        {step.app && <strong>{step.app}</strong>}
+                        {step.app && " — "}
+                        {step.action}
+                        {[step.targetRole, step.targetLabel].filter(Boolean).join(" ") &&
+                          ` · ${[step.targetRole, step.targetLabel].filter(Boolean).join(" ")}`}
+                        {step.decisionKey && (
+                          <span className="text-muted">
+                            {" "}
+                            ({step.branchLabel ?? step.decisionKey})
+                          </span>
+                        )}
+                      </span>
+                      {step.evidenceCount > 1 && (
+                        <span
+                          className="shrink-0 font-mono text-xs text-muted"
+                          title={`Seen in ${step.evidenceCount} episodes`}
+                        >
+                          ×{step.evidenceCount}
+                        </span>
+                      )}
+                      <ActionForm
+                        action={removeStepAction}
+                        label="Remove"
+                        pendingLabel="…"
+                        variant="secondary"
+                      >
+                        <input type="hidden" name="slug" value={skill.slug} />
+                        <input type="hidden" name="stepId" value={step.id} />
+                      </ActionForm>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </Card>
+            <Card className="p-5">
+              <h3 className="label-mono text-muted">Episodes</h3>
+              {episodes.length === 0 ? (
+                <p className="mt-2 text-sm text-muted">None yet.</p>
+              ) : (
+                <ul className="mt-2 space-y-1.5 text-sm">
+                  {episodes.map((episode) => (
+                    <li key={episode.id} className="flex items-center gap-3">
+                      <span className="flex-1">
+                        {episode.startedAt.toLocaleDateString("en-GB", {
+                          day: "numeric",
+                          month: "short",
+                        })}{" "}
+                        {episode.startedAt.toLocaleTimeString("en-GB", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                        {episode.apps.length > 0 && (
+                          <span className="text-muted"> · {episode.apps.join(", ")}</span>
+                        )}
+                      </span>
+                      <Badge tone={episode.status === "extracted" ? "good" : "accent"}>
+                        {episode.status}
+                      </Badge>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+          </div>
+        </section>
+      )}
 
       {corrections.some((c) => c.status !== "pending") && (
         <section>

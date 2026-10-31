@@ -17,6 +17,8 @@ dotenv.config({ path: ".env.local" });
 // or OpenAI key of its own: TRIAL_ENGINE=realtime tries Gemini Live first,
 // TRIAL_ENGINE=pipeline falls back to STT-LLM-TTS on the same tools.
 const ENGINE = process.env.TRIAL_ENGINE === "pipeline" ? "pipeline" : "realtime";
+// How long Gemini waits in silence before ending your turn. Unset keeps its default.
+const SILENCE_MS = Number(process.env.TRIAL_SILENCE_MS) || null;
 
 export default defineAgent({
   entry: async (ctx: JobContext) => {
@@ -32,7 +34,20 @@ export default defineAgent({
             turnHandling: { turnDetection: new inference.TurnDetector() },
           })
         : new voice.AgentSession({
-            llm: new inference.RealtimeModel({ model: "google/gemini-3.8-live", voice: "Puck" }),
+            llm: new inference.RealtimeModel({
+              model: "google/gemini-3.8-live",
+              voice: "Puck",
+              ...(SILENCE_MS && {
+                turnDetection: {
+                  type: "server_vad" as const,
+                  threshold: 0.5,
+                  prefix_padding_ms: 200,
+                  silence_duration_ms: SILENCE_MS,
+                  create_response: true,
+                  interrupt_response: true,
+                },
+              }),
+            }),
           });
 
     await session.start({

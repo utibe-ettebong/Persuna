@@ -18,6 +18,10 @@ import { solidPng, toneWav } from "@/lib/models/probe";
 import { readAudio, transcriptionCheck } from "@/lib/models/transcribe";
 import { INTERVIEW_QUESTIONS, interviewText, type InterviewAnswers } from "@/lib/skill/interview";
 import type { Finding } from "@/lib/skill/redact";
+import { redactTogether, scanText } from "@/lib/skill/redact";
+import { parseChatExport, summarizeChats } from "@/lib/skill/chat-import";
+import { parseSkillMd } from "@/lib/skill/skill-import";
+import { findNames } from "@/lib/skill/engine";
 import {
   acceptCorrection,
   addPair,
@@ -30,6 +34,7 @@ import {
   deletePair,
   extractVersion,
   getCorrection,
+  importSkillMd,
   proposeCorrectionFromTest,
   publishVersion,
   rejectCorrection,
@@ -37,7 +42,9 @@ import {
   saveEditedSheet,
   setCurrentVersion,
   setPairSplit,
+  setTeamVisible,
 } from "@/lib/skill/service";
+import { removeSkillStep } from "@/lib/skill/learn";
 import { skillSheet } from "@/lib/skill/types";
 
 const newSkillForm = z.object({
@@ -84,6 +91,18 @@ export async function makeCurrentAction(_: ActionState, form: FormData): Promise
     const versionId = uuidField.parse(form.get("versionId"));
     const skill = await ownedSkillBySlug(await requireUser(), slug);
     await setCurrentVersion(skill.id, versionId);
+    revalidatePath(`/skills/${slug}`);
+    return `/skills/${slug}`;
+  });
+}
+
+export async function removeStepAction(_: ActionState, form: FormData): Promise<ActionState> {
+  return attempt(async () => {
+    const slug = slugField.parse(form.get("slug"));
+    const stepId = uuidField.parse(form.get("stepId"));
+    const user = await requireUser();
+    await ownedSkillBySlug(user, slug);
+    await removeSkillStep(user.id, stepId);
     revalidatePath(`/skills/${slug}`);
     return `/skills/${slug}`;
   });
@@ -303,6 +322,42 @@ export async function voiceWalkthroughAction(_: ActionState, form: FormData): Pr
   });
 }
 
+/** ChatGPT or Claude conversations.json, kept to shapes (never paste or reply contents). */
+const MAX_CHAT_EXPORT_BYTES = 5 * 1024 * 1024;
+
+/**
+ * AI chat history (layer 4): the owner shares an export, Persuna keeps the
+ * shape of their prompting plus what they corrected the AI on (redacted),
+ * then proposes rules from it — or banks it in the interview first.
+ */
+export async function chatImportAction(_: ActionState, form: FormData): Promise<ActionState> {
+  return attempt(async () => {
+    const slug = slugField.parse(form.get("slug"));
+    const user = await requireUser();
+    const skill = await ownedSkillBySlug(user, slug);
+    const file = form.get("export");
+    if (!(file instanceof File) || file.size === 0) {
+      throw new Error("Choose your conversations.json export first");
+    }
+    if (file.size > MAX_CHAT_EXPORT_BYTES) throw new Error(`${file.name} is larger than 5 MB`);
+    const { chats } = parseChatExport(await file.text());
+    if (chats.length === 0) throw new Error("No conversations were found in that export.");
+    const client = createModelClient(user);
+    const summary = summarizeChats(file.name, chats);
+    const entities = await findNames(client, [summary]);
+    const [notes] = redactTogether([summary], [scanText(summary, entities)], entities);
+    if (!skill.currentVersionId) {
+      const answers = { ...(skill.interview ?? {}) };
+      answers.tools = [answers.tools, notes].filter(Boolean).join("\n\n");
+      await saveInterview(skill.id, answers);
+      revalidatePath(`/skills/${slug}/interview`);
+      return `/skills/${slug}/interview?imported=1`;
+    }
+    const proposal = await proposeFromMethodNotes(client, skill.id, "interview", notes);
+    return `/corrections/${proposal.id}`;
+  });
+}
+
 /** One click for new users: their own copy of the sample skill, ready to extract. */
 export async function trySampleSkillAction(): Promise<ActionState> {
   return attempt(async () => {
@@ -441,5 +496,50 @@ export async function screenWalkthroughAction(
     });
     revalidatePath(`/skills/${slug}/interview`);
     return proposal ? `/corrections/${proposal.id}` : `/skills/${slug}/interview?screen=1`;
+  });
+}
+
+/** The owner shares a skill with their team, or hides it again. */
+export async function setTeamVisibleAction(_: ActionState, form: FormData): Promise<ActionState> {
+  return attempt(async () => {
+    const user = await requireUser();
+    const slug = slugField.parse(form.get("slug"));
+    const skill = await ownedSkillBySlug(user, slug);
+    const visible = z.enum(["show", "hide"]).parse(form.get("intent")) === "show";
+    await setTeamVisible(skill.id, visible, actorOf(user));
+    revalidatePath(`/skills/${slug}`);
+    return `/skills/${slug}`;
+  });
+}
+
+/** Imports another agent's skill file as a new skill, marked imported until tested. */
+export async function importSkillMdAction(_: ActionState, form: FormData): Promise<ActionState> {
+  return attempt(async () => {
+    const user = await requireUser();
+    const text = z.string().min(1, "Paste the SKILL.md file.").max(200_000).parse(form.get("text"));
+    const inputType = z
+      .string()
+      .trim()
+      .min(2, "Say what goes in.")
+      .max(120)
+      .parse(form.get("inputType"));
+    const outputType = z
+      .string()
+      .trim()
+      .min(2, "Say what comes out.")
+      .max(120)
+      .parse(form.get("outputType"));
+    const parsed = parseSkillMd(text);
+    if (!parsed.ok) throw new Error(parsed.errors.join("; "));
+    const slug = slugify(parsed.value.name);
+    if (!slug) throw new Error("Use some letters or numbers in the file's name");
+    const skill = await importSkillMd(user.id, actorOf(user), {
+      slug,
+      text,
+      inputType,
+      outputType,
+    });
+    revalidatePath("/skills");
+    return `/skills/${skill.slug}/interview`;
   });
 }

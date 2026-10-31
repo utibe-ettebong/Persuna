@@ -16,6 +16,7 @@ const state = (): PersunaState => ({
   tone: {},
   lastAsked: null,
   pendingSwitch: null,
+  workMode: false,
 });
 
 const systemOf = (voice: boolean, spoken: boolean) =>

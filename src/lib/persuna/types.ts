@@ -44,6 +44,12 @@ export const persunaAction = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("answer"), key: interviewKey, answer: z.string().trim().min(1) }),
   z.object({ type: z.literal("learn"), method: z.string().trim().min(1).max(4000) }),
+  /** Record the user doing a task (Learn mode) or stop recording ("done"). */
+  z.object({
+    type: z.literal("learn_episode"),
+    op: z.enum(["start", "stop"]),
+    skill: z.string().trim().max(80).nullish(),
+  }),
   /** A reminder ("at" in the user's local time, YYYY-MM-DDTHH:mm) or, with no time, a to-do. */
   z.object({
     type: z.literal("remind"),
@@ -71,6 +77,26 @@ export const persunaAction = z.discriminatedUnion("type", [
     server: z.string().trim().min(1).max(80),
     tool: z.string().trim().min(1).max(120),
     arguments: z.record(z.string(), z.unknown()).default({}),
+  }),
+  /**
+   * Do one thing on the Mac in Work mode: click an entry from the list of
+   * what's on screen, type text, press a key, or open an app. Nothing runs
+   * on this action alone: the app shows the user exactly what would happen
+   * and only runs it when they approve, one action per approval.
+   */
+  z.object({
+    type: z.literal("operate"),
+    kind: z.enum(["click", "type", "key", "open"]),
+    /** Click target: an entry id from the list of what's on screen (e12). */
+    item: z.string().trim().max(10).nullish(),
+    text: z.string().max(500).nullish(),
+    key: z.string().max(10).nullish(),
+    modifiers: z
+      .array(z.enum(["command", "shift", "option", "control"]))
+      .max(3)
+      .nullish(),
+    app: z.string().trim().max(60).nullish(),
+    label: z.string().trim().min(1).max(140),
   }),
   /** The user wants Persuna to start or stop watching their screen (the app asks permission). */
   z.object({ type: z.literal("watch_screen"), on: z.boolean() }),
@@ -239,6 +265,8 @@ export interface PersunaState {
   pendingSwitch: { slug: string; name: string } | null;
   /** A company onboarding they're working through, if any: role, company, next module. */
   onboarding?: OnboardingNote | null;
+  /** Work mode is on: Persuna may propose operating the Mac (with approval). */
+  workMode: boolean;
 }
 
 export interface PersunaTurn {

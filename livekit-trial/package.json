@@ -6,7 +6,9 @@
   "description": "Trial voice agent for Persuna on LiveKit Agents (not production wiring).",
   "scripts": {
     "dev": "tsx src/main.ts dev",
-    "start": "tsx src/main.ts start"
+    "start": "tsx src/main.ts start",
+    "clips": "bash clips.sh",
+    "measure": "node --import tsx/esm src/measure.ts"
   },
   "dependencies": {
     "@livekit/agents": "1.x",

@@ -47,7 +47,9 @@ export function AuthForm({
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4" aria-busy={pending}>
+    // method="post": submitted before the page has loaded, a form defaults to
+    // GET, which would put the password in the URL.
+    <form method="post" onSubmit={onSubmit} className="space-y-4" aria-busy={pending}>
       {mode === "sign-up" && (
         <Field label="Your name">
           <input

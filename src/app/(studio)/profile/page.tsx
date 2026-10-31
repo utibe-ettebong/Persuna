@@ -1,5 +1,6 @@
 import Link from "next/link";
 import {
+  deleteAccountAction,
   portfolioOrderAction,
   saveProfileAction,
   savePortfolioItemAction,
@@ -257,6 +258,42 @@ export default async function ProfilePage({ searchParams }: Props) {
           </div>
         </Card>
       </div>
+
+      <Card className="p-6">
+        <PanelTitle>Your data</PanelTitle>
+        <p className="mt-2 text-sm text-muted">
+          Everything Persuna keeps about you — profile and memory, messages and notes, skills and
+          episodes, jobs and listings — in one download. Connection tokens are never included.
+        </p>
+        <p className="mt-3">
+          <Link href="/api/account/export" className={buttonClass("secondary")}>
+            Download everything ↓
+          </Link>
+        </p>
+        <div className="mt-6 border-t border-line pt-6">
+          <p className="text-sm font-medium">Delete everything</p>
+          <p className="mt-1 text-sm text-muted">
+            Your skills, episodes, messages and account go. Sold listings and payments keep their
+            records without your words or name. This signs you out everywhere and cannot be undone.
+          </p>
+          <ActionForm
+            action={deleteAccountAction}
+            pendingLabel="Deleting…"
+            className="mt-3 space-y-3"
+            buttons={[{ label: "Delete everything", variant: "danger" }]}
+          >
+            <Field label='Type "delete everything" to confirm'>
+              <input
+                name="confirmation"
+                placeholder="delete everything"
+                autoComplete="off"
+                maxLength={40}
+                className={inputClass}
+              />
+            </Field>
+          </ActionForm>
+        </div>
+      </Card>
     </div>
   );
 }

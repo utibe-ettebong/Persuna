@@ -1,6 +1,6 @@
 {
   "name": "persuna-desktop",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "private": true,
   "description": "Persuna, your AI assistant, over your whole screen.",
   "main": "main.js",
@@ -35,6 +35,7 @@
       "hold-key.js",
       "update-info.js",
       "updater.js",
+      "operate.js",
       "package.json",
       "build/tray*.png",
       "!node_modules/uiohook-napi/prebuilds/linux-*",

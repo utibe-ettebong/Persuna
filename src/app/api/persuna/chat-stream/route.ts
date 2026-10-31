@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { clockField, sightField } from "@/lib/persuna/fields";
+import { clockField, sightField, turnModeField } from "@/lib/persuna/fields";
+import { audit } from "@/lib/audit";
 import { actorOf, getUser } from "@/lib/auth/session";
 import { createModelClient, createTranscriber } from "@/lib/models";
 import { ModelError } from "@/lib/models/gateway";
@@ -10,7 +11,7 @@ const ROUTE = "/api/persuna/chat-stream";
 
 /**
  * A turn, streamed. The message goes up as form audio or text (with the screen
- * read and clock) and Server-Sent Events come back: heard, then each sentence
+ * mode, read and clock) and Server-Sent Events come back: heard, then each sentence
  * as it's written, then done with the saved result, or error when the turn
  * fails. look-closer ends a turn early: nothing is saved, and the client sends
  * the screenshot it held back, with what was heard and said. Signed-in users only.
@@ -46,11 +47,36 @@ export async function POST(request: Request) {
   } catch {
     return new Response("That screen read couldn't be used", { status: 400 });
   }
+  // Talk mode never carries the screen: a read with it is refused, and each
+  // read that does travel is audited with the mode that allowed it.
+  const mode = turnModeField.parse(form.get("mode"));
+  if (mode === "talk" && sight) {
+    return new Response("Talk mode sends no screen", { status: 400 });
+  }
+  if (sight) {
+    try {
+      await audit({
+        actor: actorOf(user),
+        action: "screen.read",
+        entityType: "screen_read",
+        details: {
+          mode,
+          app: sight.scene?.app ?? null,
+          circled: sight.circled,
+          route: ROUTE,
+        },
+      });
+    } catch (error) {
+      console.error(error);
+      return new Response("That screen read couldn't be logged", { status: 500 });
+    }
+  }
 
   const said = form.get("said-first");
   const turn = {
     clock: clock.data,
     actor: actorOf(user),
+    mode,
     sight,
     show: form.get("show") === "1",
     pictureHeld: form.get("picture-held") === "1",

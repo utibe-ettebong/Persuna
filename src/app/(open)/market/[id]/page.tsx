@@ -3,7 +3,13 @@ import Link from "next/link";
 import { cache } from "react";
 import { rentAction } from "@/app/actions/market";
 import { ActionForm } from "@/components/action-form";
-import { FairDealPanel, RatingLine, Stars, VerifiedBadge } from "@/components/market";
+import {
+  CompositeLine,
+  FairDealPanel,
+  RatingLine,
+  Stars,
+  VerifiedBadge,
+} from "@/components/market";
 import { Markdown } from "@/components/markdown";
 import { PersunaOrb } from "@/components/persuna/orb";
 import { Badge, buttonClass, Card, Field, inputClass, PageHeader } from "@/components/ui";
@@ -53,7 +59,8 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
 
 export default async function ListingDetailPage({ params }: Params) {
   const { id } = await params;
-  const { listing, skill, verification, verified, ratings, reviews, rentals } = await load(id);
+  const { listing, skill, verification, verified, ratings, reviews, rentals, composite } =
+    await load(id);
   const user = await getUser();
   const seller = skill.ownerId ? (await persunasByOwner([skill.ownerId])).get(skill.ownerId) : null;
   const signIn = `/sign-in?next=${encodeURIComponent(`/market/${listing.id}`)}`;
@@ -83,6 +90,7 @@ export default async function ListingDetailPage({ params }: Params) {
       </div>
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-muted">
+        <CompositeLine composite={composite} />
         <RatingLine average={ratings.average} count={ratings.count} />
         <span>{plural(rentals, "paid rental")}</span>
         {seller?.handle && (

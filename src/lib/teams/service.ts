@@ -11,7 +11,7 @@
  *
  * Who may do what is decided by ./rules; every change is audited.
  */
-import { and, asc, desc, eq, isNull, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import type { Onboarding, Organisation, OrgMember, OrgRole } from "@/db/schema";
 import { audit, type Actor } from "@/lib/audit";
@@ -49,6 +49,7 @@ import {
   looksLikeToken,
   newInviteToken,
   normaliseEmail,
+  sharedTeamSkills,
   type Membership,
 } from "./rules";
 import {
@@ -228,6 +229,27 @@ export async function teamOverview(user: TeamUser, slug?: string | null) {
     .innerJoin(skills, eq(orgRoleSkills.skillId, skills.id))
     .where(eq(orgRoleSkills.orgId, org.id));
   const running = await onboardingsIn(org.id, admin ? null : me.id);
+  const memberIds = people.map((p) => p.member.userId);
+  const memberSkills =
+    memberIds.length > 0
+      ? await db()
+          .select({
+            id: skills.id,
+            name: skills.name,
+            slug: skills.slug,
+            ownerId: skills.ownerId,
+            teamVisible: skills.teamVisible,
+          })
+          .from(skills)
+          .where(and(inArray(skills.ownerId, memberIds), eq(skills.teamVisible, true)))
+      : [];
+  const shared = sharedTeamSkills(memberSkills, new Set(attached.map((a) => a.link.skillId))).map(
+    (skill) => ({
+      ...skill,
+      owner: people.find((p) => p.member.userId === skill.ownerId)?.name ?? "A teammate",
+      mine: skill.ownerId === user.id,
+    }),
+  );
 
   return {
     memberships,
@@ -260,6 +282,7 @@ export async function teamOverview(user: TeamUser, slug?: string | null) {
           ...a.skill,
         })),
       attachable: me.roleId ? await attachableSkills(user.id) : [],
+      shared,
     },
   };
 }

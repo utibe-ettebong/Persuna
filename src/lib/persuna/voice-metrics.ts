@@ -4,6 +4,7 @@
  * slice C's measurement reads the summaries. The clock is injectable so tests
  * use a fake and routes use real time.
  */
+import { db, schema } from "@/db/client";
 export type TurnMark = "heard" | "first-token" | "first-sentence" | "first-audio" | "end";
 
 export interface TurnSummary {
@@ -57,4 +58,34 @@ export function logVoiceTurn(
   extra: Record<string, unknown> = {},
 ): void {
   console.log(JSON.stringify({ scope: "voice-turn", route, ...timer.summary(), ...extra }));
+}
+
+/**
+ * The same timing, persisted for the measures page (plan §9). Fire-and-forget:
+ * a turn never fails because its metrics didn't save.
+ */
+export function recordVoiceTurn(
+  userId: string,
+  route: string,
+  timer: TurnTimer,
+  spoken: boolean,
+): void {
+  try {
+    const s = timer.summary();
+    void db()
+      .insert(schema.voiceTurns)
+      .values({
+        userId,
+        route,
+        spoken,
+        heardMs: s.heardMs,
+        firstTokenMs: s.firstTokenMs,
+        firstSentenceMs: s.firstSentenceMs,
+        firstAudioMs: s.firstAudioMs,
+        turnMs: s.turnMs,
+      })
+      .catch((error) => console.error("voice-turn not recorded:", error));
+  } catch (error) {
+    console.error("voice-turn not recorded:", error);
+  }
 }

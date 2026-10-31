@@ -53,6 +53,7 @@ const state = (): PersunaState => ({
   tone: {},
   lastAsked: null,
   pendingSwitch: null,
+  workMode: false,
 });
 
 interface Sample {

@@ -7,6 +7,7 @@ import {
   revokeAgentKeyAction,
   uploadImportAction,
 } from "@/app/actions/agents";
+import { importSkillMdAction } from "@/app/actions/skills";
 import { ActionForm } from "@/components/action-form";
 import { AgentKeyForm } from "@/components/agent-key-form";
 import { Badge, Card, Field, inputClass, PageHeader, type Tone } from "@/components/ui";
@@ -144,6 +145,52 @@ curl ${base}/api/agents/skills/<id> -H "Authorization: Bearer $PERSUNA_AGENT_KEY
             <Field label="Skill file" hint=".json, up to 1 MB">
               <input type="file" name="file" accept="application/json,.json" required />
             </Field>
+          </ActionForm>
+        </Card>
+
+        <Card className="space-y-4 p-5">
+          <h2 className="font-display text-lg font-medium tracking-[-0.02em]">
+            Or paste a SKILL.md file
+          </h2>
+          <p className="text-sm text-muted">
+            Another agent&apos;s skill file becomes a new skill: its sections fill in the six-layer
+            interview. It stays marked imported until you test it.
+          </p>
+          <ActionForm
+            action={importSkillMdAction}
+            label="Import skill file"
+            pendingLabel="Importing…"
+            className="space-y-3"
+          >
+            <Field label="SKILL.md" hint="Paste the file's contents">
+              <textarea
+                name="text"
+                rows={8}
+                required
+                maxLength={200_000}
+                className={`${inputClass} font-mono text-xs`}
+              />
+            </Field>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="What goes in">
+                <input
+                  name="inputType"
+                  placeholder="e.g. rough notes"
+                  required
+                  maxLength={120}
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="What comes out">
+                <input
+                  name="outputType"
+                  placeholder="e.g. minutes"
+                  required
+                  maxLength={120}
+                  className={inputClass}
+                />
+              </Field>
+            </div>
           </ActionForm>
         </Card>
       </section>

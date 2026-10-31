@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import {
+  chatImportAction,
   saveInterviewAction,
   screenWalkthroughAction,
   voiceWalkthroughAction,
@@ -9,14 +10,19 @@ import { Card, Field, inputClass, PageHeader, SkillTabs } from "@/components/ui"
 import { ScreenWalkthrough } from "@/components/screen-walkthrough";
 import { VoiceRecorder } from "@/components/voice-recorder";
 import { orNotFound } from "@/lib/load";
-import { INTERVIEW_QUESTIONS } from "@/lib/skill/interview";
+import { INTERVIEW_QUESTIONS, LAYER_NAMES, type Layer } from "@/lib/skill/interview";
 import { getSkillBySlug } from "@/lib/skill/service";
 
 export const dynamic = "force-dynamic";
 
 type Params = {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ saved?: string; transcribed?: string; screen?: string }>;
+  searchParams: Promise<{
+    saved?: string;
+    transcribed?: string;
+    screen?: string;
+    imported?: string;
+  }>;
 };
 
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
@@ -26,7 +32,7 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
 
 export default async function InterviewPage({ params, searchParams }: Params) {
   const skill = await orNotFound(async () => getSkillBySlug((await params).slug));
-  const { saved, transcribed, screen } = await searchParams;
+  const { saved, transcribed, screen, imported } = await searchParams;
   const hasRules = Boolean(skill.currentVersionId);
 
   return (
@@ -50,6 +56,13 @@ export default async function InterviewPage({ params, searchParams }: Params) {
           {transcribed
             ? "Your walkthrough was transcribed and added to your first answer. Rule extraction will use it."
             : "Answers saved."}
+        </p>
+      )}
+
+      {imported && (
+        <p role="status" className="rounded-md bg-good/10 p-3 text-sm text-good">
+          Your chat history was imported into the tools answer (shapes only, names removed). Rule
+          extraction will use it.
         </p>
       )}
 
@@ -80,16 +93,23 @@ export default async function InterviewPage({ params, searchParams }: Params) {
             ]}
           >
             <input type="hidden" name="slug" value={skill.slug} />
-            {INTERVIEW_QUESTIONS.map((q) => (
-              <Field key={q.key} label={q.question} hint={q.hint}>
-                <textarea
-                  name={q.key}
-                  rows={3}
-                  maxLength={4000}
-                  defaultValue={skill.interview?.[q.key] ?? ""}
-                  className={inputClass}
-                />
-              </Field>
+            {([1, 2, 3, 4, 5, 6] as Layer[]).map((layer) => (
+              <fieldset key={layer} className="space-y-5">
+                <legend className="label-mono text-muted">
+                  Layer {layer} · {LAYER_NAMES[layer]}
+                </legend>
+                {INTERVIEW_QUESTIONS.filter((q) => q.layer === layer).map((q) => (
+                  <Field key={q.key} label={q.question} hint={q.hint}>
+                    <textarea
+                      name={q.key}
+                      rows={3}
+                      maxLength={4000}
+                      defaultValue={skill.interview?.[q.key] ?? ""}
+                      className={inputClass}
+                    />
+                  </Field>
+                ))}
+              </fieldset>
             ))}
           </ActionForm>
         </Card>
@@ -114,6 +134,31 @@ export default async function InterviewPage({ params, searchParams }: Params) {
           >
             <input type="hidden" name="slug" value={skill.slug} />
             <VoiceRecorder />
+          </ActionForm>
+        </Card>
+      </section>
+
+      <section aria-labelledby="chats-heading">
+        <h2 id="chats-heading" className="mb-1 font-display text-lg font-medium tracking-[-0.02em]">
+          AI chat history
+        </h2>
+        <p className="mb-4 text-sm text-muted">
+          Share a ChatGPT or Claude export (conversations.json, up to 5 MB). Persuna keeps the shape
+          of your prompting — how long, pastes, refinement turns, what you corrected the AI on — and{" "}
+          {hasRules ? "proposes rule changes for you to review" : "adds it to your tools answer"}.
+          Paste contents and replies are never kept.
+        </p>
+        <Card className="p-5">
+          <ActionForm
+            action={chatImportAction}
+            label="Import chat history"
+            pendingLabel="Reading your chats…"
+            className="space-y-4"
+          >
+            <input type="hidden" name="slug" value={skill.slug} />
+            <Field label="Export file" hint="conversations.json from ChatGPT or Claude settings">
+              <input type="file" name="export" accept=".json,application/json" />
+            </Field>
           </ActionForm>
         </Card>
       </section>

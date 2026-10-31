@@ -3,7 +3,7 @@
  * call these, so a run from the terminal and a run from the UI are identical.
  */
 import path from "node:path";
-import { and, asc, desc, eq, inArray, max, notInArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, max, notInArray, sql } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import type { Example, SkillVersion } from "@/db/schema";
 import { env } from "@/env";
@@ -20,14 +20,42 @@ import {
   proposeFromNotes,
   runTestCase,
 } from "./engine";
-import { interviewText, type InterviewAnswers } from "./interview";
+import { fitnessOf, stepsFromEvents } from "./episodes";
+import {
+  confirmEvidence,
+  evidenceCounts,
+  pruneEvidence,
+  recordEvidence,
+  touchedRuleIds,
+} from "./evidence";
+import { INTERVIEW_QUESTIONS, interviewText, type InterviewAnswers } from "./interview";
 import { redactTogether, scanText } from "./redact";
+import {
+  confidenceOf,
+  coverageOf,
+  freshnessOf,
+  groundednessOf,
+  reliabilityOf,
+  type Composite,
+} from "./rating";
 import { checkPublish, publishCheckMessage } from "./publish";
 import type { SkillMeta } from "./prompts";
 import { mean } from "./score";
+import { parseSkillMd } from "./skill-import";
 import { skillSheet, type Pair, type SkillSheet } from "./types";
 
-const { skills, skillVersions, examples, evalRuns, testResults, corrections } = schema;
+const {
+  skills,
+  skillVersions,
+  examples,
+  evalRuns,
+  testResults,
+  corrections,
+  episodes,
+  episodeEvents,
+  skillSteps,
+  jobs,
+} = schema;
 
 export interface SkillDefinition extends SkillMeta {
   slug: string;
@@ -319,6 +347,57 @@ export async function saveEditedSheet(skillId: string, sheet: SkillSheet) {
   return createVersion(skillId, parsed, "edit", "owner", skill.currentVersionId);
 }
 
+/**
+ * Marks a skill visible to the owner's team (or hides it again). Sharing
+ * never makes a skill confidential or unlistable; attaching to a role does.
+ * The caller must have checked ownership (ownedSkillBySlug).
+ */
+export async function setTeamVisible(skillId: string, visible: boolean, actor: Actor) {
+  const skill = await db().query.skills.findFirst({ where: eq(skills.id, skillId) });
+  if (!skill) throw new NotFoundError("No such skill");
+  await db().update(skills).set({ teamVisible: visible }).where(eq(skills.id, skillId));
+  await audit({
+    actor,
+    action: visible ? "skill.team_shown" : "skill.team_hidden",
+    entityType: "skill",
+    entityId: skillId,
+    skillId,
+  });
+}
+
+/**
+ * Imports another agent's skill file (SKILL.md and similar markdown) as a new
+ * skill: sections become six-layer interview answers, and the skill is marked
+ * imported until it is tested.
+ */
+export async function importSkillMd(
+  userId: string,
+  actor: Actor,
+  input: { slug: string; text: string; inputType: string; outputType: string },
+) {
+  const parsed = parseSkillMd(input.text);
+  if (!parsed.ok) throw new Error(parsed.errors.join("; "));
+  const skill = await createSkill(
+    {
+      slug: input.slug,
+      name: parsed.value.name,
+      taskDescription: parsed.value.description,
+      inputType: input.inputType,
+      outputType: input.outputType,
+    },
+    userId,
+    actor,
+  );
+  const answers: InterviewAnswers = {};
+  for (const [layer, text] of Object.entries(parsed.value.layers)) {
+    const key = INTERVIEW_QUESTIONS.find((question) => question.layer === Number(layer))?.key;
+    if (key && text) answers[key] = text;
+  }
+  if (Object.keys(answers).length > 0) await saveInterview(skill.id, answers);
+  await db().update(skills).set({ importSource: "skill.md" }).where(eq(skills.id, skill.id));
+  return skill;
+}
+
 /** Steps 4–5: draft every held-back input with this version and score it. */
 export async function runEval(client: ModelClient, versionId: string) {
   const version = await getVersion(versionId);
@@ -431,7 +510,7 @@ async function recordProposal(client: ModelClient, source: CorrectionSource) {
 export async function proposeFromMethodNotes(
   client: ModelClient,
   skillId: string,
-  source: "interview" | "walkthrough" | "screen" | "companion",
+  source: "interview" | "walkthrough" | "screen" | "companion" | "episode",
   notes: string,
 ) {
   const skill = await db().query.skills.findFirst({ where: eq(skills.id, skillId) });
@@ -441,7 +520,7 @@ export async function proposeFromMethodNotes(
   }
   const fromVersion = await getVersion(skill.currentVersionId);
   const { proposal, sheet } = await proposeFromNotes(client, fromVersion.sheet, notes);
-  return saveProposal({
+  const row = await saveProposal({
     skillId,
     source,
     fromVersionId: fromVersion.id,
@@ -450,11 +529,17 @@ export async function proposeFromMethodNotes(
       walkthrough: "Your voice walkthrough",
       screen: "Your screen walkthrough",
       companion: "What you taught your Persuna",
+      episode: "What Persuna watched you do",
     }[source],
     explanation: proposal.explanation,
     ruleOps: proposal.ops,
     proposedSheet: sheet,
   });
+  if (source === "interview") {
+    const { added, updated } = touchedRuleIds(proposal.ops, fromVersion.sheet, sheet);
+    await recordEvidence(skillId, [...added, ...updated], "interview", "interview");
+  }
+  return row;
 }
 
 /** Step 6: an owner's edit of a test draft becomes proposed rule changes for review. */
@@ -527,6 +612,7 @@ export async function acceptCorrection(id: string) {
     .update(corrections)
     .set({ status: "accepted", toVersionId: version.id, decidedAt: new Date() })
     .where(eq(corrections.id, id));
+  await confirmEvidence(id);
   await audit({
     actor: "owner",
     action: "proposal.accepted",
@@ -545,6 +631,7 @@ export async function rejectCorrection(id: string) {
     .where(and(eq(corrections.id, id), eq(corrections.status, "pending")))
     .returning();
   if (!row) throw new Error("This correction was already decided");
+  await pruneEvidence(id);
   await audit({
     actor: "owner",
     action: "proposal.rejected",
@@ -563,6 +650,70 @@ export async function latestScore(versionId: string): Promise<number | null> {
     .orderBy(desc(evalRuns.createdAt))
     .limit(1);
   return run?.meanScore ?? null;
+}
+
+/**
+ * The composite rating (plan §4.5): six parts, each 0–100 or null when not
+ * yet measurable. Skipped parts stay null — a skill earns its rating only
+ * from the learning it actually did.
+ */
+export async function skillComposite(skillId: string): Promise<Composite> {
+  const skill = await db().query.skills.findFirst({ where: eq(skills.id, skillId) });
+  if (!skill) throw new NotFoundError("No such skill");
+  const [steps, learned, counts] = await Promise.all([
+    db()
+      .select()
+      .from(skillSteps)
+      .where(eq(skillSteps.skillId, skillId))
+      .orderBy(asc(skillSteps.seq)),
+    db()
+      .select()
+      .from(episodes)
+      .where(and(eq(episodes.skillId, skillId), eq(episodes.status, "extracted")))
+      .orderBy(desc(episodes.startedAt)),
+    evidenceCounts(skillId),
+  ]);
+  const fitnesses: (number | null)[] = [];
+  for (const episode of learned) {
+    const events = await db()
+      .select()
+      .from(episodeEvents)
+      .where(eq(episodeEvents.episodeId, episode.id))
+      .orderBy(asc(episodeEvents.at));
+    fitnesses.push(steps.length === 0 ? null : fitnessOf(steps, stepsFromEvents(events)).fitness);
+  }
+  const measured = fitnesses.filter((fitness): fitness is number => fitness !== null);
+  const fitness = measured.length === 0 ? null : mean(measured);
+  const versionId = skill.publishedVersionId ?? skill.currentVersionId;
+  const sheet = versionId ? (await getVersion(versionId)).sheet : null;
+  const ruleIds = sheet ? sheet.rules.map((entry) => entry.id) : [];
+  const approved = await db()
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(and(eq(jobs.skillId, skillId), eq(jobs.status, "approved")));
+  const [{ n: corrected }] =
+    approved.length === 0
+      ? [{ n: 0 }]
+      : await db()
+          .select({ n: count() })
+          .from(corrections)
+          .where(
+            and(
+              eq(corrections.source, "job"),
+              inArray(
+                corrections.jobId,
+                approved.map((job) => job.id),
+              ),
+            ),
+          );
+  return {
+    replication: versionId ? await latestScore(versionId) : null,
+    coverage: coverageOf(fitness, steps),
+    confidence: confidenceOf(ruleIds, counts),
+    groundedness: groundednessOf(ruleIds, counts),
+    freshness: freshnessOf(fitnesses.slice(0, 3)),
+    reliability: reliabilityOf(approved.length, corrected),
+  };
 }
 
 /** Step 7: make a tested version the one real jobs use. */
@@ -669,6 +820,30 @@ export async function getSkillOverview(slug: string) {
     .from(corrections)
     .where(eq(corrections.skillId, skill.id))
     .orderBy(desc(corrections.createdAt));
+  const steps = await db()
+    .select()
+    .from(skillSteps)
+    .where(eq(skillSteps.skillId, skill.id))
+    .orderBy(asc(skillSteps.seq));
+  const episodeRows = await db()
+    .select()
+    .from(episodes)
+    .where(eq(episodes.skillId, skill.id))
+    .orderBy(desc(episodes.startedAt))
+    .limit(10);
+  const evidence = await evidenceCounts(skill.id);
+  // Fitness on the latest learned episode: how much of what was seen the
+  // procedure explains (plan §4.4).
+  let fitness: number | null = null;
+  const latest = episodeRows.find((row) => row.status === "extracted" || row.status === "done");
+  if (latest && steps.length > 0) {
+    const events = await db()
+      .select()
+      .from(episodeEvents)
+      .where(eq(episodeEvents.episodeId, latest.id))
+      .orderBy(asc(episodeEvents.at));
+    fitness = fitnessOf(steps, stepsFromEvents(events)).fitness;
+  }
 
   return {
     skill,
@@ -678,6 +853,11 @@ export async function getSkillOverview(slug: string) {
     })),
     counts: { train: pairCounts.train.length, test: pairCounts.test.length },
     corrections: correctionRows,
+    steps,
+    episodes: episodeRows,
+    evidence,
+    fitness,
+    composite: await skillComposite(skill.id),
   };
 }
 
