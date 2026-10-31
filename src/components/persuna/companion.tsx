@@ -248,6 +248,13 @@ const NEEDS: Record<Permission, string> = {
   keyboard:
     "I need Accessibility for the talk key, reading apps and pasting. Switch Persuna on in the list that opens.",
 };
+/** Windows has no such switches: Persuna's own test decides, so it says what to do instead. */
+const NEEDS_WINDOWS: Record<Permission, string> = {
+  mic: NEEDS.mic,
+  screen: "I can't read your screen right now. Antivirus may be blocking me: allow Persuna.",
+  keyboard: "I can't hear the talk key right now. Antivirus may be blocking me: allow Persuna.",
+};
+const onWindows = () => typeof navigator !== "undefined" && /Windows/.test(navigator.userAgent);
 
 const WRAP_UP_OFFER = "It's getting late. Want a wrap-up of today?";
 /** After this local hour, Persuna offers an end-of-day wrap-up (once a day). */
@@ -3347,13 +3354,19 @@ export function Companion(props: CompanionProps) {
           {/* A permission it needs, asked for only when you use what needs it. */}
           {need && (
             <div className="flex items-center gap-2 px-5 pb-3.5 pt-1 text-[12.5px] leading-snug">
-              <span className="flex-1 text-white/90">{NEEDS[need]}</span>
+              <span className="flex-1 text-white/90">
+                {(onWindows() ? NEEDS_WINDOWS : NEEDS)[need]}
+              </span>
               <button
                 type="button"
                 onClick={() => void askFor(need)}
                 className="rounded-full bg-white px-3 py-1 text-[11px] font-medium text-black"
               >
-                {perms.current?.[need] === "not-determined" ? "Allow" : "Open Settings"}
+                {onWindows() && need !== "mic"
+                  ? "Try again"
+                  : perms.current?.[need] === "not-determined"
+                    ? "Allow"
+                    : "Open Settings"}
               </button>
               <button
                 type="button"

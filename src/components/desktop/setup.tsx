@@ -60,6 +60,8 @@ interface SetupBridge {
     keyboard: { status: Access; detail: string | null };
     screen: { status: Access; detail: string | null };
   } | null>;
+  /** Windows: waits for a real press of the talk key. Missing before desktop 0.8.2. */
+  testKey?(): Promise<{ status: Access; detail: string | null } | null>;
   dragApp(): void;
   appIcon(): Promise<string | null>;
   restart(): void;
@@ -433,7 +435,13 @@ function AccessStep({ say, back, onDone }: { say: Say } & Nav) {
   const [opened, setOpened] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [tested, setTested] = useState<Awaited<ReturnType<SetupBridge["selfTest"]>> | null>(null);
-  useIntro(say, "I need three things from your Mac. I'll say why for each.");
+  const [pressKey, setPressKey] = useState(false);
+  useIntro(
+    say,
+    typeof navigator !== "undefined" && /Windows/.test(navigator.userAgent)
+      ? "Windows doesn't ask for these, so I'll test that each one really works."
+      : "I need three things from your Mac. I'll say why for each.",
+  );
 
   useEffect(() => {
     if (!desktop) return;
@@ -464,6 +472,28 @@ function AccessStep({ say, back, onDone }: { say: Say } & Nav) {
     );
   }
   const ok = (a?: Access) => a === "granted";
+  const mac = state?.mac !== false;
+
+  /** Tries everything for real. Windows also waits for a real press of the talk key. */
+  async function runTest() {
+    if (!desktop || testing) return;
+    setTesting(true);
+    try {
+      const result = await desktop.selfTest();
+      setTested(result);
+      if (!mac && result && state?.holdKey && desktop.testKey) {
+        setPressKey(true);
+        const key = await desktop.testKey();
+        setPressKey(false);
+        if (key) setTested({ ...result, keyboard: key });
+      }
+      setState(await desktop.permissions());
+    } finally {
+      setPressKey(false);
+      setTesting(false);
+    }
+  }
+
   const rows = [
     {
       key: "mic",
@@ -477,24 +507,26 @@ function AccessStep({ say, back, onDone }: { say: Say } & Nav) {
     {
       key: "keyboard",
       glyph: "key" as const,
-      title: "Accessibility",
+      title: mac ? "Accessibility" : "Talk key",
       why: "To notice the talk key from any app. I react to that one key only.",
       status: state?.keyboard,
       action: () => {
         setOpened("keyboard");
-        void desktop.askKeyboard();
+        if (mac) void desktop.askKeyboard();
+        else void runTest();
       },
       drag: true,
     },
     {
       key: "screen",
       glyph: "screen" as const,
-      title: "Screen Recording",
+      title: mac ? "Screen Recording" : "Your screen",
       why: "To see what you mean when you ask about your screen, and to watch when you ask me to.",
       status: state?.screen,
       action: () => {
         setOpened("screen");
-        void desktop.askScreen();
+        if (mac) void desktop.askScreen();
+        else void runTest();
       },
       drag: true,
     },
@@ -526,13 +558,22 @@ function AccessStep({ say, back, onDone }: { say: Say } & Nav) {
               {ok(row.status) ? (
                 <span className="flex items-center gap-2">
                   <span className="label-mono rounded-full bg-good/10 px-3 py-1.5 text-[10px] text-good">
-                    Allowed
+                    {mac ? "Allowed" : "Working"}
                   </span>
                   {(row.key === "keyboard" || row.key === "screen") && (
                     <button
                       type="button"
-                      title="If it stopped working, clear the grant and start over"
-                      onClick={() => void desktop.resetPermission(row.key as "keyboard" | "screen")}
+                      title={
+                        mac
+                          ? "If it stopped working, clear the grant and start over"
+                          : "Test it again, for real"
+                      }
+                      disabled={testing}
+                      onClick={() =>
+                        mac
+                          ? void desktop.resetPermission(row.key as "keyboard" | "screen")
+                          : void runTest()
+                      }
                       className="label-mono text-[10px] text-muted hover:text-foreground"
                     >
                       Not working?
@@ -543,9 +584,10 @@ function AccessStep({ say, back, onDone }: { say: Say } & Nav) {
                 <button
                   type="button"
                   onClick={row.action}
+                  disabled={testing}
                   className="rounded-full bg-accent px-4 py-1.5 text-sm text-accent-ink"
                 >
-                  Allow
+                  {mac || row.key === "mic" ? "Allow" : "Test"}
                 </button>
               )}
             </div>
@@ -587,34 +629,30 @@ function AccessStep({ say, back, onDone }: { say: Say } & Nav) {
           </li>
         ))}
       </ul>
-      {(tested?.keyboard.detail || tested?.screen.detail) && (
+      {pressKey && (
+        <p className="mt-3 max-w-xl rounded-xl bg-subtle px-4 py-3 text-sm font-medium">
+          Now press {state?.holdKey ?? "your talk key"}.
+        </p>
+      )}
+      {!pressKey && (tested?.keyboard.detail || tested?.screen.detail) && (
         <div className="mt-3 max-w-xl space-y-1 rounded-xl bg-subtle px-4 py-3 text-sm text-muted">
           {tested?.keyboard.detail && <p>{tested.keyboard.detail}</p>}
           {tested?.screen.detail && <p>{tested.screen.detail}</p>}
         </div>
       )}
+      {!mac && (
+        <p className="mt-3 max-w-xl text-xs text-muted">
+          Windows keeps apps running as administrator private: I can&apos;t read them or hear the
+          talk key while one is in front.
+        </p>
+      )}
       <Footer back={back}>
         {!needed && (
           <span className="text-xs text-muted">
-            Microphone and Accessibility are needed to talk.
+            {mac ? "Microphone and Accessibility are" : "The microphone is"} needed to talk.
           </span>
         )}
-        <button
-          type="button"
-          disabled={testing}
-          onClick={() => {
-            setTesting(true);
-            void desktop
-              .selfTest()
-              .then((result) => {
-                setTested(result);
-                return desktop.permissions();
-              })
-              .then((s) => setState(s))
-              .finally(() => setTesting(false));
-          }}
-          className={quiet}
-        >
+        <button type="button" disabled={testing} onClick={() => void runTest()} className={quiet}>
           {testing ? "Testing…" : "Test everything"}
         </button>
         <button type="button" disabled={!needed} onClick={onDone} className={primary}>

@@ -165,7 +165,7 @@ Each is a requirement, with how we'd know it's met.
 **Desktop**
 
 - Apple Developer ID: signing with it ends the "Open Anyway" step and lets macOS's own updater take over. Budget $99 a year.
-- Windows parity for Work mode: a UI Automation reader exists (`desktop/native/win/eyes.ps1`), so the gap is testing it against the Mac reader on the same screens, and the Windows side of Learn mode's event stream.
+- Windows parity for Work mode: a native UI Automation reader exists (`desktop/native/win/eyes.cs`, CI reads a real Notepad with it), so the gap is testing it against the Mac reader on the same screens, screen text recognition, app control, and the Windows side of Learn mode's event stream.
 - Permissions walkthrough that detects a stale grant and fixes it in one step.
 
 **Teams and marketplace**
