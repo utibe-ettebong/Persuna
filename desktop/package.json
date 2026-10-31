@@ -36,6 +36,7 @@
       "update-info.js",
       "updater.js",
       "operate.js",
+      "health.js",
       "package.json",
       "build/tray*.png",
       "!node_modules/uiohook-napi/prebuilds/linux-*",

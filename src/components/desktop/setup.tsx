@@ -54,6 +54,12 @@ interface SetupBridge {
   askScreen(): Promise<void>;
   /** A grant gone stale: clear it and start over, in one step. */
   resetPermission(kind: "keyboard" | "screen"): Promise<void>;
+  /** Try every permission for real, with plain words when one fails. */
+  selfTest(): Promise<{
+    mic: Access;
+    keyboard: { status: Access; detail: string | null };
+    screen: { status: Access; detail: string | null };
+  } | null>;
   dragApp(): void;
   appIcon(): Promise<string | null>;
   restart(): void;
@@ -425,6 +431,8 @@ function AccessStep({ say, back, onDone }: { say: Say } & Nav) {
   const [state, setState] = useState<Awaited<ReturnType<SetupBridge["permissions"]>> | null>(null);
   const [icon, setIcon] = useState<string | null>(null);
   const [opened, setOpened] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [tested, setTested] = useState<Awaited<ReturnType<SetupBridge["selfTest"]>> | null>(null);
   useIntro(say, "I need three things from your Mac. I'll say why for each.");
 
   useEffect(() => {
@@ -579,12 +587,36 @@ function AccessStep({ say, back, onDone }: { say: Say } & Nav) {
           </li>
         ))}
       </ul>
+      {(tested?.keyboard.detail || tested?.screen.detail) && (
+        <div className="mt-3 max-w-xl space-y-1 rounded-xl bg-subtle px-4 py-3 text-sm text-muted">
+          {tested?.keyboard.detail && <p>{tested.keyboard.detail}</p>}
+          {tested?.screen.detail && <p>{tested.screen.detail}</p>}
+        </div>
+      )}
       <Footer back={back}>
         {!needed && (
           <span className="text-xs text-muted">
             Microphone and Accessibility are needed to talk.
           </span>
         )}
+        <button
+          type="button"
+          disabled={testing}
+          onClick={() => {
+            setTesting(true);
+            void desktop
+              .selfTest()
+              .then((result) => {
+                setTested(result);
+                return desktop.permissions();
+              })
+              .then((s) => setState(s))
+              .finally(() => setTesting(false));
+          }}
+          className={quiet}
+        >
+          {testing ? "Testing…" : "Test everything"}
+        </button>
         <button type="button" disabled={!needed} onClick={onDone} className={primary}>
           Continue
         </button>

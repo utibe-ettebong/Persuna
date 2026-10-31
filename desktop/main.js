@@ -42,6 +42,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createHoldKey } = require("./hold-key");
 const { createUpdater } = require("./updater");
+const { eyesFix, keyboardFix, keyboardStatus, micStatus, screenStatus } = require("./health");
 
 const APP_URL = process.env.PERSUNA_URL || "https://persuna-production.up.railway.app";
 const ORIGIN = new URL(APP_URL).origin;
@@ -302,12 +303,29 @@ ipcMain.handle("persuna:island", () => islandShape());
 /* ---------- Permissions, asked for in the island when needed ---------- */
 
 /** What Persuna may use right now: "granted", "denied" or "not-determined" (always granted off a Mac). */
+/**
+ * Whether each permission actually works — never assumed. On Windows there
+ * are no OS prompts for the talk key or the screen, so the hook and the
+ * eyes probe decide: allowed on paper but broken in reality reports denied.
+ */
 function permissionStatus() {
-  if (!MAC) return { mic: "granted", screen: "granted", keyboard: "granted" };
+  const mic = micStatus(MAC, systemPreferences.getMediaAccessStatus("microphone"));
+  if (!MAC) {
+    return {
+      mic,
+      screen: screenStatus({ mac: false, eyes: winEyes }),
+      keyboard: keyboardStatus({ mac: false, listening: Boolean(keyListener), error: keyError }),
+    };
+  }
   return {
-    mic: systemPreferences.getMediaAccessStatus("microphone"),
-    screen: systemPreferences.getMediaAccessStatus("screen"),
-    keyboard: keyboardAllowed() ? "granted" : "denied",
+    mic,
+    screen: screenStatus({ mac: true, os: systemPreferences.getMediaAccessStatus("screen") }),
+    keyboard: keyboardStatus({
+      mac: true,
+      allowed: keyboardAllowed(),
+      listening: Boolean(keyListener),
+      error: keyError,
+    }),
   };
 }
 ipcMain.handle("persuna:permissions", (event) => (fromOverlay(event) ? permissionStatus() : null));
@@ -319,7 +337,21 @@ ipcMain.handle("persuna:permissions", (event) => (fromOverlay(event) ? permissio
  * right pane. Resolves with the new status.
  */
 ipcMain.handle("persuna:ask-permission", async (event, kind) => {
-  if (!fromOverlay(event) || !MAC) return "granted";
+  if (!fromOverlay(event)) return "denied";
+  if (!MAC) {
+    // No OS prompts on Windows: retry the thing itself, and answer honestly.
+    if (kind === "keyboard") {
+      keyError = null;
+      startKeyListener();
+    } else if (kind === "screen") {
+      const probe = await probeEyes();
+      winEyes = probe.ok;
+      winEyesWhy = probe.why ?? null;
+    } else if (kind === "mic") {
+      void shell.openExternal("ms-settings:privacy-microphone");
+    }
+    return permissionStatus()[kind] ?? "denied";
+  }
   if (kind === "mic") {
     if (systemPreferences.getMediaAccessStatus("microphone") === "not-determined") {
       stepAside(true);
@@ -576,6 +608,47 @@ const EYES = MAC
   : app.isPackaged
     ? path.join(process.resourcesPath, "bin", "eyes.ps1")
     : path.join(__dirname, "native", "win", "eyes.ps1");
+
+/**
+ * Do the eyes see? Runs the reader once and says why not: "missing" (not in
+ * this install), "timeout" (something blocked it), or "unreadable" (it ran
+ * but its answer made no sense). An empty window list still counts as seeing.
+ */
+function probeEyes() {
+  return new Promise((resolve) => {
+    if (!fs.existsSync(EYES)) return resolve({ ok: false, why: "missing" });
+    const [cmd, argv] = MAC
+      ? [EYES, []]
+      : [
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            EYES,
+            "-SkipPid",
+            String(process.pid),
+          ],
+        ];
+    execFile(
+      cmd,
+      argv,
+      { timeout: 8000, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
+      (error, stdout) => {
+        if (error) return resolve({ ok: false, why: error.killed ? "timeout" : "unreadable" });
+        try {
+          const seen = JSON.parse(stdout);
+          resolve(
+            seen && typeof seen === "object" ? { ok: true } : { ok: false, why: "unreadable" },
+          );
+        } catch {
+          resolve({ ok: false, why: "unreadable" });
+        }
+      },
+    );
+  });
+}
 
 function runEyes(args, timeout = 2500) {
   return new Promise((resolve) => {
@@ -855,16 +928,17 @@ const appBundle = () => (MAC ? path.resolve(process.execPath, "../../..") : proc
 ipcMain.handle("setup:permissions", (event) => {
   if (!fromSetup(event)) return null;
   if (keyboardAllowed()) startKeyListener();
-  return {
-    mic: MAC ? systemPreferences.getMediaAccessStatus("microphone") : "granted",
-    keyboard: keyboardAllowed() ? "granted" : "denied",
-    screen: MAC ? systemPreferences.getMediaAccessStatus("screen") : "granted",
-    holdKey: holdKeyLabel(),
-    mac: MAC,
-  };
+  return { ...permissionStatus(), holdKey: holdKeyLabel(), mac: MAC };
 });
 ipcMain.handle("setup:ask-mic", async (event) => {
-  if (!fromSetup(event) || !MAC) return true;
+  if (!fromSetup(event)) return false;
+  if (!MAC) {
+    // No OS prompt on Windows: point at the microphone settings instead.
+    if (systemPreferences.getMediaAccessStatus("microphone") !== "granted") {
+      void shell.openExternal("ms-settings:privacy-microphone");
+    }
+    return systemPreferences.getMediaAccessStatus("microphone") === "granted";
+  }
   if (systemPreferences.getMediaAccessStatus("microphone") === "denied") {
     void shell.openExternal(PRIVACY("Microphone"));
     return false;
@@ -872,7 +946,13 @@ ipcMain.handle("setup:ask-mic", async (event) => {
   return systemPreferences.askForMediaAccess("microphone");
 });
 ipcMain.handle("setup:ask-keyboard", (event) => {
-  if (!fromSetup(event) || !MAC) return;
+  if (!fromSetup(event)) return;
+  if (!MAC) {
+    // No OS prompt on Windows: try the hook again right now.
+    keyError = null;
+    startKeyListener();
+    return;
+  }
   // Adds Persuna to the list (switched off) and points the way.
   systemPreferences.isTrustedAccessibilityClient(true);
   void shell.openExternal(PRIVACY("Accessibility"));
@@ -894,7 +974,14 @@ ipcMain.handle("setup:reset-permission", async (event, kind) => {
   }
 });
 ipcMain.handle("setup:ask-screen", async (event) => {
-  if (!fromSetup(event) || !MAC) return;
+  if (!fromSetup(event)) return;
+  if (!MAC) {
+    // No OS prompt on Windows: probe the eyes again right now.
+    const probe = await probeEyes();
+    winEyes = probe.ok;
+    winEyesWhy = probe.why ?? null;
+    return;
+  }
   if (systemPreferences.getMediaAccessStatus("screen") === "granted") return;
   if (readSettings().screenAskedFor !== app.getVersion()) {
     writeSettings({ screenAskedFor: app.getVersion() });
@@ -909,6 +996,31 @@ ipcMain.handle("setup:ask-screen", async (event) => {
   if (systemPreferences.getMediaAccessStatus("screen") !== "granted") {
     void shell.openExternal(PRIVACY("ScreenCapture"));
   }
+});
+/**
+ * Setup's "Test everything": each permission tried for real, with plain
+ * words when one fails. On Windows this is the only honest answer — the OS
+ * never prompts, so allowed-but-broken would otherwise look fine.
+ */
+ipcMain.handle("setup:self-test", async (event) => {
+  if (!fromSetup(event)) return null;
+  if (!MAC) {
+    const probe = await probeEyes();
+    winEyes = probe.ok;
+    winEyesWhy = probe.why ?? null;
+  }
+  const status = permissionStatus();
+  return {
+    mic: status.mic,
+    keyboard: {
+      status: status.keyboard,
+      detail: status.keyboard === "denied" && keyError ? keyboardFix(keyError) : null,
+    },
+    screen: {
+      status: status.screen,
+      detail: !MAC && status.screen === "denied" ? eyesFix(winEyesWhy) : null,
+    },
+  };
 });
 ipcMain.on("setup:drag-app", (event) => {
   if (!fromSetup(event)) return;
@@ -965,6 +1077,13 @@ function openLink(url) {
 
 let keyListener = null;
 let keyWatch = null;
+/** Why the talk-key hook isn't listening, when it isn't. */
+let keyError = null;
+/** The last Windows eyes probe: true/false, or null before the first probe. */
+let winEyes = null;
+/** Why the eyes failed, when they did: missing, timeout or unreadable. */
+let winEyesWhy = null;
+
 const holdKey = createHoldKey({ emit: onHoldKey });
 
 const keyboardAllowed = () => !MAC || systemPreferences.isTrustedAccessibilityClient(false);
@@ -997,8 +1116,13 @@ function startKeyListener() {
     uIOhook.on("keyup", (e) => holdKey.keyup(e.keycode, Date.now()));
     uIOhook.start();
     keyListener = uIOhook;
+    keyError = null;
   } catch (error) {
+    // Never silent: setup reports it, and retries while it stays broken.
+    keyError = error instanceof Error ? error.message : String(error);
     console.error("Persuna couldn't listen for the talk key:", error);
+    clearInterval(keyWatch);
+    keyWatch = setInterval(() => !keyListener && startKeyListener(), 15000);
     return;
   }
   holdKey.setKey(chosenHoldKey()?.code ?? null);
@@ -1485,6 +1609,14 @@ if (!app.requestSingleInstanceLock()) {
     registerCircleShortcut();
     startKeyListener();
     warmEyes();
+    // Windows never prompts: probe the eyes once at launch so setup shows
+    // the truth instead of "unknown".
+    if (!MAC) {
+      void probeEyes().then((probe) => {
+        winEyes = probe.ok;
+        winEyesWhy = probe.why ?? null;
+      });
+    }
     createTray();
     startUpdates();
     void forgetPreRenamePermissions();
