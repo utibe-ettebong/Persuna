@@ -70,6 +70,15 @@ describe("POST /api/persuna/chat-stream", () => {
     });
   });
 
+  it("carries the client's turn id into the turn, for its first-sound report", async () => {
+    vi.mocked(chatStream).mockImplementation(async function* () {
+      yield { type: "done", result: { messages: [] } as never };
+    });
+    await (await POST(form({ text: "hello", "client-turn": "t9" }))).text();
+
+    expect(vi.mocked(chatStream).mock.calls[0][2]).toMatchObject({ clientTurn: "t9" });
+  });
+
   it("passes a look-closer request on to the client", async () => {
     vi.mocked(chatStream).mockImplementation(async function* () {
       yield { type: "look-closer", heard: "What's this?", said: "Let me look." };

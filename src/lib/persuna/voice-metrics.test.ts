@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { logVoiceTurn, startTurn } from "./voice-metrics";
+import { logVoiceTurn, reportFirstAudio, startTurn } from "./voice-metrics";
 
 const clock = () => {
   let t = 1000;
@@ -81,5 +81,14 @@ describe("logVoiceTurn", () => {
       spoken: true,
       picture: false,
     });
+  });
+});
+
+describe("reportFirstAudio", () => {
+  it("refuses a nonsense report without touching the database", async () => {
+    await expect(reportFirstAudio("user-1", "", 1200)).resolves.toBe(false);
+    await expect(reportFirstAudio("user-1", "t1", Number.NaN)).resolves.toBe(false);
+    await expect(reportFirstAudio("user-1", "t1", -5)).resolves.toBe(false);
+    await expect(reportFirstAudio("user-1", "t1", 11 * 60_000)).resolves.toBe(false);
   });
 });
