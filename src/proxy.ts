@@ -5,6 +5,7 @@ import { type NextRequest, NextResponse } from "next/server";
 const PUBLIC = [
   /^\/download(\/(mac-arm64|mac-x64|win-x64|win-arm64))?$/,
   /^\/welcome$/,
+  /^\/privacy$/,
   /^\/$/,
   /^\/sign-(in|up)$/,
   /^\/approvals\//,
