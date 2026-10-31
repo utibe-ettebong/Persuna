@@ -284,6 +284,19 @@ ipcMain.handle("persuna:pick-screen", async (event) => {
 ipcMain.on("persuna:watching", (event, on) => {
   if (overlay && event.sender === overlay.webContents) setWatching(Boolean(on));
 });
+// The front apps never to read: kept with the other settings, enforced by persuna:look.
+ipcMain.on("persuna:excluded-apps", (event, apps) => {
+  if (!overlay || event.sender !== overlay.webContents) return;
+  if (!Array.isArray(apps)) return;
+  writeSettings({ excludedApps: apps.filter((a) => typeof a === "string").slice(0, 100) });
+});
+// Whether Work mode is on: the menu bar shows it.
+let workModeOn = false;
+ipcMain.on("persuna:mode", (event, mode) => {
+  if (!overlay || event.sender !== overlay.webContents) return;
+  workModeOn = Boolean(mode && mode.work);
+  rebuildTray();
+});
 ipcMain.handle("persuna:island", () => islandShape());
 
 /* ---------- Permissions, asked for in the island when needed ---------- */
@@ -404,6 +417,100 @@ ipcMain.handle("persuna:paste", async (event, text) => {
   return true;
 });
 
+/* ---------- Operating apps in Work mode ---------- */
+
+const { validOperateAction, osaScripts } = require("./operate");
+
+/** Runs one AppleScript line; resolves null on success, else a short error. */
+function runOsa(script) {
+  return new Promise((resolve) => {
+    execFile("/usr/bin/osascript", ["-e", script], { timeout: 15000 }, (error) => {
+      resolve(error ? String(error.message || error).slice(0, 200) : null);
+    });
+  });
+}
+
+/** The stop word, Esc or Take over sets this; typing checks it between chunks. */
+let operateCancelled = false;
+
+/** What this action will really do, for the Mac's own confirmation. */
+function operateDescription(run) {
+  if (run.kind === "click") return `Click "${run.label}" at ${run.x}, ${run.y}.`;
+  if (run.kind === "type") return `Type this, exactly:\n\n${run.text}`;
+  if (run.kind === "key") return `Press ${[...run.modifiers, run.key].join(" + ")}.`;
+  return `Open ${run.app}.`;
+}
+
+/**
+ * Asked here, not on the page: a web page can show any card it likes, but it
+ * can't answer this. Nothing runs on the Mac without it.
+ */
+async function confirmedByMac(run) {
+  const { response } = await ask({
+    type: "warning",
+    message: "Let Persuna do this on your Mac?",
+    detail: `${operateDescription(run)}\n\nPress Esc while it runs to stop it.`,
+    buttons: ["Cancel", "Do it"],
+    defaultId: 0,
+    cancelId: 0,
+  });
+  return response === 1;
+}
+ipcMain.on("persuna:operate-cancel", (event) => {
+  if (fromOverlay(event)) operateCancelled = true;
+});
+
+/**
+ * Runs one approved desktop action. The overlay hides first so the click or
+ * keystroke lands in the user's app, not on Persuna; it shows again after.
+ * Take-over: the stop word aborts between chunks, and a click that lands with
+ * the mouse somewhere else reports took_over (a hand grabbed it mid-click).
+ */
+ipcMain.handle("persuna:operate", async (event, action) => {
+  if (!fromOverlay(event)) return { status: "denied", detail: "not from Persuna" };
+  const run = validOperateAction(action);
+  if (!run) return { status: "denied", detail: "that action isn't shaped safely" };
+  if (!MAC) return { status: "denied", detail: "operating apps needs a Mac for now" };
+  if (!keyboardAllowed()) {
+    return {
+      status: "denied",
+      detail:
+        "Persuna needs Accessibility permission (System Settings → Privacy & Security → Accessibility)",
+    };
+  }
+  if (!(await confirmedByMac(run))) return { status: "denied", detail: "you said no" };
+  operateCancelled = false;
+  // Esc stops it from anywhere, because Persuna's own controls are out of the way.
+  const stopKey = globalShortcut.register("Escape", () => {
+    operateCancelled = true;
+  });
+  const hidden = overlay && !overlay.isDestroyed() && overlay.isVisible();
+  if (hidden) overlay.hide();
+  // The confirmation took focus: hand it back so the action lands in your app.
+  if (MAC) app.hide();
+  await delay(200);
+  try {
+    if (operateCancelled) return { status: "took_over", detail: "stopped" };
+    for (const line of osaScripts(run) ?? []) {
+      if (operateCancelled) return { status: "took_over", detail: "stopped" };
+      const failed = await runOsa(line);
+      if (failed) return { status: "failed", detail: failed };
+      await delay(20);
+    }
+    if (run.kind === "click") {
+      // The click moves the mouse to its target: anywhere else means a hand moved it.
+      const at = screen.getCursorScreenPoint();
+      if (Math.hypot(at.x - run.x, at.y - run.y) > 24) {
+        return { status: "took_over", detail: "the mouse moved" };
+      }
+    }
+    return { status: "done" };
+  } finally {
+    if (stopKey) globalShortcut.unregister("Escape");
+    if (hidden) overlay.showInactive();
+  }
+});
+
 /** A free name in Downloads: "Plan.pdf", then "Plan (2).pdf"… */
 function downloadPath(name, ext) {
   const base =
@@ -510,6 +617,7 @@ async function readElements(display) {
     app: tree.app ?? "",
     window: tree.window ?? "",
     selection: tree.selection ?? "",
+    focus: tree.focus ?? null,
     items: (tree.items ?? []).map((i) =>
       Object.assign(
         { role: i.role, label: i.label },
@@ -553,6 +661,25 @@ function warmEyes() {
 /** The longest side of a look, in pixels: plenty to read text, small enough to send. */
 const LOOK_WIDTH = 1600;
 
+/** The front apps never to read (their names), matched whole and case-insensitively. */
+function isExcluded(app) {
+  const name = String(app ?? "")
+    .trim()
+    .toLowerCase();
+  const list = readSettings().excludedApps;
+  // Can't tell which app is in front: with a never-read list, don't look.
+  if (!name) return Array.isArray(list) && list.length > 0;
+  return (
+    Array.isArray(list) &&
+    list.some(
+      (entry) =>
+        String(entry ?? "")
+          .trim()
+          .toLowerCase() === name,
+    )
+  );
+}
+
 /**
  * One look at the main screen, for Persuna to understand what you're asking
  * about: a screenshot (Persuna hidden from it) and a description of what's on
@@ -563,11 +690,23 @@ const LOOK_WIDTH = 1600;
 ipcMain.handle("persuna:look", async (event) => {
   if (!overlay || event.sender !== overlay.webContents) return null;
   if (MAC && systemPreferences.getMediaAccessStatus("screen") !== "granted") return null;
+  return takeLook();
+});
+
+/**
+ * One look at the main screen, shared by single looks and the Learn stream:
+ * a screenshot (Persuna hidden from it) and a description of what's on it.
+ * `{ excluded: true }` when the front app is on the never-read list.
+ */
+async function takeLook() {
   const display = screen.getPrimaryDisplay();
+  // The accessibility tree first: an excluded front app costs one local read
+  // and no screenshot, and the page is told plainly (nothing travels).
+  const found = await readElements(display);
+  if (isExcluded(found.app)) return { excluded: true, app: found.app };
   const scale = Math.min(1, LOOK_WIDTH / (display.size.width * display.scaleFactor));
   overlay.setContentProtection(true);
   let shot = null;
-  const elements = readElements(display);
   try {
     const sources = await desktopCapturer.getSources({
       types: ["screen"],
@@ -583,7 +722,7 @@ ipcMain.handle("persuna:look", async (event) => {
     overlay?.setContentProtection(watching);
   }
   if (!shot || shot.isEmpty()) return null;
-  const [found, text] = await Promise.all([elements, readText(shot, display)]);
+  const text = await readText(shot, display);
   return {
     image: `data:image/jpeg;base64,${shot.toJPEG(72).toString("base64")}`,
     scene: {
@@ -592,6 +731,118 @@ ipcMain.handle("persuna:look", async (event) => {
       text,
     },
   };
+}
+
+/* ---------- Learn mode: the accessibility event stream ---------- */
+
+/** How often the stream polls the accessibility tree while recording. */
+const LEARN_EVERY_MS = 350;
+/** A screenshot rides along at most this often (at step changes). */
+const LEARN_FRAME_MS = 2000;
+
+let learnTimer = null;
+/** The last snapshot polled: diffs against it become events. */
+let learnBaseline = null;
+let learnLastFrame = 0;
+
+function focusKey(found) {
+  return found.focus ? `${found.focus.role}|${found.focus.label}` : "";
+}
+
+/**
+ * One poll of the Learn stream: app, window, focus and selection against the
+ * last snapshot. Emits role, action and time only — the selection's text is
+ * compared here and never leaves the computer, and excluded apps emit nothing.
+ */
+async function pollLearn() {
+  if (!overlay || !learnTimer) return;
+  const display = screen.getPrimaryDisplay();
+  const found = await readElements(display);
+  if (!overlay || !learnTimer) return;
+  // On the never-read list: nothing is captured, and the baseline resets so
+  // coming back is one switch event, not a flood.
+  if (isExcluded(found.app)) {
+    learnBaseline = { app: found.app, window: found.window, focus: "", selection: "" };
+    return;
+  }
+  const at = new Date().toISOString();
+  const key = focusKey(found);
+  const events = [];
+  if (!learnBaseline) {
+    events.push({
+      at,
+      app: found.app,
+      window: found.window,
+      action: "switch",
+      role: "",
+      label: "",
+    });
+  } else {
+    if (found.app !== learnBaseline.app || found.window !== learnBaseline.window) {
+      events.push({
+        at,
+        app: found.app,
+        window: found.window,
+        action: "switch",
+        role: "",
+        label: "",
+      });
+    } else if (key && key !== learnBaseline.focus) {
+      events.push({
+        at,
+        app: found.app,
+        window: found.window,
+        action: "focus",
+        role: found.focus.role,
+        label: found.focus.label,
+      });
+    }
+    if (found.selection && found.selection !== learnBaseline.selection) {
+      events.push({
+        at,
+        app: found.app,
+        window: found.window,
+        action: "select",
+        role: found.focus?.role ?? "",
+        label: found.focus?.label ?? "",
+      });
+    }
+  }
+  learnBaseline = { app: found.app, window: found.window, focus: key, selection: found.selection };
+  if (events.length === 0) return;
+  let frame = null;
+  if (Date.now() - learnLastFrame >= LEARN_FRAME_MS) {
+    const sight = await takeLook().catch(() => null);
+    if (sight && !("excluded" in sight) && sight.image) {
+      frame = { image: sight.image, at };
+      learnLastFrame = Date.now();
+    }
+  }
+  overlay.webContents.send("persuna:learn-batch", { events, frame });
+}
+
+function startLearn() {
+  if (learnTimer || !overlay) return;
+  if (MAC && systemPreferences.getMediaAccessStatus("screen") !== "granted") {
+    overlay.webContents.send("persuna:learn-batch", { events: [], frame: null, denied: true });
+    return;
+  }
+  learnBaseline = null;
+  learnLastFrame = 0;
+  learnTimer = setInterval(() => void pollLearn().catch(() => {}), LEARN_EVERY_MS);
+  void pollLearn().catch(() => {});
+}
+
+function stopLearn() {
+  if (learnTimer) clearInterval(learnTimer);
+  learnTimer = null;
+  learnBaseline = null;
+}
+
+ipcMain.on("persuna:learn", (event, on) => {
+  if (!overlay || event.sender !== overlay.webContents) return;
+  if (on) startLearn();
+  else stopLearn();
 });
 
 /* ---------- Setup window (see setup-preload.js) ---------- */
@@ -625,6 +876,22 @@ ipcMain.handle("setup:ask-keyboard", (event) => {
   // Adds Persuna to the list (switched off) and points the way.
   systemPreferences.isTrustedAccessibilityClient(true);
   void shell.openExternal(PRIVACY("Accessibility"));
+});
+ipcMain.handle("setup:reset-permission", async (event, kind) => {
+  if (!fromSetup(event) || !MAC) return;
+  // A grant gone stale (on here, broken in reality): clear it and start that
+  // permission over in one step, instead of reinstalling.
+  if (kind === "keyboard") {
+    await forgetPermission("Accessibility");
+    systemPreferences.isTrustedAccessibilityClient(true);
+    void shell.openExternal(PRIVACY("Accessibility"));
+  } else if (kind === "screen") {
+    await forgetOldScreenPermission();
+    await desktopCapturer
+      .getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } })
+      .catch(() => {});
+    void shell.openExternal(PRIVACY("ScreenCapture"));
+  }
 });
 ipcMain.handle("setup:ask-screen", async (event) => {
   if (!fromSetup(event) || !MAC) return;
@@ -988,6 +1255,10 @@ function rebuildTray() {
           else overlay.showInactive();
           rebuildTray();
         },
+      },
+      {
+        label: workModeOn ? "Work mode: on (turn off)" : "Work mode: off (turn on)",
+        click: () => overlay?.webContents.send("persuna:set-work", !workModeOn),
       },
       { type: "separator" },
       {

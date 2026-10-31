@@ -14,13 +14,20 @@ import {
   persunaAgentTurnsAction,
   persunaAppConfirmAction,
   persunaMcpConfirmAction,
+  persunaOperateApproveAction,
+  persunaOperateCancelAction,
+  persunaOperateSettleAction,
   persunaFileAction,
   persunaWorkAction,
+  persunaEpisodeBatchAction,
+  persunaEpisodeFinalizeAction,
 } from "@/app/actions/persuna";
 import { toTranscribableWav } from "@/lib/audio/convert";
 import type { ChatJob, ChatResult, Drawing, MadeFile, PublishConfirm } from "@/lib/persuna/service";
 import type { AppConfirm } from "@/lib/connections/service";
 import type { McpConfirm } from "@/lib/mcp/service";
+import type { OperateConfirm } from "@/lib/operate/service";
+import type { OperateAction } from "@/lib/operate/actions";
 import { parseFastIntent } from "@/lib/persuna/intents";
 import { warmHearing } from "@/components/persuna/live-hearing";
 import {
@@ -49,6 +56,12 @@ import { MadeFileCard } from "./made-file";
 import { WorkDot, type DotTone } from "./work-dot";
 import { dotLine, islandQuiet, talkStatus } from "./dot-talk";
 import { stayOnScreen, wantsSight } from "./sight-gate";
+import {
+  isExcludedApp,
+  modeForTurn,
+  workAutoOffDue,
+  type TurnMode,
+} from "@/lib/persuna/screen-mode";
 import { FRESH_CHECK_MS, shouldRefresh } from "./fresh";
 import { CircleLayer, CircledMark, DrawingLayer, cropPicture, type Area } from "./screen-drawing";
 import {
@@ -115,6 +128,20 @@ type Busy = "idle" | "thinking" | "hearing";
 const ORB = 88;
 
 /** What Persuna Desktop's preload exposes to the page. */
+/** One batch from the desktop's Learn stream: events, and a screenshot at most. */
+type LearnBatch = {
+  events: {
+    at: string;
+    app: string;
+    window: string;
+    action: "switch" | "focus" | "select" | "open" | "close";
+    role: string;
+    label: string;
+  }[];
+  frame: { image: string; at: string } | null;
+  denied?: boolean;
+};
+
 type DesktopBridge = {
   overlay: boolean;
   setInteractive(on: boolean): void;
@@ -127,8 +154,20 @@ type DesktopBridge = {
   /**
    * A screenshot of the screen right now (Persuna itself left out), or null
    * without Screen Recording. Taken as you speak or send, so it can see what you mean.
+   * `{ excluded: true }` when the front app is on the never-read list: nothing
+   * was captured, and nothing about the screen travels with this turn.
    */
-  look?(): Promise<{ image: string; scene: Scene | null } | null>;
+  look?(): Promise<{ image: string; scene: Scene | null } | { excluded: true; app: string } | null>;
+  /** The front apps never to read, by name; the desktop refuses looks at them. */
+  setExcludedApps?(apps: string[]): void;
+  /** Tell the desktop's menu bar whether Work mode is on. */
+  setMode?(mode: { work: boolean }): void;
+  /** The desktop's menu bar toggled Work mode. */
+  onSetWork?(handler: (on: boolean) => void): void;
+  /** Learn mode: stream accessibility events while recording, or stop. */
+  startLearn?(): void;
+  stopLearn?(): void;
+  onLearn?(handler: (batch: LearnBatch) => void): void;
   /** Hold-to-talk from the desktop's key listener: start, end, cancel, or "type" (double tap). */
   onHold?(handler: (phase: "start" | "end" | "cancel" | "type") => void): void;
   /** The hold-to-talk key's label ("right ⌥"), or null when it's off or not allowed yet. */
@@ -150,6 +189,16 @@ type DesktopBridge = {
   installUpdate?(): void;
   copy?(text: string): void;
   paste?(text: string): Promise<boolean>;
+  /**
+   * Work mode: run one approved desktop action. Reports how it went: done,
+   * took_over (the user moved the mouse), failed, or denied (no permission).
+   */
+  operate?(action: OperateAction): Promise<{
+    status: "done" | "took_over" | "failed" | "denied";
+    detail?: string | null;
+  }>;
+  /** Stop word: abort the running action. */
+  cancelOperate?(): void;
   saveFile?(file: { name: string; ext: string; data: string }): Promise<string | null>;
   savePdf?(doc: { name: string; html: string }): Promise<string | null>;
   onIsland?(handler: (shape: { notch: boolean; height: number; notchWidth: number }) => void): void;
@@ -258,7 +307,6 @@ export function Companion(props: CompanionProps) {
   const [panel, setPanel] = useState(false);
   const [holding, setHolding] = useState(false);
   const [holdLabel, setHoldLabel] = useState<string | null>(null);
-  const [seeScreen, setSeeScreen] = useState(true);
   // Where Persuna is pointing on screen (Persuna Desktop), for a few seconds.
   const [pointAt, setPointAt] = useState<Spot | null>(null);
   const pointTimer = useRef(0);
@@ -276,6 +324,11 @@ export function Companion(props: CompanionProps) {
   const [appConfirm, setAppConfirm] = useState<AppConfirm | null>(null);
   // A tool call on one of the user's MCP servers, waiting for their OK.
   const [mcpConfirm, setMcpConfirm] = useState<McpConfirm | null>(null);
+  // One desktop action in Work mode, waiting for their OK — then running it.
+  const [operateConfirm, setOperateConfirm] = useState<OperateConfirm | null>(null);
+  const [operating, setOperating] = useState<{ preview: string } | null>(null);
+  const operatingRef = useRef<{ execToken: string; proposalToken: string } | null>(null);
+  const stoppedRef = useRef(false);
   const offFocusAsked = useRef(false);
   const [dismissedJob, setDismissedJob] = useState<string | null>(null);
   const [setupDone, setSetupDone] = useState(props.setupDone);
@@ -370,6 +423,32 @@ export function Companion(props: CompanionProps) {
   // Work mode: Persuna keeps an eye on your work and steps in when it can help.
   const [workMode, setWorkMode] = useState(false);
   const [askWork, setAskWork] = useState(false);
+  // Look mode: one consented read for this Talk turn. The reason shown is why
+  // this turn wants the screen (a circled question, a question about it).
+  const [askLook, setAskLook] = useState<string | null>(null);
+  const lookResolve = useRef<((granted: boolean) => void) | null>(null);
+  // A Look read in flight: the island's indicator flashes while it reads.
+  const [looking, setLooking] = useState(false);
+  // Work mode turns itself off after this many quiet minutes (0: never).
+  const [workAutoOffMin, setWorkAutoOffMin] = useState(30);
+  // Front apps never to read, by name; the desktop refuses looks at them.
+  const [excludedApps, setExcludedApps] = useState<string[]>([]);
+  const [editingExcluded, setEditingExcluded] = useState(false);
+  const [excludedDraft, setExcludedDraft] = useState("");
+  const watchingRef = useRef(false);
+  // The last Work tick or frame sent: Work mode is only quiet without these.
+  const lastWorkTick = useRef(0);
+  // Learn mode: recording an episode for a skill (inside Work mode).
+  const [learning, setLearning] = useState<{
+    episodeId: string;
+    skill: { slug: string; name: string };
+  } | null>(null);
+  const learningRef = useRef<typeof learning>(null);
+  const learnEvents = useRef<LearnBatch["events"]>([]);
+  const learnFrame = useRef<LearnBatch["frame"]>(null);
+  const learnNarration = useRef<string[]>([]);
+  const learnFlushTimer = useRef(0);
+  const learnFinishing = useRef(false);
   const [offer, setOffer] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef(0);
@@ -585,8 +664,9 @@ export function Companion(props: CompanionProps) {
       setSpot(overlayRef.current ? { x: 0, y: 0 } : start);
       setVoiceOn(stored("persuna.voice", true));
       setAgentVoice(stored("persuna.agentVoice", true));
-      setSeeScreen(stored("persuna.seeScreen", true));
       setWorkMode(stored("persuna.workMode", false));
+      setWorkAutoOffMin(stored("persuna.workAutoOffMin", 30));
+      setExcludedApps(stored("persuna.excludedApps", []));
       setWakeOn(stored("persuna.wake", false) && wakeWordSupported());
     });
     void persunaCheckInAction(clock().day).then((res) => {
@@ -698,6 +778,21 @@ export function Companion(props: CompanionProps) {
    * the normal chat path takes it.
    */
   async function fastPath(body: string): Promise<boolean> {
+    // While an action runs, "stop" stops it first: safety before anything else.
+    if (operatingRef.current && /^\s*stop\b/i.test(body)) {
+      takeOver();
+      fastExchange(body, "Stopped.");
+      return true;
+    }
+    // While recording, "done" ends the episode: instant, and it can't be misheard.
+    if (
+      learningRef.current &&
+      /^(done|finished|stop( recording| learning)?|that's it|that is it)\b/i.test(body.trim())
+    ) {
+      const done = await finishLearn();
+      if (done) fastExchange(body, done.line, done.link);
+      return true;
+    }
     const intent = parseFastIntent(body, new Date());
     if (!intent) return false;
     if (intent.kind === "copy") {
@@ -742,6 +837,7 @@ export function Companion(props: CompanionProps) {
       sight: Awaited<ReturnType<typeof screenNow>>,
       opts: {
         lead?: string;
+        mode: TurnMode;
         show?: boolean;
         onWords?: (soFar: string) => void;
         onEnd?: () => void;
@@ -758,6 +854,7 @@ export function Companion(props: CompanionProps) {
         if (sight?.circled) form.append("circled", "1");
         if (sight?.image && withPicture) form.append("screen", sight.image);
         else if (sight?.image) form.append("picture-held", "1");
+        form.append("mode", opts.mode);
         if (opts.show) form.append("show", "1");
         if (heardLive) form.append("heard-live", "1");
         const { day, now, offset } = clock();
@@ -824,7 +921,10 @@ export function Companion(props: CompanionProps) {
         }
         let firstSentenceLogged = false;
         const on = {
-          heard: (text: string) => showCaption(`“${text}”`),
+          heard: (text: string) => {
+            showCaption(`“${text}”`);
+            narrateLearn(text);
+          },
           sentence: (text: string) => {
             if (!firstSentenceLogged) {
               firstSentenceLogged = true;
@@ -850,7 +950,7 @@ export function Companion(props: CompanionProps) {
         }
         const { result, failed } = outcome;
         console.info(
-          `[persuna] ${label} turn total=${Math.round(performance.now() - started)}ms sight=${Boolean(sight)}`,
+          `[persuna] ${label} turn total=${Math.round(performance.now() - started)}ms mode=${opts.mode} sight=${Boolean(sight)}`,
         );
         close();
         if (failed || !result) {
@@ -888,6 +988,12 @@ export function Companion(props: CompanionProps) {
   const send = useCallback(
     async (message: string, lead = "", opts?: { show?: boolean }) => {
       const body = message.trim();
+      // "Stop" works while Persuna is busy: that's when it matters most.
+      if (operatingRef.current && /^\s*stop\b/i.test(body)) {
+        takeOver();
+        fastExchange(body, "Stopped.");
+        return;
+      }
       if (!body || live.current.busy === "thinking") return;
       lastTalked.current = Date.now();
       stopSpeaking();
@@ -895,6 +1001,7 @@ export function Companion(props: CompanionProps) {
       if (!setupRef.current.done) return setupReply(body);
       // A few things need no model at all (and can't be misheard).
       if (await fastPath(body)) return;
+      narrateLearn(body);
       setError(null);
       setCaption(null);
       setText("");
@@ -907,19 +1014,15 @@ export function Companion(props: CompanionProps) {
       setMessages((all) => [...all, pending]);
       setBusy("thinking");
       if (live.current.voiceOn) void warmVoice();
-      // The screen goes with the message only when the message is about it,
-      // you're showing something, or the last turn was: reading it costs
-      // seconds that plain chat shouldn't pay.
-      const withSight =
-        Boolean(circledRef.current) ||
-        Boolean(opts?.show) ||
-        screenyRef.current ||
-        wantsSight(body);
-      const sight = withSight ? await screenNow() : null;
+      // The screen goes with the message in Work mode, or as one consented
+      // look when the message is about it: reading it costs seconds that
+      // plain chat shouldn't pay.
+      const { sight, mode } = await turnSight(body, Boolean(opts?.show));
       const writing = `${pending.id}-reply`;
       streamAbort.current?.abort();
       const failure = await streamTurn({ text: body }, sight, {
         lead,
+        mode,
         show: opts?.show,
         onWords: (soFar) =>
           setMessages((all) => [
@@ -952,6 +1055,10 @@ export function Companion(props: CompanionProps) {
     ]);
     setFocusSkill(value.focus.skill);
     if (value.task) setTask(value.task);
+    if (value.episode?.op === "start") {
+      void startLearnFlow(value.episode.episodeId, value.episode.skill);
+    }
+    if (value.episode?.op === "stop") void finishLearn().then(announceLearned);
     if (props.overlay && desktopBridge()?.look) {
       // On the desktop, "watch my screen" is Work mode.
       if (value.watch === "start") void enableWork();
@@ -970,6 +1077,7 @@ export function Companion(props: CompanionProps) {
     if (value.example) setExample(value.example.skill);
     if (value.appConfirm) setAppConfirm(value.appConfirm);
     if (value.mcpConfirm) setMcpConfirm(value.mcpConfirm);
+    if (value.operateConfirm) setOperateConfirm(value.operateConfirm);
     // Showing something on screen: the island folds up so it doesn't cover it.
     if (value.point || value.drawing) setPanel(false);
     if (value.point) showPoint(value.point);
@@ -1065,12 +1173,25 @@ export function Companion(props: CompanionProps) {
   function setWork(on: boolean) {
     setAskWork(false);
     // Turning it on is an invitation: it may help straight away.
-    if (on) lastTalked.current = 0;
+    if (on) {
+      lastTalked.current = 0;
+      lastWorkTick.current = Date.now();
+    }
     setWorkMode(on);
     store("persuna.workMode", on);
+    desktopBridge()?.setMode?.({ work: on });
     if (!on) {
+      // Work mode is what allowed this proposal: it doesn't outlive it.
+      operateDeclined();
       setOffer(null);
       setTeachOffer(null);
+      // A Work read never leaks into a later Talk turn.
+      sightPromise.current = null;
+      sightCache.current = null;
+      // Watching runs in Work mode: it ends with it (saying so on screen).
+      watcher.current?.stop();
+      // So does a Learn recording (what it caught is still learned from).
+      if (learningRef.current) void finishLearn().then(announceLearned);
     }
     flash(on ? "Work mode is on" : "Work mode is off");
   }
@@ -1098,6 +1219,23 @@ export function Companion(props: CompanionProps) {
       setNeed(null);
       flash(kind === "mic" ? "Thanks. Hold the key and talk." : "Thanks");
     }
+  }
+
+  function addExcluded() {
+    const name = excludedDraft.trim();
+    if (!name) return;
+    if (!isExcludedApp(name, excludedApps)) {
+      const next = [...excludedApps, name];
+      setExcludedApps(next);
+      store("persuna.excludedApps", next);
+    }
+    setExcludedDraft("");
+  }
+
+  function removeExcluded(name: string) {
+    const next = excludedApps.filter((app) => app !== name);
+    setExcludedApps(next);
+    store("persuna.excludedApps", next);
   }
 
   /** Work mode on, by voice or the island (it needs to see the screen). */
@@ -1149,7 +1287,13 @@ export function Companion(props: CompanionProps) {
         // A very long turn: Persuna cut in, and says so.
         const lead = end === "long" ? CUT_IN : "";
         const said = words ? await words : null;
+        if (said && operatingRef.current && /^\s*stop\b/i.test(said)) {
+          takeOver();
+          setBusy("idle");
+          return;
+        }
         if (said) showCaption(`“${said}”`);
+        if (said) narrateLearn(said);
         const recording = async () => {
           setBusy("hearing");
           return toTranscribableWav(audio, "persuna");
@@ -1171,19 +1315,16 @@ export function Companion(props: CompanionProps) {
           if (spoken) await send(spoken, lead);
           return;
         }
-        // Answered as it streams. The screen read started when the key went
-        // down (or a moment ago).
+        // Answered as it streams. In Work mode the screen read started when
+        // the key went down (or a moment ago); in Talk mode nothing travels
+        // without a look granted for this turn.
         streamAbort.current?.abort();
         stopSpeaking();
-        // With your words already known, plain talk skips the screen, as typing does.
-        const withSight =
-          !said || Boolean(circledRef.current) || screenyRef.current || wantsSight(said);
-        const sight = withSight ? await screenNow() : null;
-        if (!withSight) sightPromise.current = null;
+        const { sight, mode } = await turnSight(said, false);
         const failure = await streamTurn(
           said ? { text: said, heardLive: true } : { audio: await recording() },
           sight,
-          { lead },
+          { lead, mode },
         );
         if (failure) setError(failure);
       } catch {
@@ -1298,9 +1439,10 @@ export function Companion(props: CompanionProps) {
     if (talkingNow.current) interrupt();
     if (conversation.current || agentCall.current) endConversation();
     setHolding(true);
-    // Start reading the screen now, while you're still talking, so it's
-    // ready the moment you let go instead of costing seconds then.
-    sightPromise.current ??= lookNow();
+    // In Work mode, start reading the screen now, while you're still talking,
+    // so it's ready the moment you let go instead of costing seconds then. In
+    // Talk mode nothing is read until the turn grants a look.
+    if (workModeRef.current) sightPromise.current ??= lookNow(true);
     void warmHearing();
     holdRec.current = startHoldRecording(setLevel, showCaption).catch(() => {
       setError("Microphone access was blocked.");
@@ -1335,46 +1477,126 @@ export function Companion(props: CompanionProps) {
   }
 
   /**
-   * What Persuna sees with your message: on the desktop, the screen as you
-   * speak or send (unless you've said not to look); on the web, the window it's
-   * watching, if any.
+   * A Talk turn wants one look at the screen. Asked once: "always" is
+   * remembered, "just this once" grants this turn. Work mode never asks.
    */
-  /** The desktop's eyes, reused for a few seconds: back-to-back turns are one read. */
-  async function lookNow(): Promise<{ scene: Scene | null; image: string | null } | null> {
+  function ensureLook(reason: string): Promise<boolean> {
+    if (workModeRef.current || stored("persuna.lookConsent", false)) {
+      return Promise.resolve(true);
+    }
+    setAskLook(reason);
+    return new Promise<boolean>((resolve) => {
+      // Two turns asking together share the one answer.
+      const prev = lookResolve.current;
+      lookResolve.current = (granted: boolean) => {
+        prev?.(granted);
+        resolve(granted);
+      };
+    });
+  }
+
+  function answerLook(granted: boolean, always: boolean) {
+    if (granted && always) store("persuna.lookConsent", true);
+    setAskLook(null);
+    lookResolve.current?.(granted);
+    lookResolve.current = null;
+  }
+
+  /**
+   * What screen, if any, goes with this turn. Work mode reads; Talk mode reads
+   * once with consent (a circled question, showing something, a follow-up to a
+   * turn about the screen, or a question about it); otherwise nothing travels.
+   */
+  async function turnSight(
+    said: string | null,
+    show: boolean,
+  ): Promise<{ sight: Awaited<ReturnType<typeof screenNow>>; mode: TurnMode }> {
+    if (workModeRef.current) return { sight: await screenNow("work"), mode: "work" };
+    const reason = circledRef.current
+      ? "what you circled"
+      : show
+        ? "what you're showing me"
+        : screenyRef.current || (said && wantsSight(said))
+          ? "your question is about the screen"
+          : null;
+    if (!reason) return { sight: null, mode: "talk" };
+    if (!(await ensureLook(reason))) {
+      // Said no: the circle goes too, so it doesn't hang over the answer.
+      circledRef.current = null;
+      setCircled(null);
+      return { sight: null, mode: "talk" };
+    }
+    const sight = await screenNow("look");
+    return { sight, mode: modeForTurn(false, Boolean(sight)) };
+  }
+
+  /**
+   * The desktop's eyes, reused for a few seconds in Work mode: back-to-back
+   * turns are one read. A Look never reuses another turn's read, and a look at
+   * an excluded app comes back empty (nothing about it travels).
+   */
+  async function lookNow(cached: boolean): Promise<{
+    scene: Scene | null;
+    image: string | null;
+  } | null> {
     const desktop = desktopBridge();
     if (!desktop?.look) return null;
-    const hit = sightCache.current;
-    if (hit && Date.now() - hit.at < 4_000) return hit.value;
+    if (cached) {
+      const hit = sightCache.current;
+      if (hit && Date.now() - hit.at < 4_000) return hit.value;
+    }
     const sight = await desktop.look().catch(() => null);
-    if (sight) sightCache.current = { at: Date.now(), value: sight };
+    if (!sight) return null;
+    if ("excluded" in sight) {
+      if (sight.app) flash(`Skipped ${sight.app} — it's on your never-read list`);
+      return null;
+    }
+    if (cached) sightCache.current = { at: Date.now(), value: sight };
     return sight;
   }
 
-  async function screenNow(): Promise<{
+  /**
+   * What Persuna sees with your message: in Work mode the screen as you speak
+   * or send, in Look mode one fresh read for this turn, in Talk mode nothing.
+   * On the web, the window it's watching, if any.
+   */
+  async function screenNow(mode: TurnMode | null): Promise<{
     image: string | null;
     scene: Scene | null;
     circled?: boolean;
   } | null> {
+    if (!mode || mode === "talk") {
+      sightPromise.current = null;
+      return null;
+    }
     const desktop = desktopBridge();
     const area = circledRef.current;
-    if (desktop?.look && (area || stored("persuna.seeScreen", true))) {
-      // A circled question reads the screen as it is now; anything else takes
-      // the read already started (key-down) or the one from a moment ago.
-      const sight = area
-        ? await desktop.look().catch(() => null)
-        : await (sightPromise.current ?? lookNow());
-      sightPromise.current = null;
-      if (!sight || !area) return sight;
-      // You circled something: only that part goes with this message.
-      circledRef.current = null;
-      setCircled(null);
-      const width = sight.scene?.screen.w ?? window.innerWidth;
-      return {
-        image:
-          sight.image && (await cropPicture(sight.image, area, width).catch(() => sight.image)),
-        scene: sight.scene && sceneWithin(sight.scene, area),
-        circled: true,
-      };
+    if (desktop?.look) {
+      const fresh = mode === "look";
+      if (fresh) setLooking(true);
+      try {
+        // A circled question reads the screen as it is now; in Work mode
+        // anything else takes the read already started (key-down) or the one
+        // from a moment ago. A Look never reuses another turn's read.
+        const sight =
+          area || mode === "look"
+            ? await lookNow(false)
+            : await (sightPromise.current ?? lookNow(true));
+        sightPromise.current = null;
+        if (!sight || !area) return sight;
+        // You circled something: only that part goes with this message.
+        circledRef.current = null;
+        setCircled(null);
+        const width = sight.scene?.screen.w ?? window.innerWidth;
+        return {
+          image:
+            sight.image && (await cropPicture(sight.image, area, width).catch(() => sight.image)),
+          scene: sight.scene && sceneWithin(sight.scene, area),
+          circled: true,
+        };
+      } finally {
+        if (fresh) setLooking(false);
+      }
     }
     const image = watcher.current?.latest() ?? null;
     return image ? { image, scene: null } : null;
@@ -1446,6 +1668,24 @@ export function Companion(props: CompanionProps) {
     desktop?.onHoldKey?.(setHoldLabel);
     void desktop?.shortcut?.().then(setDesktopShortcut);
     desktop?.onShortcut?.(setDesktopShortcut);
+    // The desktop enforces the never-read list and shows Work mode in its
+    // menu bar; its menu bar can also turn Work mode off.
+    desktop?.setExcludedApps?.(stored("persuna.excludedApps", []));
+    desktop?.setMode?.({ work: stored("persuna.workMode", false) });
+    desktop?.onSetWork?.((on) => {
+      if (on) void enableWork();
+      else setWork(false);
+    });
+    desktop?.onLearn?.((batch) => {
+      if (!learningRef.current) return;
+      if (batch.denied) {
+        flash("Recording your narration — Persuna can't see the screen");
+        return;
+      }
+      const room = Math.max(0, 200 - learnEvents.current.length);
+      learnEvents.current.push(...batch.events.slice(0, room));
+      if (batch.frame) learnFrame.current = batch.frame;
+    });
     return () => window.removeEventListener("keydown", onKey);
     // call reads live state through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1494,6 +1734,9 @@ export function Companion(props: CompanionProps) {
       try {
         const sight = await desktop.look!().catch(() => null);
         if (stopped) return;
+        // The front app is on the never-read list: skip this tick silently
+        // (a toast here would nag every ten seconds).
+        if (sight && "excluded" in sight) return;
         if (!sight?.scene) return failed();
         const digest = sceneDigest(sight.scene);
         // Nothing changed and the pointer isn't lingering: nothing to look at.
@@ -1504,6 +1747,7 @@ export function Companion(props: CompanionProps) {
         // Quiet for a while after it spoke up, or after you talked to it
         // (moving the pointer doesn't count).
         const now = Date.now();
+        lastWorkTick.current = now;
         const res = await persunaWorkAction(
           {
             scene: sight.scene,
@@ -1667,6 +1911,34 @@ export function Companion(props: CompanionProps) {
   useEffect(() => {
     workModeRef.current = workMode;
   }, [workMode]);
+  useEffect(() => {
+    watchingRef.current = watching;
+  }, [watching]);
+  useEffect(() => {
+    learningRef.current = learning;
+  }, [learning]);
+  // The desktop holds a copy of the never-read list; keep it in step.
+  useEffect(() => {
+    desktopBridge()?.setExcludedApps?.(excludedApps);
+  }, [excludedApps]);
+
+  // Work mode turns itself off after its quiet minutes: no talking, no
+  // watching, nothing sent. Watching is never quiet (it was asked to watch).
+  useEffect(() => {
+    if (!workMode) return;
+    const check = () => {
+      if (watchingRef.current) return;
+      const lastActive = Math.max(lastTalked.current, lastHeard.current, lastWorkTick.current);
+      if (workAutoOffDue(Date.now(), lastActive, workAutoOffMin)) {
+        setWork(false);
+        flash(`Work mode off — quiet for ${workAutoOffMin} minutes`);
+      }
+    };
+    const timer = window.setInterval(check, 30_000);
+    return () => window.clearInterval(timer);
+    // setWork and flash read live state through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workMode, workAutoOffMin]);
 
   // In Work mode, errors speak from the dot instead of the island. Each new
   // error is routed once, so toggling Work mode never resurfaces an old one.
@@ -1917,7 +2189,12 @@ export function Companion(props: CompanionProps) {
           }
           count += 1;
           setLooks(count);
-          const res = await persunaObserveAction(frame, note);
+          lastWorkTick.current = Date.now();
+          const res = await persunaObserveAction(
+            frame,
+            note,
+            workModeRef.current ? "work" : "talk",
+          );
           // A missed look isn't worth interrupting you for: keep watching, try the next one.
           if (!res.ok) return;
           note = res.value.noteId;
@@ -1963,11 +2240,110 @@ export function Companion(props: CompanionProps) {
       setLooks(0);
       setWatchNote(null);
       setWatching(true);
+      // Watching is continuous: it runs in Work mode.
+      if (!workModeRef.current) setWork(true);
     } catch (e) {
       setError(
         e instanceof Error && e.name !== "NotAllowedError" ? e.message : "Sharing was cancelled.",
       );
     }
+  }
+
+  /* ---------- Learn mode: recording an episode ---------- */
+
+  /** Sends the buffered stream to the episode (a miss just waits for the next flush). */
+  async function flushLearn() {
+    const rec = learningRef.current;
+    if (!rec) return;
+    const events = learnEvents.current.splice(0, learnEvents.current.length);
+    const frame = learnFrame.current;
+    learnFrame.current = null;
+    if (events.length === 0 && !frame) return;
+    lastWorkTick.current = Date.now();
+    const res = await persunaEpisodeBatchAction(rec.episodeId, events, frame);
+    if (!res.ok) {
+      learnEvents.current.unshift(...events.slice(-50));
+      if (frame) learnFrame.current ??= frame;
+    }
+  }
+
+  function narrateLearn(text: string) {
+    if (!learningRef.current) return;
+    const lines = learnNarration.current;
+    // Live words and the server's transcript of them arrive separately.
+    if (lines[lines.length - 1] === text) return;
+    if (lines.join("\n").length + text.length > 3500) return;
+    lines.push(text);
+  }
+
+  async function startLearnFlow(episodeId: string, skill: { slug: string; name: string }) {
+    if (!workModeRef.current) await enableWork();
+    if (learningRef.current) {
+      desktopBridge()?.startLearn?.();
+      return;
+    }
+    learnEvents.current = [];
+    learnFrame.current = null;
+    learnNarration.current = [];
+    setLearning({ episodeId, skill });
+    const desktop = desktopBridge();
+    if (desktop?.startLearn && (await allowed("screen"))) desktop.startLearn();
+    else flash("Recording your narration — the screen needs Persuna Desktop");
+    window.clearInterval(learnFlushTimer.current);
+    learnFlushTimer.current = window.setInterval(() => void flushLearn(), 5000);
+    flash(`Recording ${skill.name} — say "done" when finished`);
+  }
+
+  /** Stops the stream, learns from the episode, and says what came of it. */
+  async function finishLearn(): Promise<{
+    line: string;
+    link: { href: string; label: string };
+  } | null> {
+    const rec = learningRef.current;
+    if (!rec || learnFinishing.current) return null;
+    learnFinishing.current = true;
+    try {
+      desktopBridge()?.stopLearn?.();
+      window.clearInterval(learnFlushTimer.current);
+      await flushLearn();
+      learningRef.current = null;
+      setLearning(null);
+      const narration = learnNarration.current.join("\n").slice(0, 4000);
+      learnNarration.current = [];
+      const res = await persunaEpisodeFinalizeAction(rec.episodeId, narration);
+      if (!res.ok) {
+        setError(res.error);
+        return null;
+      }
+      const { proposalId, steps, newSteps } = res.value;
+      const line =
+        newSteps === 0 && !proposalId
+          ? `Done — nothing new to learn in that one.`
+          : `Done — ${newSteps} new step${newSteps === 1 ? "" : "s"} for ${rec.skill.name} (${steps} in all)${proposalId ? ", and proposed rule changes for you to review" : ""}.`;
+      return {
+        line,
+        link: proposalId
+          ? { href: `/corrections/${proposalId}`, label: "Review the proposed change" }
+          : { href: `/skills/${rec.skill.slug}`, label: "See the steps" },
+      };
+    } finally {
+      learnFinishing.current = false;
+    }
+  }
+
+  function announceLearned(done: { line: string; link: { href: string; label: string } } | null) {
+    if (!done) return;
+    setMessages((all) => [
+      ...all,
+      {
+        id: `learn-${Date.now()}`,
+        role: "assistant",
+        kind: "chat",
+        content: done.line,
+        link: done.link,
+      },
+    ]);
+    express(done.line);
   }
 
   async function teachWatched() {
@@ -2139,6 +2515,81 @@ export function Companion(props: CompanionProps) {
     express(res.value.message.content);
   }
 
+  /** Runs the desktop action the user just OK'd, then reports how it went. */
+  async function operateApproved() {
+    if (!operateConfirm) return;
+    if (!workModeRef.current) return operateDeclined();
+    const proposal = operateConfirm;
+    setBusy("thinking");
+    const approved = await persunaOperateApproveAction(proposal.token);
+    if (!approved.ok) {
+      setBusy("idle");
+      setOperateConfirm(null);
+      return setError(approved.error);
+    }
+    setOperateConfirm(null);
+    const desktop = desktopBridge();
+    if (!desktop?.operate) {
+      // No desktop: nothing ran. The denial is still reported and logged.
+      const res = await persunaOperateSettleAction(approved.value.execToken, {
+        status: "denied",
+        detail: "Persuna Desktop isn't running",
+      });
+      setBusy("idle");
+      if (!res.ok) return setError(res.error);
+      setMessages((all) => [...all, { ...res.value.message, role: "assistant" }]);
+      return express(res.value.message.content);
+    }
+    setOperating({ preview: approved.value.preview });
+    operatingRef.current = {
+      execToken: approved.value.execToken,
+      proposalToken: proposal.token,
+    };
+    let outcome: { status: "done" | "took_over" | "failed" | "denied"; detail?: string | null };
+    try {
+      outcome = await desktop.operate(approved.value.action);
+    } catch {
+      outcome = { status: "failed", detail: "the desktop didn't answer" };
+    }
+    operatingRef.current = null;
+    setOperating(null);
+    if (stoppedRef.current) {
+      // The stop word or Take over already said so, and the cancellation is logged.
+      stoppedRef.current = false;
+      setBusy("idle");
+      return;
+    }
+    const res = await persunaOperateSettleAction(approved.value.execToken, {
+      status: outcome.status,
+      detail: outcome.detail ?? null,
+    });
+    setBusy("idle");
+    if (!res.ok) return setError(res.error);
+    setMessages((all) => [
+      ...all,
+      { ...res.value.message, role: "assistant", link: res.value.link },
+    ]);
+    express(res.value.message.content);
+  }
+
+  /** The user's hand is on the mouse: abort the running action. */
+  function takeOver() {
+    const running = operatingRef.current;
+    operatingRef.current = null;
+    stoppedRef.current = true;
+    setOperating(null);
+    desktopBridge()?.cancelOperate?.();
+    // Logged, but not waited for: stopping is instant.
+    if (running) void persunaOperateCancelAction(running.proposalToken);
+  }
+
+  /** The proposal card's Cancel: nothing ran, the refusal is logged. */
+  function operateDeclined() {
+    const proposal = operateConfirm;
+    setOperateConfirm(null);
+    if (proposal) void persunaOperateCancelAction(proposal.token);
+  }
+
   /** Does the send or create the user just OK'd. */
   async function appConfirmed() {
     if (!appConfirm) return;
@@ -2256,6 +2707,47 @@ export function Companion(props: CompanionProps) {
           </div>
         </div>
       )}
+      {operateConfirm && (
+        <div className={`persuna-in space-y-3 rounded-[22px] p-4 text-sm ${card}`}>
+          <p className="label-mono text-muted">On your Mac · Work mode</p>
+          <p className="max-h-48 overflow-y-auto whitespace-pre-wrap">{operateConfirm.preview}</p>
+          <p className="text-xs text-muted">
+            Your hand on the mouse takes over at any point. Say “stop” to stop me.
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={busy !== "idle"}
+              onClick={() => void operateApproved()}
+              className="rounded-full bg-accent px-4 py-1.5 text-accent-ink disabled:opacity-50"
+            >
+              Go ahead
+            </button>
+            <button
+              type="button"
+              onClick={() => operateDeclined()}
+              className="rounded-full px-3 py-1.5 text-muted hover:text-foreground"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {operating && (
+        <div className={`persuna-in space-y-3 rounded-[22px] p-4 text-sm ${card}`}>
+          <p className="label-mono text-muted">Doing it…</p>
+          <p className="whitespace-pre-wrap">{operating.preview}</p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => takeOver()}
+              className="rounded-full bg-accent px-4 py-1.5 text-accent-ink"
+            >
+              Take over
+            </button>
+          </div>
+        </div>
+      )}
       {appConfirm && (
         <div className={`persuna-in space-y-3 rounded-[22px] p-4 text-sm ${card}`}>
           <p className="label-mono text-muted">{appConfirm.app}</p>
@@ -2320,7 +2812,7 @@ export function Companion(props: CompanionProps) {
               </>
             )}{" "}
             I look every 30 seconds while it changes, write down your <em>steps</em>, skip names and
-            figures, and keep no screenshots. Stop any time.
+            figures, and keep no screenshots. Watching turns Work mode on. Stop any time.
           </p>
           <div className="flex gap-2">
             <button
@@ -2333,6 +2825,37 @@ export function Companion(props: CompanionProps) {
             <button
               type="button"
               onClick={() => setAskWatch(false)}
+              className="rounded-full px-3 py-1.5 text-sm text-muted hover:text-foreground"
+            >
+              Not now
+            </button>
+          </div>
+        </div>
+      )}
+      {askLook && (
+        <div className={`persuna-in space-y-2 rounded-[22px] p-4 text-sm ${card}`}>
+          <p>
+            <strong>Take one look at {askLook}?</strong> Just this turn — I won&apos;t keep
+            watching, and I never keep the screenshot.
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => answerLook(true, false)}
+              className="rounded-full bg-accent px-4 py-1.5 text-sm text-accent-ink"
+            >
+              Just this once
+            </button>
+            <button
+              type="button"
+              onClick={() => answerLook(true, true)}
+              className="rounded-full bg-accent px-4 py-1.5 text-sm text-accent-ink"
+            >
+              Always allow
+            </button>
+            <button
+              type="button"
+              onClick={() => answerLook(false, false)}
               className="rounded-full px-3 py-1.5 text-sm text-muted hover:text-foreground"
             >
               Not now
@@ -2409,15 +2932,37 @@ export function Companion(props: CompanionProps) {
       onSelect: () => (workMode ? setWork(false) : setAskWork(true)),
       hidden: !props.overlay,
     },
+    ...(learning
+      ? [
+          {
+            label: `Stop recording ${learning.skill.name}`,
+            onSelect: () =>
+              void finishLearn().then((done) => {
+                if (done) fastExchange("Stop recording", done.line, done.link);
+              }),
+            hidden: !props.overlay,
+          },
+        ]
+      : []),
     {
       label: watching ? "Stop watching" : "Watch my screen",
       onSelect: () => (watching ? watcher.current?.stop() : setAskWatch(true)),
     },
     {
-      label: seeScreen ? "Don't look at my screen when I talk" : "Look at my screen when I talk",
+      label: `Work mode turns off after: ${workAutoOffMin === 0 ? "never" : `${workAutoOffMin} min quiet`}`,
       onSelect: () => {
-        setSeeScreen(!seeScreen);
-        store("persuna.seeScreen", !seeScreen);
+        const steps = [15, 30, 60, 0];
+        const next = steps[(steps.indexOf(workAutoOffMin) + 1) % steps.length] ?? 30;
+        setWorkAutoOffMin(next);
+        store("persuna.workAutoOffMin", next);
+      },
+      hidden: !props.overlay,
+    },
+    {
+      label: "Never read these apps…",
+      onSelect: () => {
+        setEditingExcluded(true);
+        setPanel(true);
       },
       hidden: !props.overlay,
     },
@@ -2492,7 +3037,19 @@ export function Companion(props: CompanionProps) {
           ? 300
           : 236;
     const indicator = quiet ? (
-      <span className="h-2 w-2 rounded-full bg-[#5cc98f]" title="Work mode is on" />
+      learning ? (
+        <span
+          className="h-2 w-2 animate-pulse rounded-full bg-[#e5484d]"
+          title={`Recording for ${learning.skill.name}`}
+        />
+      ) : (
+        <span className="h-2 w-2 rounded-full bg-[#5cc98f]" title="Work mode is on" />
+      )
+    ) : looking ? (
+      <span
+        className="h-2 w-2 animate-pulse rounded-full bg-[#5cc98f]"
+        title="Taking one look at your screen"
+      />
     ) : holding || orbState === "listening" ? (
       [0.5, 0.8, 1, 0.8, 0.5].map((w, i) => (
         <span
@@ -2563,7 +3120,15 @@ export function Companion(props: CompanionProps) {
       { label: "Wrap up my day", icon: "wrap", act: () => void send("Wrap up my day") },
     ];
     const islandCards =
-      hasCards || showSetupInput || made || offer || askWork || teachOffer || (attached && !panel);
+      hasCards ||
+      showSetupInput ||
+      made ||
+      offer ||
+      askWork ||
+      askLook ||
+      editingExcluded ||
+      teachOffer ||
+      (attached && !panel);
     return (
       <section
         data-persuna
@@ -3027,6 +3592,100 @@ export function Companion(props: CompanionProps) {
                     className="rounded-full px-3 py-1.5 text-xs text-white/60 hover:text-white"
                   >
                     Not now
+                  </button>
+                </div>
+              </div>
+            )}
+            {askLook && (
+              <div
+                className={`persuna-in space-y-2 rounded-[22px] p-4 text-[13px] leading-snug ${ISLAND_CARD}`}
+              >
+                <p>
+                  <strong>Take one look at {askLook}?</strong> Just this turn — I won&apos;t keep
+                  watching, and I never keep the screenshot.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => answerLook(true, false)}
+                    className="rounded-full bg-white px-4 py-1.5 text-xs font-medium text-black"
+                  >
+                    Just this once
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => answerLook(true, true)}
+                    className="rounded-full bg-white px-4 py-1.5 text-xs font-medium text-black"
+                  >
+                    Always allow
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => answerLook(false, false)}
+                    className="rounded-full px-3 py-1.5 text-xs text-white/60 hover:text-white"
+                  >
+                    Not now
+                  </button>
+                </div>
+              </div>
+            )}
+            {editingExcluded && (
+              <div
+                className={`persuna-in space-y-2 rounded-[22px] p-4 text-[13px] leading-snug ${ISLAND_CARD}`}
+              >
+                <p>
+                  <strong>Never read these apps.</strong> I skip them even in Work mode — nothing
+                  about them is captured or sent. Names as they appear, e.g. 1Password.
+                </p>
+                {excludedApps.length > 0 && (
+                  <ul className="space-y-1">
+                    {excludedApps.map((app) => (
+                      <li key={app} className="flex items-center gap-2">
+                        <span className="flex-1 truncate">{app}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeExcluded(app)}
+                          aria-label={`Remove ${app}`}
+                          className="text-white/60 hover:text-white"
+                        >
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    addExcluded();
+                  }}
+                  className="flex items-center gap-1.5 rounded-full bg-white/10 p-1 pl-4"
+                >
+                  <label className="sr-only" htmlFor="persuna-excluded-input">
+                    App never to read
+                  </label>
+                  <input
+                    id="persuna-excluded-input"
+                    value={excludedDraft}
+                    onChange={(e) => setExcludedDraft(e.target.value)}
+                    autoComplete="off"
+                    placeholder="App name…"
+                    className="min-w-0 flex-1 bg-transparent text-[13px] text-white outline-none placeholder:text-white/35 focus-visible:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    className="rounded-full bg-white px-4 py-1.5 text-xs font-medium text-black"
+                  >
+                    Add
+                  </button>
+                </form>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingExcluded(false)}
+                    className="rounded-full px-3 py-1.5 text-xs text-white/60 hover:text-white"
+                  >
+                    Done
                   </button>
                 </div>
               </div>

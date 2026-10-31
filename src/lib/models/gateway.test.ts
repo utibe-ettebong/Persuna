@@ -4,6 +4,7 @@ import {
   createGateway,
   MODEL_OUTAGE_COOLDOWN_MS,
   ModelError,
+  outageStatus,
   type ChatMessage,
   type ModelClient,
 } from "./gateway";
@@ -594,5 +595,31 @@ describe("completeStream", () => {
       "https://stream-meta.example/v1/chat/completions",
       "https://stream-meta.example/v1/chat/completions",
     ]);
+  });
+});
+
+describe("outageStatus", () => {
+  it("names the provider being skipped, and clears it after the cooldown", async () => {
+    const down = { ...config, baseUrl: "https://status-down.example/v1", model: "muse" };
+    const backup = { ...config, baseUrl: "https://status-backup.example/v1", model: "open" };
+    const resolve = (role: string) => (role === "draft" ? backup : down);
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.startsWith("https://status-down")
+        ? new Response('{"error":{"code":"model_not_found"}}', { status: 404 })
+        : ok(reply),
+    );
+    const client = createGateway(resolve as never, fetchImpl as unknown as typeof fetch);
+    const pending = client.complete("listen", [{ role: "user", content: "hi" }]);
+    await vi.runAllTimersAsync();
+    await pending;
+    const skipped = outageStatus().find(
+      (entry) => entry.target === "https://status-down.example/v1",
+    );
+    expect(skipped?.kind).toBe("outage");
+    expect(skipped?.retryInSec).toBeGreaterThan(0);
+    vi.setSystemTime(Date.now() + MODEL_OUTAGE_COOLDOWN_MS + 1000);
+    expect(
+      outageStatus().find((entry) => entry.target === "https://status-down.example/v1"),
+    ).toBeUndefined();
   });
 });

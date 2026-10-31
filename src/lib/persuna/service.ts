@@ -12,6 +12,15 @@ import type { ModelClient } from "@/lib/models/gateway";
 import type { Transcriber } from "@/lib/models/transcribe";
 import { confirmAppAction, doAppTask, type AppConfirm } from "@/lib/connections/service";
 import { confirmMcpCall, listMcpServers, proposeMcpCall, type McpConfirm } from "@/lib/mcp/service";
+import { previewOperate } from "@/lib/operate/actions";
+import {
+  cancelOperateTokenAndAudit,
+  confirmOperateAndAudit,
+  proposeOperate,
+  settleOperateAndAudit,
+  type OperateConfirm,
+  type OperateOutcome,
+} from "@/lib/operate/service";
 import { UsageLimitError } from "@/lib/models/usage";
 import { findNames } from "@/lib/skill/engine";
 import { INTERVIEW_QUESTIONS, type InterviewAnswers } from "@/lib/skill/interview";
@@ -32,8 +41,10 @@ import {
   proposeFromMethodNotes,
   publishedScore,
   saveInterview,
+  skillComposite,
   splitPairs,
 } from "@/lib/skill/service";
+import { recordingEpisode, startEpisode, stopEpisode } from "@/lib/skill/learn";
 import { normalizeText } from "@/lib/text";
 import { env, modelProvider, voiceMode } from "@/env";
 import { createJob, getJob, reviewJob } from "@/lib/jobs/service";
@@ -71,8 +82,9 @@ import {
 import type { Flow, PersunaReply, PersunaState } from "./types";
 import { createLocator } from "@/lib/models/sam";
 import { pictureNeeded, samSpot, sceneIsThin, spotOf, type Scene, type Spot } from "./scene";
+import type { TurnMode } from "./screen-mode";
 import { splitSentences } from "./sentences";
-import { logVoiceTurn, startTurn } from "./voice-metrics";
+import { logVoiceTurn, recordVoiceTurn, startTurn } from "./voice-metrics";
 import { confidentialSkills } from "@/lib/teams/confidential";
 import { withoutConfidential } from "@/lib/teams/rules";
 import { activeOnboardingNote } from "@/lib/teams/service";
@@ -180,7 +192,7 @@ export interface Clock {
   offset: OffsetMinutes;
 }
 
-async function stateFor(userId: string, clock: Clock): Promise<PersunaState> {
+async function stateFor(userId: string, clock: Clock, workMode: boolean): Promise<PersunaState> {
   const profile = await getProfile(userId);
   const owned = await listSkills(userId);
   const todos = await openReminders(userId);
@@ -237,6 +249,7 @@ async function stateFor(userId: string, clock: Clock): Promise<PersunaState> {
       return other ? { slug: other.slug, name: other.name } : null;
     })(),
     onboarding: await activeOnboardingNote(userId),
+    workMode,
   };
 }
 
@@ -262,10 +275,18 @@ export interface ChatResult {
   switchTo: { slug: string; name: string } | null;
   /** Start or stop watching the screen (starting still asks the user's permission). */
   watch: "start" | "stop" | null;
+  /** Start or stop recording a Learn episode (the app runs the desktop stream). */
+  episode: {
+    op: "start" | "stop";
+    episodeId: string;
+    skill: { slug: string; name: string };
+  } | null;
   /** A send or create in the user's apps, waiting for their OK. */
   appConfirm: AppConfirm | null;
   /** A tool call on one of the user's MCP servers, waiting for their OK. */
   mcpConfirm: McpConfirm | null;
+  /** One desktop action in Work mode, waiting for their OK. */
+  operateConfirm: OperateConfirm | null;
   /** Where on screen to show the user something (Persuna Desktop draws it). */
   point: Spot | null;
   /** Text to copy, or to paste where the user's cursor is. */
@@ -346,6 +367,8 @@ export async function chatFromVoice(
 export interface ChatInput {
   clock: Clock;
   actor: Actor;
+  /** The screen mode this turn runs in; absent means Talk (fail-closed). */
+  mode?: TurnMode;
   /**
    * What's on the user's screen right now, when Persuna may look: the list
    * of it read on their computer (desktop) and/or a screenshot.
@@ -370,7 +393,7 @@ async function prepareTurn(userId: string, input: ChatMessageInput) {
   const spoken = "audio" in input;
   const typed = spoken ? "" : normalizeText(input.text).slice(0, 4000);
   if (!spoken && !typed) throw new Error("Say something first");
-  const state = await stateFor(userId, input.clock);
+  const state = await stateFor(userId, input.clock, input.mode === "work");
   const history = (await recentMessages(userId, HISTORY_TURNS)).map((m) => ({
     role: m.role,
     content: m.content,
@@ -430,6 +453,7 @@ export async function chat(
     file,
     reply,
     text,
+    input.mode ?? "talk",
   );
   return result;
 }
@@ -448,6 +472,7 @@ async function applyTurn(
   file: PersunaFile | null,
   reply: PersunaReply,
   text: string,
+  mode: TurnMode,
 ): Promise<{ result: ChatResult; extra: string[] }> {
   const profile = await getProfile(userId);
   const owned = await listSkills(userId);
@@ -469,8 +494,10 @@ async function applyTurn(
   let reminderSet = false;
   let navigate: string | null = null;
   let watch: ChatResult["watch"] = null;
+  let learnEpisode: ChatResult["episode"] = null;
   let appConfirm: ChatResult["appConfirm"] = null;
   let mcpConfirm: ChatResult["mcpConfirm"] = null;
+  let operateConfirm: ChatResult["operateConfirm"] = null;
   let point: ChatResult["point"] = null;
   let clipboard: ChatResult["clipboard"] = null;
   let drawing: ChatResult["drawing"] = null;
@@ -652,6 +679,48 @@ async function applyTurn(
       if (server?.tools.some((t) => t.name === action.tool)) {
         mcpConfirm = proposeMcpCall(userId, server, action.tool, action.arguments ?? {});
       }
+    } else if (action.type === "operate") {
+      // Propose only: the desktop runs it when the user approves the card.
+      if (mode !== "work") {
+        extra.push("Turn Work mode on first, and I'll ask before doing that on your Mac.");
+      } else {
+        let target: unknown = null;
+        if (action.kind === "click") {
+          const spot = action.item && sight?.scene ? spotOf(sight.scene, action.item) : null;
+          if (!spot) {
+            extra.push("I can't see that on your screen right now. What's it called?");
+          } else {
+            target = {
+              kind: "click",
+              // The middle of the element, named as the screen names it: the
+              // card shows what's really there, not what the model calls it.
+              x: Math.round(spot.x + spot.w / 2),
+              y: Math.round(spot.y + spot.h / 2),
+              label: spot.label || action.label,
+            };
+          }
+        } else if (action.kind === "type" && action.text) {
+          target = { kind: "type", text: action.text, label: action.label };
+        } else if (action.kind === "key" && action.key) {
+          target = {
+            kind: "key",
+            key: action.key,
+            modifiers: action.modifiers ?? [],
+            label: action.label,
+          };
+        } else if (action.kind === "open" && action.app) {
+          target = { kind: "open", app: action.app, label: action.label };
+        }
+        if (target) {
+          try {
+            operateConfirm = proposeOperate(userId, mode, target);
+          } catch {
+            extra.push("I couldn't shape that into something safe to run. Say it once more?");
+          }
+        } else if (action.kind !== "click") {
+          extra.push("Say that once more — I missed what to do on your Mac.");
+        }
+      }
     } else if (action.type === "point" && sight?.scene) {
       if (action.item) point = spotOf(sight.scene, action.item);
       else if (action.thing && sight.image) {
@@ -693,6 +762,43 @@ async function applyTurn(
       }
     } else if (action.type === "watch_screen") {
       watch = action.on ? "start" : "stop";
+    } else if (action.type === "learn_episode") {
+      try {
+        if (action.op === "start") {
+          const skill = target(action.skill);
+          if (!skill) {
+            extra.push("Which task should I record? Name one of your skills first.");
+          } else {
+            const { episode, resumed } = await startEpisode(userId, actor, skill.id);
+            learnEpisode = {
+              op: "start",
+              episodeId: episode.id,
+              skill: { slug: skill.slug, name: skill.name },
+            };
+            if (resumed) extra.push(`(Still recording ${skill.name}.)`);
+          }
+        } else {
+          const recording = await recordingEpisode(userId);
+          if (!recording) {
+            extra.push("(Nothing is recording right now.)");
+          } else {
+            await stopEpisode(userId, actor, recording.id);
+            const skill = owned.find((s) => s.id === recording.skillId);
+            learnEpisode = {
+              op: "stop",
+              episodeId: recording.id,
+              skill: skill
+                ? { slug: skill.slug, name: skill.name }
+                : { slug: "", name: "that task" },
+            };
+          }
+        }
+      } catch (error) {
+        console.error(error);
+        extra.push(
+          `(Recording didn't ${action.op === "start" ? "start" : "stop"} just now: ${(error as Error).message})`,
+        );
+      }
     } else if (action.type === "wrap_up") {
       extra.push(`\n\n${await wrapUpText(userId, clock)}`);
       await db()
@@ -750,8 +856,10 @@ async function applyTurn(
     confirm,
     switchTo,
     watch,
+    episode: learnEpisode,
     appConfirm,
     mcpConfirm,
+    operateConfirm,
     point,
     clipboard,
     drawing,
@@ -836,6 +944,7 @@ export async function* chatStream(
       if (heard) {
         timer.mark("end");
         logVoiceTurn(logRoute, timer, { spoken: prep.spoken, picture: false, closer: true });
+        recordVoiceTurn(userId, logRoute, timer, prep.spoken);
         yield { type: "look-closer", heard, said: turn.prose };
         return;
       }
@@ -876,6 +985,7 @@ export async function* chatStream(
       asked: turn.asked,
     },
     text,
+    input.mode ?? "talk",
   );
   for (const chunk of extra) {
     for (const sentence of splitSentences(chunk)) yield { type: "sentence", text: sentence };
@@ -886,6 +996,7 @@ export async function* chatStream(
     heardLive: Boolean(input.heardLive),
     picture: prep.picture,
   });
+  recordVoiceTurn(userId, logRoute, timer, prep.spoken || Boolean(input.heardLive));
   yield { type: "done", result };
 }
 
@@ -993,7 +1104,7 @@ async function teach(
 export async function observe(
   client: ModelClient,
   userId: string,
-  input: { frame: string; noteId: string | null },
+  input: { frame: string; noteId: string | null; mode: TurnMode },
 ): Promise<{
   /** What the user seems to be doing when it isn't today's focus. */
   offFocus: string | null;
@@ -1002,6 +1113,8 @@ export async function observe(
   noteId: string | null;
   message: PersunaMessage | null;
 }> {
+  // Watching is continuous: it only ever runs in Work mode.
+  if (input.mode !== "work") throw new Error("Watching needs Work mode on");
   const profile = await getProfile(userId);
   const note = input.noteId ? await ownedNote(userId, input.noteId) : null;
   const recentSteps = note ? note.body.split("\n").filter(Boolean) : [];
@@ -1078,7 +1191,7 @@ export async function workLook(
   /** Enough new steps to teach today's skill: offer to (the user decides). */
   teachOffer: { noteId: string; skill: string; steps: number } | null;
 }> {
-  const state = await stateFor(userId, input.clock);
+  const state = await stateFor(userId, input.clock, true);
   const title = `${WORK_NOTE}: ${input.clock.day}`;
   const note = await db().query.persunaNotes.findFirst({
     where: and(eq(persunaNotes.userId, userId), eq(persunaNotes.title, title)),
@@ -1666,6 +1779,7 @@ export async function publicProfile(handle: string) {
         turnaroundHours: listing.turnaroundHours,
         trustLevel: skill.trustLevel,
         score: await publishedScore(skill),
+        composite: await skillComposite(skill.id),
         renters: new Set(
           renterJobs.filter((j) => j.skillId === skill.id && j.createdAt >= since).map(renterKey),
         ).size,
@@ -1946,6 +2060,51 @@ export async function confirmMcpFromChat(userId: string, token: string, actor: A
     .values({ userId, role: "assistant", content: `${done.message}\n\n${output}` })
     .returning();
   return { message, link: null };
+}
+
+/**
+ * The user OK'd a proposed desktop action: hand the app the one-shot
+ * execution token. The desktop runs it; the outcome lands via
+ * settleOperateFromChat.
+ */
+export async function approveOperateFromChat(userId: string, token: string, actor: Actor) {
+  const confirmed = await confirmOperateAndAudit(userId, token, actor);
+  return {
+    id: confirmed.id,
+    execToken: confirmed.execToken,
+    action: confirmed.action,
+    preview: previewOperate(confirmed.action),
+  };
+}
+
+/** The desktop finished (or the user took over): say what happened. */
+export async function settleOperateFromChat(
+  userId: string,
+  execToken: string,
+  outcome: OperateOutcome,
+  actor: Actor,
+) {
+  const settled = await settleOperateAndAudit(userId, execToken, outcome, actor);
+  const preview = previewOperate(settled.action);
+  const detail = settled.outcome.detail ? `: ${settled.outcome.detail}` : "";
+  const content =
+    settled.outcome.status === "done"
+      ? `Done — ${preview}.`
+      : settled.outcome.status === "took_over"
+        ? "You took over, so I stopped. Say the word and I'll try again."
+        : settled.outcome.status === "denied"
+          ? `I couldn't do that on your Mac${detail}. Check Persuna has permission, then ask again?`
+          : `That didn't run${detail}. Want me to try again?`;
+  const [message] = await db()
+    .insert(persunaMessages)
+    .values({ userId, role: "assistant", content })
+    .returning();
+  return { message, link: null };
+}
+
+/** The stop word: nothing further runs for this action. */
+export async function cancelOperateFromChat(userId: string, token: string, actor: Actor) {
+  return cancelOperateTokenAndAudit(userId, token, actor);
 }
 
 export async function publishFromChat(

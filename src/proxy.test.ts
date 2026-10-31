@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { isPublicPath } from "./proxy";
+import { config, isPublicPath } from "./proxy";
 import { matchesList, parseList, signUpAllowed } from "./lib/auth/policy";
+
+/**
+ * Whether the proxy's matcher skips this path (the negative lookahead holds
+ * the path prefixes the proxy never sees: the healthcheck, webhooks and
+ * secret-checked endpoints, which authenticate themselves).
+ */
+function proxySkipped(pathname: string): boolean {
+  const alternation = config.matcher
+    .join(" ")
+    .replace(/^\/\(\(\?!/, "")
+    .replace(/\)\.\*\)$/, "");
+  const afterSlash = pathname.replace(/^\//, "");
+  return alternation.split("|").some((prefix) => afterSlash.startsWith(prefix));
+}
 
 describe("isPublicPath", () => {
   it("opens the landing page, auth pages, auth API, employer links, public persuna profiles, the marketplace and the projects board", () => {
@@ -21,6 +35,8 @@ describe("isPublicPath", () => {
       "/market/0b9d1a2e-6c1f-4f7e-9a51-1f2d3c4b5a69",
       "/projects",
       "/projects/0b9d1a2e-6c1f-4f7e-9a51-1f2d3c4b5a69",
+      "/api/persuna/livekit-tool",
+      "/api/persuna/learn-pass",
     ]) {
       expect(isPublicPath(p)).toBe(true);
     }
@@ -43,6 +59,20 @@ describe("isPublicPath", () => {
       "/download/anything-else",
     ]) {
       expect(isPublicPath(p)).toBe(false);
+    }
+  });
+});
+
+describe("proxy matcher", () => {
+  it("skips endpoints that authenticate themselves, so they never redirect to sign-in", () => {
+    for (const p of ["/api/health", "/api/webhooks/paystack", "/api/persuna/llm"]) {
+      expect(proxySkipped(p)).toBe(true);
+    }
+  });
+
+  it("still gates the app's own API routes", () => {
+    for (const p of ["/api/persuna/chat-stream", "/api/persuna/speak", "/api/persuna/hear-token"]) {
+      expect(proxySkipped(p)).toBe(false);
     }
   });
 });

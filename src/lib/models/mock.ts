@@ -412,6 +412,18 @@ function mockPersunaTurn(user: string): {
     };
   }
 
+  if (/\b(learn how i do this|watch me do this|record (this|me))\b/.test(lower)) {
+    return {
+      reply: "Recording — show me how.",
+      actions: [{ type: "learn_episode", op: "start", skill: null }],
+    };
+  }
+  if (/^(done|finished|that's it|stop recording)\b/.test(lower)) {
+    return {
+      reply: "Got it — learning from that.",
+      actions: [{ type: "learn_episode", op: "stop", skill: null }],
+    };
+  }
   if (
     /\b(wrap(?:-| )?up|end of (?:the )?day|summar(?:y|ise|ize) (?:of )?(?:my |the )?day)\b/.test(
       lower,

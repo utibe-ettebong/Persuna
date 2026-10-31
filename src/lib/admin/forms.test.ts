@@ -61,7 +61,34 @@ describe("catalog forms", () => {
   it("reads entries, selections and reverts", () => {
     expect(
       parseCatalogEntryForm({ role: "draft", label: "Spark 1.3", model: "muse-spark-1.3" }),
-    ).toEqual({ role: "draft", label: "Spark 1.3", model: "muse-spark-1.3" });
+    ).toEqual({
+      role: "draft",
+      label: "Spark 1.3",
+      model: "muse-spark-1.3",
+      provider: null,
+      baseUrl: null,
+      voice: null,
+      reasoningEffort: null,
+    });
+    expect(
+      parseCatalogEntryForm({
+        role: "speech",
+        label: "Qwen voice",
+        model: "qwen-tts",
+        provider: "custom",
+        baseUrl: "",
+        voice: "Aiden",
+        reasoningEffort: "",
+      }),
+    ).toMatchObject({ provider: "custom", baseUrl: null, voice: "Aiden", reasoningEffort: null });
+    expect(() =>
+      parseCatalogEntryForm({
+        role: "draft",
+        label: "Bad URL",
+        model: "m",
+        baseUrl: "not a url",
+      }),
+    ).toThrow(/http\(s\) URL/);
     expect(parseSelectForm({ role: "draft", entryId: uuid })).toEqual({
       role: "draft",
       entryId: uuid,

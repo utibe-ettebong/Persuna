@@ -59,9 +59,13 @@ const envSchema = z.object({
   ELEVENLABS_LLM_SECRET: z.string().min(24).optional(),
   /** Shared secret the LiveKit trial agent sends with tool calls (/api/persuna/livekit-tool). */
   LIVEKIT_TOOL_SECRET: z.string().min(24).optional(),
+  /** Shared secret for the scheduled learning pass (/api/persuna/learn-pass). */
+  LEARN_PASS_SECRET: z.string().min(24).optional(),
   JOB_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
   PLATFORM_FEE_PERCENT: z.coerce.number().min(0).max(50).default(20),
   LISTING_MIN_SCORE: z.coerce.number().min(0).max(100).default(80),
+  LISTING_MIN_COVERAGE: z.coerce.number().min(0).max(100).default(80),
+  LISTING_MIN_CONFIDENCE: z.coerce.number().min(0).max(100).default(80),
   /** Live model calls each signed-in user may make per 24 hours. Admins are exempt. */
   DAILY_MODEL_CALLS_PER_USER: z.coerce.number().int().min(1).default(150),
   TRUST_L1_MIN_JOBS: z.coerce.number().int().min(1).default(20),
@@ -296,7 +300,8 @@ export function modelConfig(role: ModelRole): ModelRoleConfig {
  *   so that URL is never sent another provider's key;
  * - with neither, it is the same provider as EXTRACT_* and may still set its own model.
  */
-function rolePicker(prefix: string) {
+/** Resolves one key slot's URL, key and model, with the EXTRACT_* fallback rules. */
+export function rolePicker(prefix: string) {
   const key = roleKey(prefix);
   const ownUrl = Boolean(setting(`${prefix}_BASE_URL`));
   return (field: "BASE_URL" | "API_KEY" | "MODEL") => {
@@ -311,7 +316,7 @@ function rolePicker(prefix: string) {
 const ALL_PREFIXES = ["EXTRACT", "DRAFT", "EVAL", "LISTEN", "TRANSCRIBE"];
 
 /** A role's own key, or the key of another role configured for the same base URL. */
-function roleKey(prefix: string): string | undefined {
+export function roleKey(prefix: string): string | undefined {
   const own = setting(`${prefix}_API_KEY`);
   const url = normaliseUrl(setting(`${prefix}_BASE_URL`));
   if (own || !url) return own;

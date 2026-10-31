@@ -40,18 +40,43 @@ Then speak to it from your project's
 room from any LiveKit client. Say hello, ask it to remember a fact, and ask for a reminder; check
 both land in the app (memory on the Persuna page, the to-dos list).
 
-## Measure
+## Measure (automated)
 
-The dashboard's session view shows per-turn timing; the agent also logs one JSON line per tool call
-(`trial-tool` scope) with its milliseconds. Run at least ten turns per engine and read:
+No voice needed: a measurer joins the agent's room, plays ten spoken turns
+(generated once with `npm run clips` — the app's own ElevenLabs voice, needs
+`SPEECH_*` in the repo `.env`), and times end-of-speech to first agent sound
+per turn. Agent audio per turn is saved for voice judging.
 
-- **End of speech → first sound**, p50 and p95. Target: ≤ 800 ms.
-- **Tool reliability**: did each remember/remind turn call the tool with the right words?
-- **Voice quality**: is the preset voice acceptable next to Persuna's own?
+Terminal 1 — the agent (one engine at a time):
 
-Decide per engine: ship the trial as the production path, keep the current streamed app (slices
-A–C), or tune further. Costs to weigh: LiveKit Inference per-minute billing on top of the app's own
-model spend, for a companion that may listen for hours.
+```bash
+cd livekit-trial
+caffeinate -i npm run dev 2>&1 | tee trial-agent-realtime.log
+# later: Ctrl-C, then:
+TRIAL_ENGINE=pipeline caffeinate -i npm run dev 2>&1 | tee trial-agent-pipeline.log
+```
+
+Terminal 2 — ten turns per engine:
+
+```bash
+cd livekit-trial
+caffeinate -i npm run measure -- realtime
+# after switching the agent:
+caffeinate -i npm run measure -- pipeline
+```
+
+Each run prints `ok=/10 p50= p95=` and writes `runs/<engine>-*/results.json`
+plus per-turn WAVs. Tool reliability reads off the agent log:
+
+```bash
+grep trial-tool trial-agent-realtime.log
+```
+
+Four of the ten turns should fire tools (two `rememberFact`, two `setReminder`,
+each `ok:true`). Decide per engine: ship the trial as the production path, keep
+the current streamed app (slices A–C), or tune further. Costs to weigh: LiveKit
+Inference per-minute billing on top of the app's own model spend, for a companion
+that may listen for hours. Target: p50 end-of-speech → first sound ≤ 800 ms.
 
 ## Cleanup
 

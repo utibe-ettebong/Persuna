@@ -123,6 +123,35 @@ const outages = new Map<string, number>();
 export const REJECTED_KEY_COOLDOWN_MS = 10 * 60_000;
 const rejected = new Map<string, number>();
 
+export interface OutageEntry {
+  kind: "outage" | "rejected-key";
+  /** The base URL being skipped, or role:URL for a rejected key. */
+  target: string;
+  retryInSec: number;
+}
+
+/** Providers being skipped right now, for the Admin status line. */
+export function outageStatus(now: number = Date.now()): OutageEntry[] {
+  const skipped: OutageEntry[] = [];
+  for (const [baseUrl, until] of outages) {
+    if (until > now)
+      skipped.push({
+        kind: "outage",
+        target: baseUrl,
+        retryInSec: Math.ceil((until - now) / 1000),
+      });
+  }
+  for (const [key, until] of rejected) {
+    if (until > now)
+      skipped.push({
+        kind: "rejected-key",
+        target: key,
+        retryInSec: Math.ceil((until - now) / 1000),
+      });
+  }
+  return skipped;
+}
+
 /**
  * OpenAI-compatible chat-completions client, configured per role from env.
  * If a role's provider rejects its key (401/403) and EXTRACT_* is a

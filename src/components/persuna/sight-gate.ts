@@ -33,8 +33,10 @@ export function wantsSight(text: string): boolean {
 /**
  * Should the next turn take the screen too? Yes straight after a turn about it
  * (a follow-up like "and the other one?"), not forever after. `words` is null
- * when they aren't known yet: a recording the server will hear.
+ * when they aren't known yet: a recording the server will hear. Unknown words
+ * are not a reason to look — Talk mode sends no screen without consent.
  */
 export function stayOnScreen(words: string | null, circled: boolean, showed: boolean): boolean {
-  return showed || circled || words === null || wantsSight(words);
+  if (showed || circled) return true;
+  return words !== null && wantsSight(words);
 }

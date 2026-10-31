@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { audit } from "@/lib/audit";
 import { getUser } from "@/lib/auth/session";
 import { chatFromVoiceStream, chatStream } from "@/lib/persuna/service";
 import { POST } from "./route";
@@ -9,6 +10,7 @@ vi.mock("@/lib/auth/session", () => ({
 }));
 vi.mock("@/lib/models", () => ({ createModelClient: vi.fn(), createTranscriber: vi.fn() }));
 vi.mock("@/lib/persuna/service", () => ({ chatFromVoiceStream: vi.fn(), chatStream: vi.fn() }));
+vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
 
 const form = (fields: Record<string, string | Blob>) => {
   const body = new FormData();
@@ -36,7 +38,12 @@ describe("POST /api/persuna/chat-stream", () => {
       yield { type: "done", result: { messages: [] } as never };
     });
     const res = await POST(
-      form({ text: " hi there ", scene: JSON.stringify(scene), "picture-held": "1" }),
+      form({
+        text: " hi there ",
+        mode: "look",
+        scene: JSON.stringify(scene),
+        "picture-held": "1",
+      }),
     );
     const body = await res.text();
 
@@ -83,6 +90,7 @@ describe("POST /api/persuna/chat-stream", () => {
       await POST(
         form({
           text: "What's this?",
+          mode: "look",
           "said-first": "Let me look.",
           screen: image,
           scene: JSON.stringify(scene),
@@ -114,5 +122,54 @@ describe("POST /api/persuna/chat-stream", () => {
   it("is for signed-in users", async () => {
     vi.mocked(getUser).mockResolvedValue(null as never);
     expect((await POST(form({ text: "hi" }))).status).toBe(401);
+  });
+
+  it("refuses a Talk turn carrying a screen read", async () => {
+    const res = await POST(form({ text: "hi", mode: "talk", scene: JSON.stringify(scene) }));
+
+    expect(res.status).toBe(400);
+    expect(vi.mocked(chatStream)).not.toHaveBeenCalled();
+  });
+
+  it("treats a missing or unknown mode as Talk", async () => {
+    expect((await POST(form({ text: "hi", scene: JSON.stringify(scene) }))).status).toBe(400);
+    expect(
+      (await POST(form({ text: "hi", mode: "watching", scene: JSON.stringify(scene) }))).status,
+    ).toBe(400);
+    expect(vi.mocked(chatStream)).not.toHaveBeenCalled();
+  });
+
+  it("takes a Work turn carrying a screen read", async () => {
+    vi.mocked(chatStream).mockImplementation(async function* () {
+      yield { type: "done", result: { messages: [] } as never };
+    });
+    const res = await POST(form({ text: "hi", mode: "work", scene: JSON.stringify(scene) }));
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(chatStream)).toHaveBeenCalledOnce();
+  });
+
+  it("audits each screen read with its mode", async () => {
+    vi.mocked(chatStream).mockImplementation(async function* () {
+      yield { type: "done", result: { messages: [] } as never };
+    });
+    const withApp = { ...scene, app: "Mail" };
+    await (await POST(form({ text: "hi", mode: "look", scene: JSON.stringify(withApp) }))).text();
+
+    expect(vi.mocked(audit)).toHaveBeenCalledOnce();
+    expect(vi.mocked(audit).mock.calls[0][0]).toMatchObject({
+      action: "screen.read",
+      entityType: "screen_read",
+      details: { mode: "look", app: "Mail" },
+    });
+  });
+
+  it("audits nothing for a turn without a screen read", async () => {
+    vi.mocked(chatStream).mockImplementation(async function* () {
+      yield { type: "done", result: { messages: [] } as never };
+    });
+    await (await POST(form({ text: "hi", mode: "talk" }))).text();
+
+    expect(vi.mocked(audit)).not.toHaveBeenCalled();
   });
 });

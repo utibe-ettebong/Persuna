@@ -7,6 +7,8 @@ const bridge = {
   askMic: () => ipcRenderer.invoke("setup:ask-mic"),
   askKeyboard: () => ipcRenderer.invoke("setup:ask-keyboard"),
   askScreen: () => ipcRenderer.invoke("setup:ask-screen"),
+  // A grant gone stale: clear it and start over, in one step.
+  resetPermission: (kind) => ipcRenderer.invoke("setup:reset-permission", kind),
   dragApp: () => ipcRenderer.send("setup:drag-app"),
   appIcon: () => ipcRenderer.invoke("setup:app-icon"),
   restart: () => ipcRenderer.send("setup:restart"),

@@ -67,6 +67,26 @@ const bridge = {
     ipcRenderer.removeAllListeners("persuna:call");
     ipcRenderer.on("persuna:call", () => handler());
   },
+  // The front apps never to read (their names), and whether Work mode is on
+  // (the menu bar shows it, and can turn it back off).
+  setExcludedApps: (apps) => ipcRenderer.send("persuna:excluded-apps", apps),
+  setMode: (mode) => ipcRenderer.send("persuna:mode", mode),
+  onSetWork: (handler) => {
+    ipcRenderer.removeAllListeners("persuna:set-work");
+    ipcRenderer.on("persuna:set-work", (_event, on) => handler(Boolean(on)));
+  },
+  // Learn mode: stream accessibility events (role, action, time; never values)
+  // while recording, with a screenshot at most every couple of seconds.
+  startLearn: () => ipcRenderer.send("persuna:learn", true),
+  stopLearn: () => ipcRenderer.send("persuna:learn", false),
+  // Work mode: run one approved desktop action (done, took_over, failed, denied).
+  operate: (action) => ipcRenderer.invoke("persuna:operate", action),
+  // The stop word: abort the running action.
+  cancelOperate: () => ipcRenderer.send("persuna:operate-cancel"),
+  onLearn: (handler) => {
+    ipcRenderer.removeAllListeners("persuna:learn-batch");
+    ipcRenderer.on("persuna:learn-batch", (_event, batch) => handler(batch));
+  },
 };
 
 contextBridge.exposeInMainWorld("persunaDesktop", bridge);

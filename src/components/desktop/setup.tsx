@@ -52,6 +52,8 @@ interface SetupBridge {
   askMic(): Promise<boolean>;
   askKeyboard(): Promise<void>;
   askScreen(): Promise<void>;
+  /** A grant gone stale: clear it and start over, in one step. */
+  resetPermission(kind: "keyboard" | "screen"): Promise<void>;
   dragApp(): void;
   appIcon(): Promise<string | null>;
   restart(): void;
@@ -514,8 +516,20 @@ function AccessStep({ say, back, onDone }: { say: Say } & Nav) {
                 <span className="block text-sm text-muted">{row.why}</span>
               </span>
               {ok(row.status) ? (
-                <span className="label-mono rounded-full bg-good/10 px-3 py-1.5 text-[10px] text-good">
-                  Allowed
+                <span className="flex items-center gap-2">
+                  <span className="label-mono rounded-full bg-good/10 px-3 py-1.5 text-[10px] text-good">
+                    Allowed
+                  </span>
+                  {(row.key === "keyboard" || row.key === "screen") && (
+                    <button
+                      type="button"
+                      title="If it stopped working, clear the grant and start over"
+                      onClick={() => void desktop.resetPermission(row.key as "keyboard" | "screen")}
+                      className="label-mono text-[10px] text-muted hover:text-foreground"
+                    >
+                      Not working?
+                    </button>
+                  )}
                 </span>
               ) : (
                 <button

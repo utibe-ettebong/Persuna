@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_MEMORY, withFact } from "./service";
+import { MAX_MEMORY, observe, withFact } from "./service";
 
 describe("withFact", () => {
   it("adds a fact unless it's already kept", () => {
@@ -14,5 +14,24 @@ describe("withFact", () => {
     expect(next).toHaveLength(MAX_MEMORY);
     expect(next.at(-1)).toBe("newest");
     expect(next).not.toContain("fact 0");
+  });
+});
+
+describe("observe", () => {
+  it("refuses frames outside Work mode", async () => {
+    await expect(
+      observe({} as never, "user-1", {
+        frame: "data:image/jpeg;base64,AAAA",
+        noteId: null,
+        mode: "talk",
+      }),
+    ).rejects.toThrow("Work mode");
+    await expect(
+      observe({} as never, "user-1", {
+        frame: "data:image/jpeg;base64,AAAA",
+        noteId: null,
+        mode: "look",
+      }),
+    ).rejects.toThrow("Work mode");
   });
 });

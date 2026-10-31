@@ -2,6 +2,9 @@ import { and, desc, eq } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import {
   modelConfig,
+  roleKey,
+  rolePicker,
+  setting,
   speechConfig,
   transcriptionConfig,
   type ModelRoleConfig,
@@ -31,9 +34,140 @@ export interface CatalogEntry {
   role: string;
   label: string;
   model: string;
+  /** Provider preset id, or null for the role's env routing. */
+  provider: string | null;
+  /** Explicit base URL, winning over the preset's. */
+  baseUrl: string | null;
+  /** Voice id (speech role only). */
+  voice: string | null;
+  /** Reasoning level (chat roles only). */
+  reasoningEffort: string | null;
   enabled: boolean;
   selected: boolean;
   updatedAt: Date;
+}
+
+/** One provider an admin can point a role at: a Railway key slot plus its URL. Never a key. */
+export interface ProviderPreset {
+  id: string;
+  label: string;
+  baseUrl: string | null;
+  keySlot: string;
+  api?: "elevenlabs" | "openai";
+}
+
+const CHAT_SLOTS = ["EXTRACT", "DRAFT", "EVAL", "LISTEN", "TRANSCRIBE"] as const;
+
+/**
+ * The providers a role can use: the key slots set in Railway, plus the voice
+ * API shapes for speech. Names and URLs only — keys are never listed.
+ */
+export function providerPresets(role: CatalogRole): ProviderPreset[] {
+  if (role === "speech") {
+    if (!setting("SPEECH_API_KEY")) return [];
+    const custom = setting("SPEECH_BASE_URL");
+    const presets: ProviderPreset[] = [
+      {
+        id: "elevenlabs",
+        label: "ElevenLabs",
+        baseUrl: "https://api.elevenlabs.io/v1",
+        keySlot: "SPEECH",
+        api: "elevenlabs",
+      },
+    ];
+    if (custom) {
+      let label = "Custom voice server";
+      try {
+        label = new URL(custom).host;
+      } catch {
+        label = custom;
+      }
+      presets.push({ id: "custom", label, baseUrl: custom, keySlot: "SPEECH", api: "openai" });
+    }
+    return presets;
+  }
+  return CHAT_SLOTS.filter((slot) => roleKey(slot)).map((slot) => ({
+    id: slot.toLowerCase(),
+    label: `${slot} key`,
+    baseUrl: setting(`${slot}_BASE_URL`) ?? null,
+    keySlot: slot,
+  }));
+}
+
+export interface ProviderSelection {
+  model: string;
+  provider: string | null;
+  baseUrl: string | null;
+  reasoningEffort: string | null;
+}
+
+/**
+ * Applies a catalog selection's provider routing onto a chat/transcribe
+ * config: the model's id, the slot's key and URL, and the entry's explicit
+ * URL when it has one. A borrowed reasoning setting is cleared — a setting
+ * meant for one provider is never sent to another — unless the entry sets
+ * one. An unknown provider keeps env routing (and warns) rather than
+ * misrouting a turn.
+ */
+export function applyProvider(
+  config: ModelRoleConfig,
+  selection: ProviderSelection | null,
+  presets: ProviderPreset[],
+): ModelRoleConfig {
+  if (!selection) return config;
+  const withModel = { ...config, model: selection.model };
+  if (!selection.provider) return withModel;
+  const preset = presets.find((entry) => entry.id === selection.provider);
+  if (!preset) {
+    console.warn(`[models] unknown provider "${selection.provider}"; keeping env routing.`);
+    return withModel;
+  }
+  const pick = rolePicker(preset.keySlot);
+  const effort = ["none", "minimal", "low", "medium", "high", "max"] as const;
+  const reasoningEffort = effort.includes(
+    (selection.reasoningEffort ?? "") as (typeof effort)[number],
+  )
+    ? (selection.reasoningEffort as ModelRoleConfig["reasoningEffort"])
+    : undefined;
+  return {
+    ...withModel,
+    baseUrl: selection.baseUrl ?? pick("BASE_URL") ?? preset.baseUrl ?? config.baseUrl,
+    apiKey: pick("API_KEY") ?? config.apiKey,
+    reasoningEffort,
+  };
+}
+
+export interface SpeechSelection extends ProviderSelection {
+  voice: string | null;
+}
+
+/**
+ * Applies a catalog selection's provider routing onto a speech config: the
+ * voice API shape (ElevenLabs or OpenAI-compatible), its URL, and the voice.
+ * Switching the voice between ElevenLabs and Qwen is one selection.
+ */
+export function applySpeechProvider(
+  config: SpeechConfig,
+  selection: SpeechSelection | null,
+  presets: ProviderPreset[],
+): SpeechConfig {
+  if (!selection) return config;
+  const withModel = {
+    ...config,
+    model: selection.model,
+    voice: selection.voice ?? config.voice,
+  };
+  if (!selection.provider) return withModel;
+  const preset = presets.find((entry) => entry.id === selection.provider);
+  if (!preset) {
+    console.warn(`[models] unknown provider "${selection.provider}"; keeping env routing.`);
+    return withModel;
+  }
+  return {
+    ...withModel,
+    api: preset.api ?? "openai",
+    baseUrl: selection.baseUrl ?? preset.baseUrl ?? config.baseUrl,
+  };
 }
 
 /** Every cataloged model, optionally for one role, newest first. Admins only. */
@@ -44,6 +178,10 @@ export async function listCatalog(role?: CatalogRole): Promise<CatalogEntry[]> {
       role: platformModels.role,
       label: platformModels.label,
       model: platformModels.model,
+      provider: platformModels.provider,
+      baseUrl: platformModels.baseUrl,
+      voice: platformModels.voice,
+      reasoningEffort: platformModels.reasoningEffort,
       enabled: platformModels.enabled,
       selected: platformModels.selected,
       updatedAt: platformModels.updatedAt,
@@ -62,6 +200,10 @@ export async function getCatalogEntry(entryId: string): Promise<CatalogEntry | n
       role: platformModels.role,
       label: platformModels.label,
       model: platformModels.model,
+      provider: platformModels.provider,
+      baseUrl: platformModels.baseUrl,
+      voice: platformModels.voice,
+      reasoningEffort: platformModels.reasoningEffort,
       enabled: platformModels.enabled,
       selected: platformModels.selected,
       updatedAt: platformModels.updatedAt,
@@ -79,6 +221,10 @@ export async function getSelection(role: CatalogRole): Promise<CatalogEntry | nu
       role: platformModels.role,
       label: platformModels.label,
       model: platformModels.model,
+      provider: platformModels.provider,
+      baseUrl: platformModels.baseUrl,
+      voice: platformModels.voice,
+      reasoningEffort: platformModels.reasoningEffort,
       enabled: platformModels.enabled,
       selected: platformModels.selected,
       updatedAt: platformModels.updatedAt,
@@ -96,17 +242,41 @@ export async function getSelection(role: CatalogRole): Promise<CatalogEntry | nu
 
 /** Catalogs a model id for a role. Keys stay env vars; selecting probes that the id works there. */
 export async function addCatalogEntry(
-  input: { role: CatalogRole; label: string; model: string },
+  input: {
+    role: CatalogRole;
+    label: string;
+    model: string;
+    provider?: string | null;
+    baseUrl?: string | null;
+    voice?: string | null;
+    reasoningEffort?: string | null;
+  },
   actor: Actor,
 ): Promise<CatalogEntry> {
+  const presets = providerPresets(input.role);
+  if (input.provider && !presets.some((preset) => preset.id === input.provider)) {
+    throw new Error("That provider isn't one of this role's key slots.");
+  }
   const [row] = await db()
     .insert(platformModels)
-    .values({ role: input.role, label: input.label, model: input.model })
+    .values({
+      role: input.role,
+      label: input.label,
+      model: input.model,
+      provider: input.provider ?? null,
+      baseUrl: input.baseUrl ?? null,
+      voice: input.voice ?? null,
+      reasoningEffort: input.reasoningEffort ?? null,
+    })
     .returning({
       id: platformModels.id,
       role: platformModels.role,
       label: platformModels.label,
       model: platformModels.model,
+      provider: platformModels.provider,
+      baseUrl: platformModels.baseUrl,
+      voice: platformModels.voice,
+      reasoningEffort: platformModels.reasoningEffort,
       enabled: platformModels.enabled,
       selected: platformModels.selected,
       updatedAt: platformModels.updatedAt,
@@ -201,12 +371,12 @@ export async function withModelOverride(
   role: CatalogRole,
   config: ModelRoleConfig,
 ): Promise<ModelRoleConfig> {
-  return applySelection(config, await getSelection(role));
+  return applyProvider(config, await getSelection(role), providerPresets(role));
 }
 
 /** An env speech config with the voice role's catalog selection applied, if any. */
 export async function withSpeechOverride(config: SpeechConfig): Promise<SpeechConfig> {
-  return applySelection(config, await getSelection("speech"));
+  return applySpeechProvider(config, await getSelection("speech"), providerPresets("speech"));
 }
 
 export interface ProbeResult {

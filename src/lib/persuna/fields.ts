@@ -24,6 +24,12 @@ export const screenField = z
   .max(MAX_FRAME_CHARS)
   .nullish();
 
+/**
+ * The screen mode a turn goes out in. Anything but work or look is Talk —
+ * fail closed, so an old or lying client can't smuggle a screen read in.
+ */
+export const turnModeField = z.enum(["talk", "work", "look"]).catch("talk");
+
 /** What Persuna may see with a message (Persuna Desktop): a screenshot and the list of the screen. */
 export const sightField = z
   .object({ image: screenField, scene: sceneSchema.nullish(), circled: z.boolean().optional() })

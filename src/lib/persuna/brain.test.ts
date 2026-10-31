@@ -33,6 +33,7 @@ const state = (over: Partial<PersunaState> = {}): PersunaState => ({
   tone: {},
   lastAsked: null,
   pendingSwitch: null,
+  workMode: false,
   ...over,
 });
 
@@ -201,6 +202,13 @@ describe("persunaTurn assistant actions with the offline mock", () => {
     expect(watch.actions).toEqual([{ type: "watch_screen", on: true }]);
     const stop = await persunaTurn(client, state(), [], "Stop watching");
     expect(stop.actions).toEqual([{ type: "watch_screen", on: false }]);
+  });
+
+  it("records and stops a Learn episode", async () => {
+    const start = await persunaTurn(client, state(), [], "Learn how I do this");
+    expect(start.actions).toEqual([{ type: "learn_episode", op: "start", skill: null }]);
+    const stop = await persunaTurn(client, state(), [], "Done");
+    expect(stop.actions).toEqual([{ type: "learn_episode", op: "stop", skill: null }]);
   });
 });
 

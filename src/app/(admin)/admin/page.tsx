@@ -106,6 +106,12 @@ export default async function AdminPage() {
           <span className="text-muted">— calls by role, user and day.</span>
         </p>
         <p>
+          <Link href="/admin/measures" className="text-accent hover:underline">
+            Measures
+          </Link>{" "}
+          <span className="text-muted">— voice timing, learning, and the zero-reads check.</span>
+        </p>
+        <p>
           <Link href="/admin/models" className="text-accent hover:underline">
             Models
           </Link>{" "}

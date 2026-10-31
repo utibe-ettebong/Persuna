@@ -1,0 +1,1 @@
+ALTER TABLE "skills" ADD COLUMN "team_visible" boolean DEFAULT false NOT NULL;

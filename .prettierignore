@@ -5,3 +5,5 @@ package-lock.json
 data
 AGENTS.md
 .gstack
+livekit-trial/runs
+livekit-trial/clips

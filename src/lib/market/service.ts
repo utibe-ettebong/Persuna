@@ -15,7 +15,7 @@ import { audit, type Actor } from "@/lib/audit";
 import { createJob, draftJob, jobRoundsFor, openJob, reviseJob } from "@/lib/jobs/service";
 import type { ModelClient } from "@/lib/models/gateway";
 import { createPaystack, paymentMatches } from "@/lib/payments/paystack";
-import { NotFoundError, publishedScore } from "@/lib/skill/service";
+import { NotFoundError, publishedScore, skillComposite } from "@/lib/skill/service";
 import { normalizeText } from "@/lib/text";
 import { browse, typeOptions, type BrowseQuery } from "./browse";
 import { confidentialSkills, confidentialTo } from "@/lib/teams/confidential";
@@ -145,12 +145,17 @@ export async function readiness(skillId: string) {
   if (!skill) throw new NotFoundError("No such skill");
   const listing = await getListingForSkill(skillId);
   const score = await publishedScore(skill);
+  const composite = await skillComposite(skillId);
   const requirements = listingRequirements({
     confidentialTo: await confidentialTo(skillId),
     hasPublishedVersion: Boolean(skill.publishedVersionId),
     publishedScore: score,
     ownershipDeclared: Boolean(listing?.ownershipDeclaredAt),
     minScore: env().LISTING_MIN_SCORE,
+    coverage: composite.coverage,
+    minCoverage: env().LISTING_MIN_COVERAGE,
+    confidence: composite.confidence,
+    minConfidence: env().LISTING_MIN_CONFIDENCE,
     employerApproved:
       listing?.ownerType === "employee" ? listing.employerDecision === "approved" : undefined,
   });
@@ -290,6 +295,7 @@ async function withMarketFacts(rows: ListingRow[]) {
         verification,
         verified: isVerified(verification, minScore),
         score: verification?.score ?? null,
+        composite: await skillComposite(r.skill.id),
         rentals: s.rentals,
         ratings: ratingSummary(s.ratings),
       };

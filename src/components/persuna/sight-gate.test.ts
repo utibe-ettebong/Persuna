@@ -41,9 +41,10 @@ describe("stayOnScreen", () => {
     expect(stayOnScreen("thanks, draft an email", false, false)).toBe(false);
   });
 
-  it("stays when something was circled or shown, or the words aren't known", () => {
+  it("stays when something was circled or shown, but not on unknown words", () => {
     expect(stayOnScreen("thanks", true, false)).toBe(true);
     expect(stayOnScreen("thanks", false, true)).toBe(true);
-    expect(stayOnScreen(null, false, false)).toBe(true);
+    // Words not known yet are not consent to look: Talk mode sends no screen.
+    expect(stayOnScreen(null, false, false)).toBe(false);
   });
 });

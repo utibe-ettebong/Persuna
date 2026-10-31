@@ -36,6 +36,13 @@ export const proposalSource = pgEnum("proposal_source", [
   "walkthrough",
   "screen",
   "companion",
+  "episode",
+]);
+export const episodeStatus = pgEnum("episode_status", ["recording", "done", "extracted", "failed"]);
+export const ruleEvidenceSource = pgEnum("rule_evidence_source", [
+  "episode",
+  "interview",
+  "correction",
 ]);
 export const jobOrigin = pgEnum("job_origin", ["owner", "renter"]);
 export const jobStatus = pgEnum("job_status", [
@@ -142,6 +149,10 @@ export const skills = pgTable("skills", {
   trustLevel: integer("trust_level").notNull().default(0),
   /** Answers from the guided interview: the owner's own description of the method. */
   interview: jsonb("interview").$type<InterviewAnswers>(),
+  /** The owner's team can see this skill (it stays theirs: still listable, never confidential). */
+  teamVisible: boolean("team_visible").notNull().default(false),
+  /** Where the skill came from ("skill.md"): shown as imported until it is tested. */
+  importSource: text("import_source"),
   createdAt: createdAt(),
 });
 
@@ -162,6 +173,34 @@ export const skillVersions = pgTable(
     createdAt: createdAt(),
   },
   (t) => [unique().on(t.skillId, t.version)],
+);
+
+/**
+ * Layer 3: the ordered steps of a skill's procedure, learned from episodes.
+ * Steps are observations (what the owner was seen doing), so they enter
+ * freely like method notes; rules inferred from them still need approval.
+ * Steps sharing a decision key are alternative branches of one decision.
+ */
+export const skillSteps = pgTable(
+  "skill_steps",
+  {
+    id: id(),
+    skillId: uuid("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    app: text("app").notNull().default(""),
+    action: text("action").notNull(),
+    targetRole: text("target_role").notNull().default(""),
+    targetLabel: text("target_label").notNull().default(""),
+    decisionKey: text("decision_key"),
+    branchLabel: text("branch_label"),
+    /** How many episodes support this step, and which. */
+    evidenceCount: integer("evidence_count").notNull().default(1),
+    episodeIds: jsonb("episode_ids").$type<string[]>().notNull().default([]),
+    createdAt: createdAt(),
+  },
+  (t) => [index().on(t.skillId, t.seq)],
 );
 
 /** Before/after pairs. Method only: anonymised, owner-approved text. */
@@ -255,6 +294,28 @@ export const corrections = pgTable(
     decidedAt: timestamp("decided_at", { withTimezone: true }),
   },
   (t) => [index().on(t.skillId, t.status)],
+);
+
+/**
+ * What supports a rule: episodes, interview answers or corrections. Counts
+ * feed confidence (seen once is a hypothesis, three times a rule); nothing
+ * here changes the sheet, which stays plain language.
+ */
+export const ruleEvidence = pgTable(
+  "rule_evidence",
+  {
+    id: id(),
+    skillId: uuid("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "cascade" }),
+    /** The rule's id within the skill's sheet (R1, R2, …). */
+    ruleId: text("rule_id").notNull(),
+    source: ruleEvidenceSource("source").notNull(),
+    /** Episode id, interview question key, or correction id. */
+    sourceId: text("source_id").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index().on(t.skillId, t.ruleId), index().on(t.skillId, t.source, t.sourceId)],
 );
 
 /** One task run through a published skill version. Material: deleted after retention. */
@@ -495,6 +556,71 @@ export const persunaNotes = pgTable(
   (t) => [index().on(t.userId, t.createdAt)],
 );
 
+/**
+ * Learn mode: one performance of one task, tied to a skill. The process-mining
+ * minimum plus what extraction needs: timed events, screenshots at step
+ * changes (deleted after the extraction pass), and the user's narration.
+ */
+export const episodes = pgTable(
+  "episodes",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    skillId: uuid("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "cascade" }),
+    status: episodeStatus("status").notNull().default("recording"),
+    /** What the user said while doing it, kept as evidence for extraction. */
+    narration: text("narration").notNull().default(""),
+    /** Apps seen during the episode (names only), for the trigger layers. */
+    apps: jsonb("apps").$type<string[]>().notNull().default([]),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+  },
+  (t) => [index().on(t.userId, t.skillId, t.status)],
+);
+
+/**
+ * One observed action inside an episode: role, action and time. Never values:
+ * no typed text, no clipboard, no field contents.
+ */
+export const episodeEvents = pgTable(
+  "episode_events",
+  {
+    id: id(),
+    episodeId: uuid("episode_id")
+      .notNull()
+      .references(() => episodes.id, { onDelete: "cascade" }),
+    at: timestamp("at", { withTimezone: true }).notNull(),
+    app: text("app").notNull(),
+    window: text("window").notNull().default(""),
+    /** What changed: switch (app or window), focus, select, open, close. */
+    action: text("action").notNull(),
+    role: text("role").notNull().default(""),
+    label: text("label").notNull().default(""),
+  },
+  (t) => [index().on(t.episodeId, t.at)],
+);
+
+/**
+ * Screenshots at step changes, kept only until the extraction pass has run,
+ * then deleted. Never shown anywhere; the model reads and forgets them.
+ */
+export const episodeFrames = pgTable(
+  "episode_frames",
+  {
+    id: id(),
+    episodeId: uuid("episode_id")
+      .notNull()
+      .references(() => episodes.id, { onDelete: "cascade" }),
+    at: timestamp("at", { withTimezone: true }).notNull(),
+    image: text("image").notNull(),
+  },
+  (t) => [index().on(t.episodeId, t.at)],
+);
+
 /** To-dos, and reminders when they have a due time. */
 export const persunaReminders = pgTable(
   "persuna_reminders",
@@ -510,6 +636,29 @@ export const persunaReminders = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index().on(t.userId, t.doneAt)],
+);
+
+/**
+ * One turn's voice timing, persisted for the measures page (plan §9): time to
+ * first token, first sentence and first sound. The JSON log line stays too.
+ */
+export const voiceTurns = pgTable(
+  "voice_turns",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    route: text("route").notNull(),
+    spoken: boolean("spoken").notNull().default(false),
+    heardMs: real("heard_ms"),
+    firstTokenMs: real("first_token_ms"),
+    firstSentenceMs: real("first_sentence_ms"),
+    firstAudioMs: real("first_audio_ms"),
+    turnMs: real("turn_ms"),
+    createdAt: createdAt(),
+  },
+  (t) => [index().on(t.userId, t.createdAt)],
 );
 
 /** One live model call by a user, for the daily per-user limit. */
@@ -532,6 +681,11 @@ export type Example = typeof examples.$inferSelect;
 export type EvalRun = typeof evalRuns.$inferSelect;
 export type TestResult = typeof testResults.$inferSelect;
 export type Correction = typeof corrections.$inferSelect;
+export type SkillStep = typeof skillSteps.$inferSelect;
+export type RuleEvidenceRow = typeof ruleEvidence.$inferSelect;
+export type Episode = typeof episodes.$inferSelect;
+export type EpisodeEvent = typeof episodeEvents.$inferSelect;
+export type EpisodeFrame = typeof episodeFrames.$inferSelect;
 export type Job = typeof jobs.$inferSelect;
 export type Listing = typeof listings.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
@@ -557,6 +711,14 @@ export const platformModels = pgTable(
     label: text("label").notNull(),
     /** Provider model id, e.g. "muse-spark-1.3". */
     model: text("model").notNull(),
+    /** Provider preset id, or null for the role's env routing. */
+    provider: text("provider"),
+    /** Explicit base URL, winning over the preset's. */
+    baseUrl: text("base_url"),
+    /** Voice id (speech role only). */
+    voice: text("voice"),
+    /** Reasoning level (chat roles only). */
+    reasoningEffort: text("reasoning_effort"),
     enabled: boolean("enabled").notNull().default(true),
     /** The selected entry per role; at most one (enforced in service, not here). */
     selected: boolean("selected").notNull().default(false),
