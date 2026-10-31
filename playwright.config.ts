@@ -18,9 +18,11 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: "npm run dev -- --port 3110",
+    // A production build: dev mode compiles each page on first visit, which is
+    // slower than the test's waits and isn't what people run.
+    command: "npm run build && npm run start -- --port 3110",
     url: "http://127.0.0.1:3110/api/health",
-    timeout: 180_000,
+    timeout: 300_000,
     reuseExistingServer: !process.env.CI,
     env: {
       ...process.env,
@@ -32,8 +34,11 @@ export default defineConfig({
       LISTEN_API_KEY: "",
       TRANSCRIBE_API_KEY: "",
       SPEECH_API_KEY: "",
-      ELEVENLABS_AGENT_ID: "",
+      // Can't be blank, and does nothing without a speech key.
+      ELEVENLABS_AGENT_ID: "none",
       VOICE_MODE: "transcribe",
+      BETTER_AUTH_SECRET: "a-test-only-secret-for-the-browser-test",
+      MODEL_PROVIDER: "mock",
       APP_URL: "http://127.0.0.1:3110",
       BETTER_AUTH_URL: "http://127.0.0.1:3110",
     } as Record<string, string>,
