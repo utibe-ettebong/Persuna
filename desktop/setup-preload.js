@@ -11,6 +11,8 @@ const bridge = {
   resetPermission: (kind) => ipcRenderer.invoke("setup:reset-permission", kind),
   // Try every permission for real, with plain words when one fails.
   selfTest: () => ipcRenderer.invoke("setup:self-test"),
+  // Waits for a real press of the talk key (Windows, which has no OS verdict).
+  testKey: () => ipcRenderer.invoke("setup:test-key"),
   dragApp: () => ipcRenderer.send("setup:drag-app"),
   appIcon: () => ipcRenderer.invoke("setup:app-icon"),
   restart: () => ipcRenderer.send("setup:restart"),

@@ -8,7 +8,8 @@
     "start": "electron .",
     "dist:mac": "electron-builder --mac --x64 --arm64 --publish never",
     "dist:win": "electron-builder --win --x64 --arm64 --publish never",
-    "build:eyes": "mkdir -p build/bin && swiftc -O -target arm64-apple-macos12 -o build/bin/eyes-arm64 native/mac/eyes.swift && swiftc -O -target x86_64-apple-macos12 -o build/bin/eyes-x64 native/mac/eyes.swift && lipo -create -output build/bin/persuna-eyes build/bin/eyes-arm64 build/bin/eyes-x64 && rm build/bin/eyes-arm64 build/bin/eyes-x64"
+    "build:eyes": "mkdir -p build/bin && swiftc -O -target arm64-apple-macos12 -o build/bin/eyes-arm64 native/mac/eyes.swift && swiftc -O -target x86_64-apple-macos12 -o build/bin/eyes-x64 native/mac/eyes.swift && lipo -create -output build/bin/persuna-eyes build/bin/eyes-arm64 build/bin/eyes-x64 && rm build/bin/eyes-arm64 build/bin/eyes-x64",
+    "build:eyes:win": "node native/win/build.js"
   },
   "license": "MIT",
   "devDependencies": {
@@ -37,6 +38,7 @@
       "updater.js",
       "operate.js",
       "health.js",
+      "eyes-client.js",
       "package.json",
       "build/tray*.png",
       "!node_modules/uiohook-napi/prebuilds/linux-*",
@@ -94,8 +96,8 @@
       "icon": "build/icon.png",
       "extraResources": [
         {
-          "from": "native/win/eyes.ps1",
-          "to": "bin/eyes.ps1"
+          "from": "build/bin/persuna-eyes.exe",
+          "to": "bin/persuna-eyes.exe"
         }
       ]
     },

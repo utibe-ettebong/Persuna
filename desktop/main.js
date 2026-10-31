@@ -35,14 +35,23 @@ const {
   shell,
   systemPreferences,
 } = require("electron");
-const { execFile } = require("node:child_process");
+const { execFile, spawn } = require("node:child_process");
 const os = require("node:os");
 const { randomBytes } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { createHoldKey } = require("./hold-key");
 const { createUpdater } = require("./updater");
-const { eyesFix, keyboardFix, keyboardStatus, micStatus, screenStatus } = require("./health");
+const { createEyesClient } = require("./eyes-client");
+const {
+  blankCapture,
+  eyesFix,
+  keySilentFix,
+  keyboardFix,
+  keyboardStatus,
+  micStatus,
+  screenStatus,
+} = require("./health");
 
 const APP_URL = process.env.PERSUNA_URL || "https://persuna-production.up.railway.app";
 const ORIGIN = new URL(APP_URL).origin;
@@ -314,7 +323,12 @@ function permissionStatus() {
     return {
       mic,
       screen: screenStatus({ mac: false, eyes: winEyes }),
-      keyboard: keyboardStatus({ mac: false, listening: Boolean(keyListener), error: keyError }),
+      keyboard: keyboardStatus({
+        mac: false,
+        listening: Boolean(keyListener),
+        error: keyError,
+        heard: keyHeard,
+      }),
     };
   }
   return {
@@ -342,6 +356,7 @@ ipcMain.handle("persuna:ask-permission", async (event, kind) => {
     // No OS prompts on Windows: retry the thing itself, and answer honestly.
     if (kind === "keyboard") {
       keyError = null;
+      keyHeard = null;
       startKeyListener();
     } else if (kind === "screen") {
       const probe = await probeEyes();
@@ -598,83 +613,68 @@ function setWatching(on) {
 /**
  * persuna-eyes (desktop/native): on a Mac, a small Swift program that reads
  * the front app's accessibility tree and recognises text in a screenshot; on
- * Windows, a PowerShell script over UI Automation. Both run here, take a
- * fraction of a second, and send nothing anywhere themselves.
+ * Windows, a small C# program over UI Automation that stays running. Both run
+ * here, take a fraction of a second, and send nothing anywhere themselves.
  */
 const EYES = MAC
   ? app.isPackaged
     ? path.join(process.resourcesPath, "bin", "persuna-eyes")
     : path.join(__dirname, "build", "bin", "persuna-eyes")
   : app.isPackaged
-    ? path.join(process.resourcesPath, "bin", "eyes.ps1")
-    : path.join(__dirname, "native", "win", "eyes.ps1");
+    ? path.join(process.resourcesPath, "bin", "persuna-eyes.exe")
+    : path.join(__dirname, "build", "bin", "persuna-eyes.exe");
+
+/** The Windows reader, started on the first read and kept running. */
+const winReader = MAC
+  ? null
+  : createEyesClient({
+      start: () => spawn(EYES, ["serve"], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] }),
+    });
 
 /**
- * Do the eyes see? Runs the reader once and says why not: "missing" (not in
- * this install), "timeout" (something blocked it), or "unreadable" (it ran
- * but its answer made no sense). An empty window list still counts as seeing.
+ * Do the Windows eyes see? The same two things a real look does: read the
+ * front window and take a screenshot. Says why not: "missing" (not in this
+ * install), "blocked", "timeout", "unreadable" (from the reader), "no-window"
+ * (it found nothing in front) or "no-capture" (no screenshot, or a black one).
  */
-function probeEyes() {
-  return new Promise((resolve) => {
-    if (!fs.existsSync(EYES)) return resolve({ ok: false, why: "missing" });
-    const [cmd, argv] = MAC
-      ? [EYES, []]
-      : [
-          "powershell.exe",
-          [
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            EYES,
-            "-SkipPid",
-            String(process.pid),
-          ],
-        ];
-    execFile(
-      cmd,
-      argv,
-      { timeout: 8000, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
-      (error, stdout) => {
-        if (error) return resolve({ ok: false, why: error.killed ? "timeout" : "unreadable" });
-        try {
-          const seen = JSON.parse(stdout);
-          resolve(
-            seen && typeof seen === "object" ? { ok: true } : { ok: false, why: "unreadable" },
-          );
-        } catch {
-          resolve({ ok: false, why: "unreadable" });
-        }
-      },
-    );
-  });
+async function probeEyes() {
+  if (!fs.existsSync(EYES)) return { ok: false, why: "missing" };
+  const read = await winReader.ask(`read ${process.pid}`);
+  if (!read.ok) return { ok: false, why: read.why };
+  if (!read.value.app) return { ok: false, why: "no-window" };
+  const sources = await desktopCapturer
+    .getSources({ types: ["screen"], thumbnailSize: { width: 64, height: 36 } })
+    .catch(() => []);
+  const shot = sources[0]?.thumbnail;
+  if (!shot || shot.isEmpty() || blankCapture(shot.toBitmap())) {
+    return { ok: false, why: "no-capture" };
+  }
+  return { ok: true };
 }
 
 function runEyes(args, timeout = 2500) {
   return new Promise((resolve) => {
     if (!fs.existsSync(EYES)) return resolve(null);
-    const [cmd, argv] = MAC
-      ? [EYES, args]
-      : ["powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", EYES, ...args]];
-    execFile(
-      cmd,
-      argv,
-      { timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
-      (error, stdout) => {
-        if (error) return resolve(null);
-        try {
-          resolve(JSON.parse(stdout));
-        } catch {
-          resolve(null);
-        }
-      },
-    );
+    if (!MAC) {
+      void winReader
+        .ask(args.join(" "), timeout)
+        .then((read) => resolve(read.ok ? read.value : null));
+      return;
+    }
+    execFile(EYES, args, { timeout, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+      if (error) return resolve(null);
+      try {
+        resolve(JSON.parse(stdout));
+      } catch {
+        resolve(null);
+      }
+    });
   });
 }
 
 /** The front app's elements, in points from the top-left of the main display. */
 async function readElements(display) {
-  const tree = await runEyes(MAC ? ["ax", String(process.pid)] : ["-SkipPid", String(process.pid)]);
+  const tree = await runEyes([MAC ? "ax" : "read", String(process.pid)]);
   if (!tree) return { app: "", window: "", selection: "", items: [] };
   const toLocal = (r) => {
     // Windows reports physical pixels; Electron works in scaled points.
@@ -950,6 +950,7 @@ ipcMain.handle("setup:ask-keyboard", (event) => {
   if (!MAC) {
     // No OS prompt on Windows: try the hook again right now.
     keyError = null;
+    keyHeard = null;
     startKeyListener();
     return;
   }
@@ -1022,6 +1023,19 @@ ipcMain.handle("setup:self-test", async (event) => {
     },
   };
 });
+/**
+ * The talk key's half of the test: waits for a real press, because a hook that
+ * started proves nothing about keys arriving. Windows only; a Mac has its
+ * Accessibility verdict.
+ */
+ipcMain.handle("setup:test-key", async (event) => {
+  if (!fromSetup(event) || MAC) return null;
+  if (keyListener && chosenHoldKey()) keyHeard = await waitForKey(KEY_TEST_MS);
+  const status = permissionStatus().keyboard;
+  let detail = null;
+  if (status === "denied") detail = keyError ? keyboardFix(keyError) : keySilentFix(holdKeyLabel());
+  return { status, detail };
+});
 ipcMain.on("setup:drag-app", (event) => {
   if (!fromSetup(event)) return;
   void app.getFileIcon(appBundle(), { size: "normal" }).then((icon) => {
@@ -1081,8 +1095,26 @@ let keyWatch = null;
 let keyError = null;
 /** The last Windows eyes probe: true/false, or null before the first probe. */
 let winEyes = null;
-/** Why the eyes failed, when they did: missing, timeout or unreadable. */
+/** Why the eyes failed, when they did (see probeEyes). */
 let winEyesWhy = null;
+/** Windows: whether a press of the talk key arrived. False only after a test heard nothing. */
+let keyHeard = null;
+/** Ends the running talk-key test with whether it heard the key. */
+let keyTest = null;
+let keyHooked = false;
+const KEY_TEST_MS = 8000;
+
+function waitForKey(ms) {
+  return new Promise((resolve) => {
+    keyTest?.(false);
+    const timer = setTimeout(() => keyTest?.(false), ms);
+    keyTest = (heard) => {
+      clearTimeout(timer);
+      keyTest = null;
+      resolve(heard);
+    };
+  });
+}
 
 const holdKey = createHoldKey({ emit: onHoldKey });
 
@@ -1112,8 +1144,18 @@ function startKeyListener() {
   keyWatch = null;
   try {
     const { uIOhook } = require("uiohook-napi");
-    uIOhook.on("keydown", (e) => holdKey.keydown(e.keycode, Date.now()));
-    uIOhook.on("keyup", (e) => holdKey.keyup(e.keycode, Date.now()));
+    // Once only: a retry after a failed start must not hear every key twice.
+    if (!keyHooked) {
+      keyHooked = true;
+      uIOhook.on("keydown", (e) => {
+        if (e.keycode === chosenHoldKey()?.code) {
+          keyHeard = true;
+          keyTest?.(true);
+        }
+        holdKey.keydown(e.keycode, Date.now());
+      });
+      uIOhook.on("keyup", (e) => holdKey.keyup(e.keycode, Date.now()));
+    }
     uIOhook.start();
     keyListener = uIOhook;
     keyError = null;
@@ -1636,6 +1678,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.on("will-quit", () => {
+    winReader?.stop();
     globalShortcut.unregisterAll();
     keyListener?.stop();
     // A downloaded update installs on the way out (it's there next launch).

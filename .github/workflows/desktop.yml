@@ -108,6 +108,10 @@ jobs:
       - name: Build the screen reader
         if: runner.os == 'macOS'
         run: npm run build:eyes
+      # Persuna's on-device screen reader (C#, one file for both Windows chips).
+      - name: Build the Windows screen reader
+        if: runner.os == 'Windows'
+        run: npm run build:eyes:win
       - name: Build
         run: npx electron-builder ${{ matrix.target }} --publish never ${{ env.SIGN_ARGS }}
         env:
@@ -146,6 +150,27 @@ jobs:
             ELECTRON_RUN_AS_NODE=1 arch -x86_64 "dist/mac/Persuna.app/Contents/MacOS/Persuna" \
               -e 'console.log("Intel build starts: Electron", process.versions.electron)'
           fi
+      - name: Check the Windows app starts and really reads a window
+        if: runner.os == 'Windows'
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          # Persuna itself (not just Electron): a crash at startup fails the build.
+          $env:PERSUNA_SMOKE_TEST = "1"
+          $app = Start-Process "dist\win-unpacked\Persuna.exe" -PassThru
+          $null = $app.Handle
+          if (-not $app.WaitForExit(120000)) { $app.Kill(); throw "Persuna didn't quit" }
+          if ($app.ExitCode -ne 0) { throw "Persuna exited with $($app.ExitCode)" }
+          $env:PERSUNA_SMOKE_TEST = ""
+          # The talk-key listener is a native module: it must load from the packaged app.
+          $env:ELECTRON_RUN_AS_NODE = "1"
+          $asar = "$PWD\dist\win-unpacked\resources\app.asar"
+          & "dist\win-unpacked\Persuna.exe" -e 'require(process.argv[1] + "/node_modules/uiohook-napi"); console.log("Talk key listener loads")' $asar | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "The talk-key listener didn't load" }
+          $env:ELECTRON_RUN_AS_NODE = ""
+          # The packaged reader, through the client the app uses, on a real Notepad.
+          node native/win/smoke.js "dist\win-unpacked\resources\bin\persuna-eyes.exe"
+          if ($LASTEXITCODE -ne 0) { throw "The screen reader failed" }
       - uses: actions/upload-artifact@v4
         with:
           name: persuna-${{ runner.os }}
