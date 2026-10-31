@@ -17,6 +17,7 @@ describe("isPublicPath", () => {
       "/welcome",
       "/desktop/setup",
       "/api/desktop/sign-in",
+      "/api/persuna/livekit-tool",
       "/market",
       "/market/0b9d1a2e-6c1f-4f7e-9a51-1f2d3c4b5a69",
       "/projects",
@@ -41,6 +42,8 @@ describe("isPublicPath", () => {
       "/companion",
       "/desktop/connect",
       "/download/anything-else",
+      "/api/persuna/speak",
+      "/api/persuna/chat-stream",
     ]) {
       expect(isPublicPath(p)).toBe(false);
     }

@@ -19,6 +19,8 @@ const PUBLIC = [
   // Persuna Desktop's setup window, which starts signed out, and its sign-in hand-off.
   /^\/desktop\/setup$/,
   /^\/api\/desktop\/sign-in$/,
+  // The LiveKit trial agent has no session: the route checks its shared secret.
+  /^\/api\/persuna\/livekit-tool$/,
 ];
 
 export function isPublicPath(pathname: string): boolean {
