@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CLOUD_CHUNK_CHARS,
+  EARLY_SILENCE_MS,
   createSpeechQueue,
   parseStreamEvent,
   readTurnStream,
@@ -8,6 +9,7 @@ import {
   speakOverSocket,
   speechChunks,
   stopSpeaking,
+  utteranceComplete,
 } from "./voice";
 
 afterEach(() => stopSpeaking());
@@ -301,5 +303,27 @@ describe("speakOverSocket", () => {
     const res = await pending;
     fake.onclose?.();
     expect(await res?.text()).toBe("one");
+  });
+});
+
+describe("utteranceComplete", () => {
+  it("hears a finished sentence, past closing quotes", () => {
+    expect(utteranceComplete("Remind me at five.")).toBe(true);
+    expect(utteranceComplete("What time is it?")).toBe(true);
+    expect(utteranceComplete("Stop!")).toBe(true);
+    expect(utteranceComplete('She said "go."')).toBe(true);
+    expect(utteranceComplete("Well…")).toBe(true);
+  });
+
+  it("assumes nothing without terminal punctuation", () => {
+    expect(utteranceComplete("")).toBe(false);
+    expect(utteranceComplete("Remind me at")).toBe(false);
+    expect(utteranceComplete("Remind me, uh")).toBe(false);
+    expect(utteranceComplete("call me at 3.5")).toBe(false);
+    expect(utteranceComplete(".")).toBe(false);
+  });
+
+  it("ends finished sentences well before the full hush", () => {
+    expect(EARLY_SILENCE_MS).toBeLessThan(1000);
   });
 });

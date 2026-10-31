@@ -841,6 +841,8 @@ export function Companion(props: CompanionProps) {
         show?: boolean;
         onWords?: (soFar: string) => void;
         onEnd?: () => void;
+        /** When the speech itself ended, for voice turns; timing counts from there. */
+        heardAt?: number;
       },
     ): Promise<string | null> => {
       const controller = new AbortController();
@@ -848,8 +850,14 @@ export function Companion(props: CompanionProps) {
       const typed = "text" in message ? message.text : null;
       const heardLive = "text" in message && Boolean(message.heardLive);
       const label = typed === null || heardLive ? "voice" : "typed";
-      const started = performance.now();
+      const started = opts.heardAt ?? performance.now();
+      // This turn's own id, so its first-sound report joins its timing row.
+      const turnId =
+        typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
       const post = (form: FormData, withPicture: boolean) => {
+        form.append("client-turn", turnId);
         if (sight?.scene) form.append("scene", JSON.stringify(sight.scene));
         if (sight?.circled) form.append("circled", "1");
         if (sight?.image && withPicture) form.append("screen", sight.image);
@@ -905,9 +913,28 @@ export function Companion(props: CompanionProps) {
             onSpoken: (piece) => {
               if (!firstAudioLogged) {
                 firstAudioLogged = true;
-                console.info(
-                  `[persuna] ${label} first-audio=${Math.round(performance.now() - started)}ms`,
-                );
+                const firstAudioMs = Math.round(performance.now() - started);
+                console.info(`[persuna] ${label} first-audio=${firstAudioMs}ms`);
+                // Heard, for real: tell the server, so the measures page
+                // shows true first sound, not just first sentence.
+                try {
+                  const report = JSON.stringify({ turn: turnId, ms: firstAudioMs });
+                  if (typeof navigator.sendBeacon === "function") {
+                    navigator.sendBeacon(
+                      "/api/persuna/voice-first-audio",
+                      new Blob([report], { type: "application/json" }),
+                    );
+                  } else {
+                    void fetch("/api/persuna/voice-first-audio", {
+                      method: "POST",
+                      headers: { "content-type": "application/json" },
+                      body: report,
+                      keepalive: true,
+                    });
+                  }
+                } catch {
+                  // Timing must never break a turn.
+                }
               }
               spoken = spoken ? `${spoken} ${piece}` : piece;
               showCaption(spoken);
@@ -1277,6 +1304,7 @@ export function Companion(props: CompanionProps) {
       audio: Blob,
       end: UtteranceEnd = "pause",
       words: Promise<string | null> | null = null,
+      speechEnd: number | null = null,
     ) => {
       lastHeard.current = Date.now();
       // Straight away, before anything travels: you've been heard.
@@ -1324,7 +1352,7 @@ export function Companion(props: CompanionProps) {
         const failure = await streamTurn(
           said ? { text: said, heardLive: true } : { audio: await recording() },
           sight,
-          { lead, mode },
+          { lead, mode, heardAt: speechEnd ?? undefined },
         );
         if (failure) setError(failure);
       } catch {
@@ -1405,7 +1433,7 @@ export function Companion(props: CompanionProps) {
     try {
       conversation.current = await startConversation({
         onLevel: (l) => !talkingNow.current && setLevel(l),
-        onUtterance: (audio, end, words) => void hear(audio, end, words),
+        onUtterance: (audio, end, words, speechEnd) => void hear(audio, end, words, speechEnd),
         onWords: showCaption,
         speaking: () => talkingNow.current,
         busy: () => live.current.busy !== "idle",
@@ -1456,7 +1484,8 @@ export function Companion(props: CompanionProps) {
     setHolding(false);
     const heard = await (await pending)?.stop();
     // Too short or silent: a slip of the finger, not a question.
-    if (heard) void hear(heard.audio, "pause", heard.words);
+    // Letting go of the key is the end of the speech: timing counts from here.
+    if (heard) void hear(heard.audio, "pause", heard.words, performance.now());
   }
 
   function holdCancel() {

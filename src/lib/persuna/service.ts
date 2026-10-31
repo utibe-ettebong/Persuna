@@ -384,6 +384,8 @@ export interface ChatInput {
   saidFirst?: string;
   /** Spoken, and already transcribed live as the user talked. */
   heardLive?: boolean;
+  /** The client's own id for this turn, carried into its timing row. */
+  clientTurn?: string;
 }
 
 export type ChatMessageInput = ({ text: string } | { audio: string }) & ChatInput;
@@ -944,7 +946,7 @@ export async function* chatStream(
       if (heard) {
         timer.mark("end");
         logVoiceTurn(logRoute, timer, { spoken: prep.spoken, picture: false, closer: true });
-        recordVoiceTurn(userId, logRoute, timer, prep.spoken);
+        recordVoiceTurn(userId, logRoute, timer, prep.spoken, input.clientTurn);
         yield { type: "look-closer", heard, said: turn.prose };
         return;
       }
@@ -996,7 +998,13 @@ export async function* chatStream(
     heardLive: Boolean(input.heardLive),
     picture: prep.picture,
   });
-  recordVoiceTurn(userId, logRoute, timer, prep.spoken || Boolean(input.heardLive));
+  recordVoiceTurn(
+    userId,
+    logRoute,
+    timer,
+    prep.spoken || Boolean(input.heardLive),
+    input.clientTurn,
+  );
   yield { type: "done", result };
 }
 
