@@ -119,6 +119,9 @@ export const MODEL_OUTAGE_COOLDOWN_MS = 2 * 60_000;
 /** Provider base URL to when its outage is next worth retrying. */
 const outages = new Map<string, number>();
 
+/** A PDF can't move to the backup, so its call waits this long and tries once more. */
+export const FILE_OUTAGE_WAIT_MS = 30_000;
+
 /** A role whose key was rejected is sent to the EXTRACT model for this long. */
 export const REJECTED_KEY_COOLDOWN_MS = 10 * 60_000;
 const rejected = new Map<string, number>();
@@ -174,7 +177,7 @@ export function createGateway(
         return callOnce(fallback, role, messages, options, fetchImpl);
       }
       const backup = async () => {
-        if (role === "draft" || hasAudio(messages)) return null;
+        if (role === "draft" || stuckToProvider(messages)) return null;
         const config = await resolve("draft");
         return config.baseUrl === own.baseUrl ? null : { ...config, reasoningEffort: undefined };
       };
@@ -194,6 +197,10 @@ export function createGateway(
           );
           outages.set(own.baseUrl, Date.now() + MODEL_OUTAGE_COOLDOWN_MS);
           return callOnce(standIn, role, messages, options, fetchImpl);
+        }
+        if (error instanceof ModelError && error.modelMissing && hasFile(messages)) {
+          await new Promise((resolve) => setTimeout(resolve, FILE_OUTAGE_WAIT_MS));
+          return callOnce(own, role, messages, options, fetchImpl);
         }
         if (!(error instanceof ModelError) || !error.keyRejected || !different) throw error;
         console.warn(
@@ -222,7 +229,7 @@ export function createGateway(
         return;
       }
       const backup = async () => {
-        if (role === "draft" || hasAudio(messages)) return null;
+        if (role === "draft" || stuckToProvider(messages)) return null;
         const config = await resolve("draft");
         return config.baseUrl === own.baseUrl ? null : { ...config, reasoningEffort: undefined };
       };
@@ -256,8 +263,14 @@ export function createGateway(
   };
 }
 
-const hasAudio = (messages: ChatMessage[]) =>
-  messages.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === "input_audio"));
+const hasPart = (messages: ChatMessage[], type: ContentPart["type"]) =>
+  messages.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === type));
+
+const hasFile = (messages: ChatMessage[]) => hasPart(messages, "file");
+
+/** The DRAFT provider can't take these: audio, and a file id only its issuer knows. */
+const stuckToProvider = (messages: ChatMessage[]) =>
+  hasPart(messages, "input_audio") || hasFile(messages);
 
 async function callOnce(
   config: ModelRoleConfig,

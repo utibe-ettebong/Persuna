@@ -1,5 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { logVoiceTurn, reportFirstAudio, startTurn } from "./voice-metrics";
+import { db } from "@/db/client";
+import { logVoiceTurn, REPORT_RETRY_MS, reportFirstAudio, startTurn } from "./voice-metrics";
+
+vi.mock("@/db/client", () => ({
+  db: vi.fn(),
+  schema: { voiceTurns: { userId: "user_id", clientTurn: "client_turn", firstAudioMs: "first" } },
+}));
+
+/** A database whose update finds nothing `misses` times, then one row. */
+function rowsAfter(misses: number) {
+  const returning = vi.fn(async () => (returning.mock.calls.length > misses ? [{ id: "v1" }] : []));
+  const update = () => ({ set: () => ({ where: () => ({ returning }) }) });
+  vi.mocked(db).mockReturnValue({ update } as never);
+  return returning;
+}
 
 const clock = () => {
   let t = 1000;
@@ -90,5 +104,31 @@ describe("reportFirstAudio", () => {
     await expect(reportFirstAudio("user-1", "t1", Number.NaN)).resolves.toBe(false);
     await expect(reportFirstAudio("user-1", "t1", -5)).resolves.toBe(false);
     await expect(reportFirstAudio("user-1", "t1", 11 * 60_000)).resolves.toBe(false);
+  });
+
+  it("joins at once when the turn's row is already there", async () => {
+    const lookups = rowsAfter(0);
+    await expect(reportFirstAudio("user-1", "t1", 1200)).resolves.toBe(true);
+    expect(lookups).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for a row that is saved after the report arrives", async () => {
+    vi.useFakeTimers();
+    const lookups = rowsAfter(3);
+    const report = reportFirstAudio("user-1", "t1", 1200);
+    await vi.runAllTimersAsync();
+    await expect(report).resolves.toBe(true);
+    expect(lookups).toHaveBeenCalledTimes(4);
+    vi.useRealTimers();
+  });
+
+  it("gives up on a stray report once the wait is over", async () => {
+    vi.useFakeTimers();
+    const lookups = rowsAfter(Infinity);
+    const report = reportFirstAudio("user-1", "stray", 1200);
+    await vi.runAllTimersAsync();
+    await expect(report).resolves.toBe(false);
+    expect(lookups).toHaveBeenCalledTimes(REPORT_RETRY_MS.length + 1);
+    vi.useRealTimers();
   });
 });

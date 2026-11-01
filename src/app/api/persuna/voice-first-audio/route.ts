@@ -5,7 +5,8 @@ import { reportFirstAudio } from "@/lib/persuna/voice-metrics";
  * The client's first-sound report: how long from the turn starting to
  * Persuna's first audible word. Fire-and-forget from playback — a stray,
  * replayed or late report is ignored with a 204, never an error, so a turn
- * never fails because its timing didn't land. Signed-in users only.
+ * never fails because its timing didn't land. A report can beat its turn's row,
+ * so the answer may take up to half a minute. Signed-in users only.
  */
 export async function POST(request: Request) {
   const user = await getUser();

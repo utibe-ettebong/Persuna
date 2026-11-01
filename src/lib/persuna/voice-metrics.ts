@@ -93,10 +93,16 @@ export function recordVoiceTurn(
   }
 }
 
+/** How long a first-sound report waits between looks for its turn's row: 30 s in all. */
+export const REPORT_RETRY_MS = [500, 1000, 2000, 4000, 7500, 15_000];
+
 /**
  * The client's first-sound report, joined to its turn by the client's own id.
  * Only the turn's owner, only once, and only a sane duration counts — a stray
  * or replayed report is ignored, never an error. Resolves true when a row took it.
+ *
+ * The first word plays while the turn is still running, and its row is only
+ * saved at the end, so a report often arrives first: it waits for the row.
  */
 export async function reportFirstAudio(
   userId: string,
@@ -105,18 +111,22 @@ export async function reportFirstAudio(
 ): Promise<boolean> {
   if (!clientTurn || !Number.isFinite(ms) || ms < 0 || ms > 10 * 60_000) return false;
   try {
-    const done = await db()
-      .update(schema.voiceTurns)
-      .set({ firstAudioMs: Math.round(ms * 10) / 10 })
-      .where(
-        and(
-          eq(schema.voiceTurns.userId, userId),
-          eq(schema.voiceTurns.clientTurn, clientTurn),
-          isNull(schema.voiceTurns.firstAudioMs),
-        ),
-      )
-      .returning({ id: schema.voiceTurns.id });
-    return done.length > 0;
+    for (const wait of [0, ...REPORT_RETRY_MS]) {
+      if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+      const done = await db()
+        .update(schema.voiceTurns)
+        .set({ firstAudioMs: Math.round(ms * 10) / 10 })
+        .where(
+          and(
+            eq(schema.voiceTurns.userId, userId),
+            eq(schema.voiceTurns.clientTurn, clientTurn),
+            isNull(schema.voiceTurns.firstAudioMs),
+          ),
+        )
+        .returning({ id: schema.voiceTurns.id });
+      if (done.length > 0) return true;
+    }
+    return false;
   } catch (error) {
     console.error("first-audio not recorded:", error);
     return false;

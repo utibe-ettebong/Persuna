@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelRole } from "@/env";
 import {
   createGateway,
+  FILE_OUTAGE_WAIT_MS,
   MODEL_OUTAGE_COOLDOWN_MS,
   ModelError,
   outageStatus,
@@ -196,6 +197,41 @@ describe("createGateway", () => {
     const spoken = client.complete("listen", audio).catch((e) => e);
     await vi.runAllTimersAsync();
     expect(await spoken).toMatchObject({ modelMissing: true });
+  });
+
+  describe("a call carrying a provider's file during an outage", () => {
+    const meta = { ...config, baseUrl: "https://api.meta.ai/v1", model: "muse-spark-1.3" };
+    const backup = { ...config, baseUrl: "https://inference.baseten.co/v1", model: "open" };
+    const resolve = (role: string) => (role === "draft" ? backup : meta);
+    const pdf = [
+      {
+        role: "user" as const,
+        content: [{ type: "file" as const, file: { file_id: "file-1" } }],
+      },
+    ];
+    const missing = () => new Response('{"error":{"code":"model_not_found"}}', { status: 404 });
+
+    it("waits and asks the same provider again, never the backup", async () => {
+      let back = false;
+      const fetchImpl = vi.fn(async () => (back ? ok(reply) : missing()));
+      const client = createGateway(resolve as never, fetchImpl as unknown as typeof fetch);
+      const pending = client.complete("extract", pdf);
+      await vi.advanceTimersByTimeAsync(FILE_OUTAGE_WAIT_MS - 1000);
+      back = true;
+      await vi.runAllTimersAsync();
+      await expect(pending).resolves.toMatchObject({ text: "hello" });
+      for (const [url] of fetchImpl.mock.calls as unknown as [string][]) {
+        expect(url).toMatch(/^https:\/\/api\.meta\.ai/);
+      }
+    });
+
+    it("gives up with model-missing if the provider is still out", async () => {
+      const fetchImpl = vi.fn(async () => missing());
+      const client = createGateway(resolve as never, fetchImpl as unknown as typeof fetch);
+      const pending = client.complete("extract", pdf).catch((e) => e);
+      await vi.runAllTimersAsync();
+      expect(await pending).toMatchObject({ modelMissing: true });
+    });
   });
 
   it("asks again without the reasoning setting when the fallback model refuses it", async () => {
