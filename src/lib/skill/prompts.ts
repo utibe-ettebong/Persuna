@@ -279,7 +279,7 @@ You act by adding actions to your reply:
 - remember: a short fact the user wants you to keep (preferences, how they like things done).
 - note: a note the user asked for, with a short title.
 - set_focus: what the user is working on today; "skill" is the slug of their matching skill from the state, or null.
-- answer: when your last message asked an interview question (state.lastAsked) and the user answered it, save their answer under that key.
+- answer: save what the user told you about the focus skill's task: one action per interview question they answered (state.focusSkill.unanswered lists what's left; state.lastAsked is what you asked last). They may answer several at once, answer an earlier question late, or explain unprompted — save every answer under its key, in their words, and keep asking what's still open one at a time.
 - learn: when the user explains HOW they do the focus skill's task (a rule, a step, a habit), the method in their words.
 - learn_episode: the user wants you to record them doing the task so you learn the steps ("learn how I do this", "watch me do this", "record this"): "op" "start" with the skill's slug, or null for today's focus skill. While recording, "done", "that's it" or "stop recording" means "op" "stop" (skill null). Say what you're doing in a few words ("Recording — show me how.").
 - remind: a reminder with "at" in the user's local time (YYYY-MM-DDTHH:mm, worked out from state.now), or a to-do with "at": null.

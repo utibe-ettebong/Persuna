@@ -7,6 +7,7 @@ import { parseDollars } from "@/lib/money";
 
 export const SORTS = {
   best: "Best score",
+  top: "Top performing",
   popular: "Most rented",
   rating: "Top rated",
   price_low: "Price: low to high",
@@ -112,6 +113,10 @@ export function browse<T extends BrowseItem>(items: T[], q: BrowseQuery): T[] {
   const newest = (a: T, b: T) => b.updatedAt.getTime() - a.updatedAt.getTime();
   const by: Record<Sort, (a: T, b: T) => number> = {
     best: (a, b) => (b.score ?? -1) - (a.score ?? -1) || b.rentals - a.rentals || newest(a, b),
+    top: (a, b) =>
+      b.rentals - a.rentals ||
+      (b.rating ?? 0) - (a.rating ?? 0) ||
+      (b.score ?? -1) - (a.score ?? -1),
     popular: (a, b) => b.rentals - a.rentals || (b.score ?? -1) - (a.score ?? -1),
     rating: (a, b) => (b.rating ?? 0) - (a.rating ?? 0) || b.rentals - a.rentals,
     price_low: (a, b) => a.priceCents - b.priceCents || newest(a, b),
@@ -124,4 +129,78 @@ export function browse<T extends BrowseItem>(items: T[], q: BrowseQuery): T[] {
 /** The output types on offer, for the type filter. */
 export function typeOptions(items: BrowseItem[]): string[] {
   return [...new Set(items.map((i) => i.outputType.trim().toLowerCase()).filter(Boolean))].sort();
+}
+
+/** One verified listing's contribution to its creator's record. */
+export interface CreatorInput {
+  ownerId: string | null;
+  rentals: number;
+  rating: number | null;
+  ratingCount: number;
+  score: number | null;
+}
+
+export interface CreatorSummary {
+  ownerId: string;
+  skills: number;
+  rentals: number;
+  averageRating: number | null;
+  ratings: number;
+  averageScore: number | null;
+}
+
+/**
+ * Creators ranked by rentals, then rating: the marketplace's proven sellers.
+ * Ratings average across every rating; listings without an owner are skipped.
+ */
+export function topCreators<T extends CreatorInput>(items: T[], limit: number): CreatorSummary[] {
+  const byOwner = new Map<
+    string,
+    {
+      skills: number;
+      rentals: number;
+      stars: number;
+      ratings: number;
+      scores: number;
+      scored: number;
+    }
+  >();
+  for (const item of items) {
+    if (!item.ownerId) continue;
+    const c = byOwner.get(item.ownerId) ?? {
+      skills: 0,
+      rentals: 0,
+      stars: 0,
+      ratings: 0,
+      scores: 0,
+      scored: 0,
+    };
+    c.skills += 1;
+    c.rentals += item.rentals;
+    if (item.rating !== null) {
+      c.stars += item.rating * item.ratingCount;
+      c.ratings += item.ratingCount;
+    }
+    if (item.score !== null) {
+      c.scores += item.score;
+      c.scored += 1;
+    }
+    byOwner.set(item.ownerId, c);
+  }
+  return [...byOwner]
+    .map(([ownerId, c]) => ({
+      ownerId,
+      skills: c.skills,
+      rentals: c.rentals,
+      averageRating: c.ratings ? Math.round((c.stars / c.ratings) * 10) / 10 : null,
+      ratings: c.ratings,
+      averageScore: c.scored ? Math.round(c.scores / c.scored) : null,
+    }))
+    .sort(
+      (a, b) =>
+        b.rentals - a.rentals ||
+        (b.averageRating ?? 0) - (a.averageRating ?? 0) ||
+        b.skills - a.skills,
+    )
+    .slice(0, Math.max(0, limit));
 }

@@ -78,6 +78,7 @@ import {
   warmVoice,
   ackTick,
   speak,
+  speakable,
   startConversation,
   startHoldRecording,
   stopSpeaking,
@@ -86,6 +87,7 @@ import {
   type SpeechQueue,
   type UtteranceEnd,
 } from "./voice";
+import { initialNarration, narrationProgress } from "./narration";
 import { startWakeWord, wakeWordSupported, type WakeListener } from "./wake-listener";
 import { startAgentCall, type AgentCall } from "./agent-voice";
 
@@ -379,8 +381,8 @@ export function Companion(props: CompanionProps) {
   const [drawing, setDrawing] = useState<Drawing | null>(null);
   // While a drawing is read out, its steps follow the spoken words.
   const [speakProgress, setSpeakProgress] = useState<number | null>(null);
-  const spokenChars = useRef(0);
-  const speakTotal = useRef(0);
+  // The drawing being narrated: how much is said, and which speech owns it.
+  const narration = useRef({ gen: 0, total: 0, base: 0, start: 0, timer: 0, voice: false });
   const [made, setMade] = useState<MadeFile | null>(null);
   // Circle something to ask about it: picking, then the area picked (until the next message).
   const [circling, setCircling] = useState(false);
@@ -599,12 +601,13 @@ export function Companion(props: CompanionProps) {
     setTalking(false);
     setLevel(0);
     // Stopped mid-explanation: show the whole drawing.
-    setSpeakProgress(1);
+    finishNarration();
   }, []);
 
   /**
    * Persuna says something: out loud when its voice is on, its words shown
-   * beside it as they're spoken; all at once when it's silent.
+   * beside it as they're spoken; all at once when it's silent. Resolves
+   * whether it was spoken, so a narrated drawing knows what to follow.
    */
   const express = useCallback(
     (line: string, lead = "") => {
@@ -615,20 +618,60 @@ export function Companion(props: CompanionProps) {
         dotTalkRef.current = null;
         setDotTalk(null);
       }
-      void sayAloud(`${lead || cutting}${line}`, (chunk) => {
-        showCaption(chunk);
-        // A drawing being explained follows the words, step by step.
-        spokenChars.current += chunk.length;
-        if (speakTotal.current > 0) {
-          setSpeakProgress(Math.min(1, spokenChars.current / speakTotal.current));
-        }
-      }).then((spoke) => {
+      return sayAloud(`${lead || cutting}${line}`, showCaption).then((spoke) => {
         if (!spoke) showCaption(line);
-        setSpeakProgress(1);
+        return spoke;
       });
     },
     [sayAloud, showCaption],
   );
+
+  /**
+   * A drawing is being explained out loud: its steps appear across the
+   * spoken reply. Streamed turns are already mid-sentence when the drawing
+   * arrives, so `alreadySpoken` (chars said so far) starts it part-way.
+   * Returns this narration's id, to complete only while it's still current.
+   */
+  function beginNarration(text: string, alreadySpoken: number): number {
+    const total = speakable(text).join(" ").length;
+    const gen = narration.current.gen + 1;
+    window.clearTimeout(narration.current.timer);
+    narration.current = {
+      gen,
+      total,
+      base: alreadySpoken,
+      start: Date.now(),
+      timer: 0,
+      voice: true,
+    };
+    setSpeakProgress(initialNarration(alreadySpoken, total));
+    const tick = () => {
+      if (!narration.current.voice || narration.current.gen !== gen) return;
+      setSpeakProgress(
+        narrationProgress(Date.now() - narration.current.start, narration.current.base, total),
+      );
+      narration.current.timer = window.setTimeout(tick, 250);
+    };
+    narration.current.timer = window.setTimeout(tick, 250);
+    return gen;
+  }
+
+  /** Speech ended (or was stopped): the whole drawing may show. */
+  function finishNarration(gen?: number) {
+    if (gen !== undefined && narration.current.gen !== gen) return;
+    if (!narration.current.voice) return;
+    window.clearTimeout(narration.current.timer);
+    narration.current.voice = false;
+    setSpeakProgress(1);
+  }
+
+  /** No voice to follow (muted, or spoken elsewhere): the drawing paces itself. */
+  function timedDrawing() {
+    window.clearTimeout(narration.current.timer);
+    narration.current.voice = false;
+    narration.current.gen += 1;
+    setSpeakProgress(null);
+  }
 
   // First interaction anywhere: say whatever was waiting, and wake up.
   useEffect(() => {
@@ -910,6 +953,9 @@ export function Companion(props: CompanionProps) {
         }
         let spoken = "";
         let written = "";
+        // A drawing arrives only at the end of the stream: count what's said
+        // by then, so its steps start part-way through, not from the top.
+        let saidChars = 0;
         let firstAudioLogged = false;
         if (live.current.voiceOn) {
           speaking.current += 1;
@@ -945,10 +991,7 @@ export function Companion(props: CompanionProps) {
               }
               spoken = spoken ? `${spoken} ${piece}` : piece;
               showCaption(spoken);
-              spokenChars.current += piece.length;
-              if (speakTotal.current > 0) {
-                setSpeakProgress(Math.min(1, spokenChars.current / speakTotal.current));
-              }
+              saidChars += piece.length;
             },
           });
           if (opts.lead) queue.push(opts.lead);
@@ -1000,8 +1043,10 @@ export function Companion(props: CompanionProps) {
         );
         if (queue) {
           // The reply is already being spoken; show the messages and cards.
-          void settleSpeech();
-          answered(result, "", true);
+          const done = settleSpeech();
+          const gen = answered(result, "", true, saidChars);
+          // Speech runs on after the stream: the drawing completes with it.
+          if (gen !== null) void done?.then(() => finishNarration(gen));
         } else {
           answered(result, opts.lead);
         }
@@ -1078,10 +1123,18 @@ export function Companion(props: CompanionProps) {
 
   /**
    * Persuna's answer to something you typed or said: show what it set up, and
-   * say it (unless the voice agent already has).
+   * say it (unless the voice agent already has). `alreadySpoken` is what's
+   * said when the drawing arrives (streamed turns are mid-sentence); null
+   * when speech timing is unknown. Returns the narration id, if one started.
    */
-  function answered(value: ChatResult, lead = "", spoken = false) {
+  function answered(
+    value: ChatResult,
+    lead = "",
+    spoken = false,
+    alreadySpoken: number | null = 0,
+  ): number | null {
     const [mine, reply] = value.messages;
+    let gen: number | null = null;
     setMessages((all) => [
       ...all,
       { ...mine, role: "user" },
@@ -1121,10 +1174,12 @@ export function Companion(props: CompanionProps) {
       const steps = value.drawing.marks.length + (value.drawing.flow?.nodes.length ?? 0);
       setDrawPace(Math.min(2600, Math.max(700, (reply.content.length * 60) / Math.max(1, steps))));
       setDrawing(value.drawing);
-      // Steps follow the voice when it's on; the pace above is the fallback.
-      spokenChars.current = 0;
-      speakTotal.current = reply.content.length;
-      setSpeakProgress(live.current.voiceOn ? 0 : null);
+      // Steps follow the voice when it's on; otherwise the pace above is the fallback.
+      if (live.current.voiceOn && alreadySpoken !== null) {
+        gen = beginNarration(`${lead} ${reply.content}`, alreadySpoken);
+      } else {
+        timedDrawing();
+      }
     }
     if (value.file) setMade(value.file);
     if (value.confirm) {
@@ -1145,7 +1200,19 @@ export function Companion(props: CompanionProps) {
     ) {
       void Notification.requestPermission();
     }
-    if (!spoken) express(reply.content, lead);
+    if (!spoken) {
+      const said = express(reply.content, lead);
+      // Silent after all (the browser needs a click first): the drawing
+      // paces itself instead of jumping to full. Else it ends with the voice.
+      if (gen !== null) {
+        const n = gen;
+        void said.then((spoke) => {
+          if (!spoke) timedDrawing();
+          else finishNarration(n);
+        });
+      }
+    }
+    return gen;
   }
 
   function showPoint(spot: Spot) {
@@ -1400,8 +1467,9 @@ export function Companion(props: CompanionProps) {
         lastHeard.current = Date.now();
         showCaption(line);
         // ElevenLabs carries only the words: fetch what this turn set up on screen.
+        // Its speech timing is unknown here, so drawings pace themselves.
         void persunaAgentTurnsAction().then((res) => {
-          if (res.ok) res.value.forEach((value) => answered(value, "", true));
+          if (res.ok) res.value.forEach((value) => answered(value, "", true, null));
         });
       },
       onHeard: () => (lastHeard.current = Date.now()),

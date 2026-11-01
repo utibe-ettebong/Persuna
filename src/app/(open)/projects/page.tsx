@@ -1,12 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Stars } from "@/components/market";
 import { PROJECT_STATUS as STATUS } from "@/components/projects";
 import { Badge, buttonClass, Card, PageHeader } from "@/components/ui";
 import { getUser } from "@/lib/auth/session";
+import { verifiedOwnerIds } from "@/lib/market/service";
 import { formatUsd } from "@/lib/money";
 import { plural } from "@/lib/plural";
+import { peopleFor } from "@/lib/profile/service";
 import { daysLeft } from "@/lib/projects/rules";
-import { listOpenProjects, projectsFor } from "@/lib/projects/service";
+import { listCompletedProjects, listOpenProjects, projectsFor } from "@/lib/projects/service";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
@@ -18,10 +21,15 @@ export const metadata: Metadata = {
 
 export default async function ProjectsPage() {
   const user = await getUser();
-  const [open, mine] = await Promise.all([
+  const [open, mine, delivered] = await Promise.all([
     listOpenProjects(),
     user ? projectsFor(user.id) : Promise.resolve(null),
+    listCompletedProjects(),
   ]);
+  const posterIds = [
+    ...new Set([...open.map((o) => o.project), ...delivered].map((p) => p.posterId)),
+  ];
+  const [people, verified] = await Promise.all([peopleFor(posterIds), verifiedOwnerIds(posterIds)]);
   const now = new Date();
   const postHref = user ? "/projects/new" : `/sign-in?next=${encodeURIComponent("/projects/new")}`;
 
@@ -69,6 +77,7 @@ export default async function ProjectsPage() {
           <ul className="grid gap-px overflow-hidden rounded-md border border-line bg-line sm:grid-cols-2">
             {open.map(({ project, proposals }) => {
               const left = daysLeft(project.deadline, now);
+              const poster = people.get(project.posterId);
               return (
                 <li key={project.id} className="bg-card">
                   <Link
@@ -78,6 +87,14 @@ export default async function ProjectsPage() {
                     <p className="font-display text-xl font-medium tracking-[-0.02em] group-hover:text-accent">
                       {project.title}
                     </p>
+                    {poster && (
+                      <p className="flex flex-wrap items-center gap-2 text-sm text-muted">
+                        <span>posted by {poster.name}</span>
+                        {verified.has(project.posterId) && (
+                          <Badge tone="good">✓ Verified creator</Badge>
+                        )}
+                      </p>
+                    )}
                     <p className="line-clamp-3 flex-1 text-sm leading-relaxed text-muted">
                       {project.plan?.scope}
                     </p>
@@ -104,6 +121,41 @@ export default async function ProjectsPage() {
           </ul>
         )}
       </section>
+
+      {delivered.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="font-display text-2xl font-medium tracking-[-0.02em]">
+            Recently delivered
+          </h2>
+          <ul className="divide-y divide-line rounded-md border border-line bg-card">
+            {delivered.map((p) => {
+              const poster = people.get(p.posterId);
+              return (
+                <li key={p.id}>
+                  <Link
+                    href={`/projects/${p.id}`}
+                    className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 hover:bg-accent-soft/40"
+                  >
+                    <span className="min-w-0">
+                      <span className="font-medium">{p.title}</span>{" "}
+                      {poster && <span className="text-sm text-muted">by {poster.name}</span>}
+                    </span>
+                    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted">
+                      {p.posterRating && (
+                        <span className="inline-flex items-center gap-1">
+                          <Stars rating={p.posterRating} />
+                          <span className="tabular-nums">{p.posterRating}/5</span>
+                        </span>
+                      )}
+                      <span className="tabular-nums">{formatUsd(p.budgetCents)}</span>
+                    </span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }

@@ -260,6 +260,12 @@ export function tidyReply(
 ): PersunaReply {
   const slugs = new Set(state.skills.map((s) => s.slug));
   const unanswered = new Set(state.focusSkill?.unanswered.map((q) => q.key) ?? []);
+  // Answers and lessons belong to the skill being trained — including one
+  // this very reply creates or switches to.
+  const trains =
+    Boolean(state.focusSkill) ||
+    reply.actions.some((a) => a.type === "create_skill") ||
+    reply.actions.some((a) => a.type === "set_focus" && a.skill != null && slugs.has(a.skill));
   const actions = reply.actions.flatMap((action): PersunaAction[] => {
     if (
       action.type === "add_example" ||
@@ -312,8 +318,7 @@ export function tidyReply(
       const server = (state.mcpServers ?? []).find((s) => s.name === action.server);
       return server?.tools.some((t) => t.name === action.tool) ? [action] : [];
     }
-    if (action.type === "answer" || action.type === "learn")
-      return state.focusSkill ? [action] : [];
+    if (action.type === "answer" || action.type === "learn") return trains ? [action] : [];
     return [action];
   });
   const asked = reply.asked && unanswered.has(reply.asked) ? reply.asked : null;

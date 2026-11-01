@@ -23,7 +23,11 @@ import {
 } from "@/lib/operate/service";
 import { UsageLimitError } from "@/lib/models/usage";
 import { findNames } from "@/lib/skill/engine";
-import { INTERVIEW_QUESTIONS, type InterviewAnswers } from "@/lib/skill/interview";
+import {
+  INTERVIEW_QUESTIONS,
+  appendInterviewAnswer,
+  type InterviewAnswers,
+} from "@/lib/skill/interview";
 import { redact, redactTogether, scanText } from "@/lib/skill/redact";
 import { slugify } from "@/lib/action-state";
 import {
@@ -478,7 +482,6 @@ async function applyTurn(
 ): Promise<{ result: ChatResult; extra: string[] }> {
   const profile = await getProfile(userId);
   const owned = await listSkills(userId);
-  const focusSkill = owned.find((s) => s.id === profile.focusSkillId) ?? null;
   let memory = [...profile.memory];
   let tone = profile.tone;
   let focus = profile.focus;
@@ -493,6 +496,21 @@ async function applyTurn(
   // The skill an action means: the one named, else today's.
   const target = (slug: string | null | undefined) =>
     owned.find((s) => s.slug === slug) ?? owned.find((s) => s.id === focusSkillId) ?? null;
+  // The skill answers and lessons belong to, as this turn leaves it: a turn
+  // that creates a skill (or switches to one) trains that skill, not the old focus.
+  const focusNow = () => owned.find((s) => s.id === focusSkillId) ?? null;
+  // Interview answers gathered this turn, per skill: several answers (and
+  // lessons) in one reply accumulate here and save once, instead of each
+  // overwriting the last.
+  const drafts = new Map<string, InterviewAnswers>();
+  const draftFor = (skill: { id: string; interview: InterviewAnswers | null }) => {
+    let draft = drafts.get(skill.id);
+    if (!draft) {
+      draft = { ...(skill.interview ?? {}) };
+      drafts.set(skill.id, draft);
+    }
+    return draft;
+  };
   let reminderSet = false;
   let navigate: string | null = null;
   let watch: ChatResult["watch"] = null;
@@ -520,13 +538,17 @@ async function applyTurn(
     } else if (action.type === "set_focus") {
       focus = action.focus;
       focusSkillId = owned.find((s) => s.slug === action.skill)?.id ?? null;
-    } else if (action.type === "answer" && focusSkill) {
-      const answers: InterviewAnswers = { ...(focusSkill.interview ?? {}) };
-      answers[action.key] = [answers[action.key], redact(action.answer)]
-        .filter(Boolean)
-        .join("\n\n");
-      await saveInterview(focusSkill.id, answers);
-      link = { href: `/skills/${focusSkill.slug}/interview`, label: "See your answers" };
+    } else if (action.type === "answer") {
+      const skill = focusNow();
+      if (!skill) {
+        extra.push("Tell me which task first: say what you're working on, or name a new one.");
+      } else {
+        drafts.set(
+          skill.id,
+          appendInterviewAnswer(draftFor(skill), action.key, redact(action.answer)),
+        );
+        link = { href: `/skills/${skill.slug}/interview`, label: "See your answers" };
+      }
     } else if (action.type === "remind") {
       const dueAt = action.at ? localToUtc(action.at, clock.offset) : null;
       await db()
@@ -807,16 +829,33 @@ async function applyTurn(
         .update(persunaProfiles)
         .set({ wrapupDay: clock.day })
         .where(eq(persunaProfiles.userId, userId));
-    } else if (action.type === "learn" && focusSkill) {
-      try {
-        link = await teach(client, focusSkill, action.method, actor);
-      } catch (error) {
-        console.error(error);
-        extra.push(
-          `(I couldn't turn that into a rule change just now: ${(error as Error).message})`,
-        );
+    } else if (action.type === "learn") {
+      const skill = focusNow();
+      if (!skill) {
+        extra.push("Tell me which task first: say what you're working on, or name a new one.");
+      } else {
+        try {
+          const clean = await cleanMethod(client, action.method, actor, skill.id);
+          if (!skill.currentVersionId) {
+            drafts.set(skill.id, appendInterviewAnswer(draftFor(skill), "steps", clean));
+            link = { href: `/skills/${skill.slug}/interview`, label: "See what I learned" };
+          } else {
+            const proposal = await proposeFromMethodNotes(client, skill.id, "companion", clean);
+            link = { href: `/corrections/${proposal.id}`, label: "Review the proposed change" };
+          }
+        } catch (error) {
+          console.error(error);
+          extra.push(
+            `(I couldn't turn that into a rule change just now: ${(error as Error).message})`,
+          );
+        }
       }
     }
+  }
+
+  // Answers and lessons gathered above save once per skill, all together.
+  for (const [skillId, draft] of drafts) {
+    await saveInterview(skillId, draft);
   }
 
   await db()
@@ -832,7 +871,7 @@ async function applyTurn(
         role: "user",
         // The file's name only: its contents were for this turn.
         content: file ? `${text}\n\n(${file.name})` : text,
-        skillId: focusSkill?.id ?? null,
+        skillId: focusSkillId,
       },
       {
         userId,
@@ -1069,9 +1108,32 @@ export async function* chatFromVoiceStream(
 }
 
 /**
- * Turns something the user taught (in chat or by letting Persuna watch) into
- * a proposed rule change, or into interview notes before rules exist. Names
- * and identifiers are removed first; the skill keeps the method only.
+ * Something the user taught, with names and identifiers removed first; the
+ * skill keeps the method only.
+ */
+async function cleanMethod(
+  client: ModelClient,
+  method: string,
+  actor: Actor,
+  skillId: string,
+): Promise<string> {
+  const entities = await findNames(client, [method]);
+  const [clean] = redactTogether([method], [scanText(method, entities)], entities);
+  await audit({
+    actor,
+    action: "persuna.taught",
+    entityType: "skill",
+    entityId: skillId,
+    skillId,
+    details: { chars: clean.length },
+  });
+  return clean;
+}
+
+/**
+ * Turns something the user taught by letting Persuna watch into a proposed
+ * rule change, or into interview notes before rules exist. (Chat lessons
+ * gather in the turn's interview draft instead, so several save at once.)
  */
 async function teach(
   client: ModelClient,
@@ -1085,20 +1147,9 @@ async function teach(
   method: string,
   actor: Actor,
 ): Promise<NonNullable<ChatResult["link"]>> {
-  const entities = await findNames(client, [method]);
-  const [clean] = redactTogether([method], [scanText(method, entities)], entities);
-  await audit({
-    actor,
-    action: "persuna.taught",
-    entityType: "skill",
-    entityId: skill.id,
-    skillId: skill.id,
-    details: { chars: clean.length },
-  });
+  const clean = await cleanMethod(client, method, actor, skill.id);
   if (!skill.currentVersionId) {
-    const answers: InterviewAnswers = { ...(skill.interview ?? {}) };
-    answers.steps = [answers.steps, clean].filter(Boolean).join("\n\n");
-    await saveInterview(skill.id, answers);
+    await saveInterview(skill.id, appendInterviewAnswer(skill.interview ?? {}, "steps", clean));
     return { href: `/skills/${skill.slug}/interview`, label: "See what I learned" };
   }
   const proposal = await proposeFromMethodNotes(client, skill.id, "companion", clean);

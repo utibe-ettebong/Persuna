@@ -114,6 +114,18 @@ export const INTERVIEW_QUESTIONS = [
 export type InterviewKey = (typeof INTERVIEW_QUESTIONS)[number]["key"];
 export type InterviewAnswers = Partial<Record<InterviewKey, string>>;
 
+/**
+ * Adds one answer to a working copy of the interview, keeping earlier ones:
+ * several answers gathered in one turn accumulate instead of overwriting.
+ */
+export function appendInterviewAnswer(
+  answers: InterviewAnswers,
+  key: InterviewKey,
+  answer: string,
+): InterviewAnswers {
+  return { ...answers, [key]: [answers[key], answer].filter(Boolean).join("\n\n") };
+}
+
 /** Non-empty answers, in question order. */
 export function answeredQuestions(answers: InterviewAnswers | null | undefined) {
   return INTERVIEW_QUESTIONS.filter((q) => answers?.[q.key]?.trim()).map((q) => ({

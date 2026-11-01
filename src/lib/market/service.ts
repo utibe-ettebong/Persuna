@@ -17,7 +17,7 @@ import type { ModelClient } from "@/lib/models/gateway";
 import { createPaystack, paymentMatches } from "@/lib/payments/paystack";
 import { NotFoundError, publishedScore, skillComposite } from "@/lib/skill/service";
 import { normalizeText } from "@/lib/text";
-import { browse, typeOptions, type BrowseQuery } from "./browse";
+import { browse, topCreators, typeOptions, type BrowseQuery } from "./browse";
 import { confidentialSkills, confidentialTo } from "@/lib/teams/confidential";
 import { withoutConfidential } from "@/lib/teams/rules";
 import {
@@ -305,11 +305,8 @@ async function withMarketFacts(rows: ListingRow[]) {
 
 export type MarketListing = Awaited<ReturnType<typeof withMarketFacts>>[number];
 
-/**
- * Live public listings that still meet the minimum score, searched, filtered
- * and sorted. Unlisted listings never appear here: only their link opens them.
- */
-export async function browseListings(query: BrowseQuery) {
+/** Live public listings that still meet the minimum score. Unlisted ones never appear. */
+async function verifiedPool() {
   const rows = await db()
     .select({ listing: listings, skill: skills })
     .from(listings)
@@ -318,21 +315,81 @@ export async function browseListings(query: BrowseQuery) {
     .orderBy(desc(listings.updatedAt));
   const confidential = await confidentialSkills(rows.map((r) => r.skill.id));
   const open = withoutConfidential(rows, (r) => r.skill.id, confidential);
-  const all = (await withMarketFacts(open)).filter((r) => r.verified);
-  const asItem = (r: MarketListing) => ({
-    ...r,
-    title: r.listing.title,
-    description: r.listing.description,
-    skillName: r.skill.name,
-    inputType: r.skill.inputType,
-    outputType: r.skill.outputType,
-    priceCents: r.listing.priceCents,
-    turnaroundHours: r.listing.turnaroundHours,
-    rating: r.ratings.average,
-    updatedAt: r.listing.updatedAt,
-  });
-  const items = all.map(asItem);
+  return (await withMarketFacts(open)).filter((r) => r.verified);
+}
+
+const asItem = (r: MarketListing) => ({
+  ...r,
+  title: r.listing.title,
+  description: r.listing.description,
+  skillName: r.skill.name,
+  inputType: r.skill.inputType,
+  outputType: r.skill.outputType,
+  priceCents: r.listing.priceCents,
+  turnaroundHours: r.listing.turnaroundHours,
+  rating: r.ratings.average,
+  updatedAt: r.listing.updatedAt,
+});
+
+/**
+ * Live public listings that still meet the minimum score, searched, filtered
+ * and sorted. Unlisted listings never appear here: only their link opens them.
+ */
+export async function browseListings(query: BrowseQuery) {
+  const items = (await verifiedPool()).map(asItem);
   return { results: browse(items, query), total: items.length, types: typeOptions(items) };
+}
+
+const TOP_QUERY: BrowseQuery = {
+  q: "",
+  type: null,
+  minPriceCents: null,
+  maxPriceCents: null,
+  minScore: null,
+  maxHours: null,
+  sort: "top",
+};
+
+/**
+ * The marketplace's highlights from one load: the top performing listings and
+ * the creators behind them, for the unfiltered page.
+ */
+export async function marketplaceHighlights(topLimit = 3, creatorLimit = 6) {
+  const pool = await verifiedPool();
+  const items = pool.map(asItem);
+  return {
+    top: browse(items, TOP_QUERY).slice(0, topLimit),
+    creators: topCreators(
+      pool.map((r) => ({
+        ownerId: r.skill.ownerId,
+        rentals: r.rentals,
+        rating: r.ratings.average,
+        ratingCount: r.ratings.count,
+        score: r.score,
+      })),
+      creatorLimit,
+    ),
+  };
+}
+
+/** Which of these owners have at least one verified listing (for trust badges). */
+export async function verifiedOwnerIds(ownerIds: string[]): Promise<Set<string>> {
+  const ids = [...new Set(ownerIds.filter(Boolean))];
+  if (!ids.length) return new Set();
+  const rows = await db()
+    .select({ ownerId: skills.ownerId, publishedVersionId: skills.publishedVersionId })
+    .from(skills)
+    .innerJoin(listings, eq(listings.skillId, skills.id))
+    .where(and(inArray(skills.ownerId, ids), eq(listings.active, true)));
+  const minScore = env().LISTING_MIN_SCORE;
+  const verified = new Set<string>();
+  for (const row of rows) {
+    if (!row.ownerId || verified.has(row.ownerId)) continue;
+    if (isVerified(await verificationFor(row.publishedVersionId), minScore)) {
+      verified.add(row.ownerId);
+    }
+  }
+  return verified;
 }
 
 /** A live listing, public or unlisted, with its verification, ratings and recent reviews. */

@@ -11,7 +11,7 @@
  */
 import { peopleFor } from "@/lib/profile/service";
 import { randomBytes } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import type { Project, ProjectMilestone } from "@/db/schema";
 import { env, paystackConfig } from "@/env";
@@ -293,6 +293,26 @@ export async function listOpenProjects() {
     .limit(100);
   const counts = await proposalCounts(rows.map((r) => r.id));
   return rows.map((p) => ({ project: p, proposals: counts.get(p.id) ?? 0 }));
+}
+
+/**
+ * Recently completed projects, with both sides' ratings: proof the flow delivers.
+ * A project leaves this public list when its retention ends, even before the
+ * purge runs: purging keeps the title and budget, so it must be filtered out here.
+ */
+export async function listCompletedProjects(limit = 6, now = new Date()) {
+  return db()
+    .select()
+    .from(projects)
+    .where(
+      and(
+        eq(projects.status, "completed"),
+        isNull(projects.purgedAt),
+        or(isNull(projects.expiresAt), gt(projects.expiresAt, now)),
+      ),
+    )
+    .orderBy(desc(projects.updatedAt))
+    .limit(limit);
 }
 
 async function proposalCounts(projectIds: string[]) {
