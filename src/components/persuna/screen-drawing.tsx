@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { layoutFlow } from "@/lib/persuna/flow-layout";
 import type { Drawing } from "@/lib/persuna/service";
 import type { Flow } from "@/lib/persuna/types";
+import { shownSteps } from "./narration";
 
 /**
  * Boxes and arrows: the same layout the saved SVG uses. `shown` limits it to
@@ -124,12 +125,18 @@ export function DrawingLayer({
   // Steps appear one at a time while Persuna explains them: notes first, then boxes.
   const total = drawing.marks.length + (drawing.flow?.nodes.length ?? 0);
   const [step, setStep] = useState(1);
+  // A new drawing starts from its first step, not where the last one ended.
+  const [stepDrawing, setStepDrawing] = useState(drawing);
+  if (stepDrawing !== drawing) {
+    setStepDrawing(drawing);
+    setStep(1);
+  }
   useEffect(() => {
     if (progress != null || step >= total) return;
     const t = window.setTimeout(() => setStep((n) => n + 1), paceMs);
     return () => window.clearTimeout(t);
   }, [step, total, paceMs, progress]);
-  const shown = progress == null ? step : Math.min(total, Math.max(1, Math.ceil(progress * total)));
+  const shown = progress == null ? step : shownSteps(progress, total);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onDone();
     window.addEventListener("keydown", onKey);

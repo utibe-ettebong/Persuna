@@ -81,6 +81,41 @@ describe("tidyReply", () => {
     expect(reply.asked).toBeNull();
   });
 
+  it("keeps answers and lessons when the reply creates the skill being trained", () => {
+    const reply = tidyReply(
+      {
+        reply: "ok",
+        actions: [
+          {
+            type: "create_skill",
+            name: "SEO briefs",
+            task: "Turn rough notes into SEO briefs",
+            input: null,
+            output: null,
+          },
+          { type: "answer", key: "steps", answer: "I read the notes first" },
+          { type: "learn", method: "I always lead with the keyword" },
+        ],
+      },
+      state(),
+    );
+    expect(reply.actions.map((a) => a.type)).toEqual(["create_skill", "answer", "learn"]);
+  });
+
+  it("keeps answers when the reply switches to the skill being trained", () => {
+    const reply = tidyReply(
+      {
+        reply: "ok",
+        actions: [
+          { type: "set_focus", focus: "the board minutes", skill: "meeting-minutes" },
+          { type: "answer", key: "tone", answer: "formal, third person" },
+        ],
+      },
+      state(),
+    );
+    expect(reply.actions.map((a) => a.type)).toEqual(["set_focus", "answer"]);
+  });
+
   it("keeps an mcp call only for a connected server and tool", () => {
     const withMcp = state({
       mcpServers: [
