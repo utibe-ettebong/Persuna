@@ -295,6 +295,16 @@ export async function listOpenProjects() {
   return rows.map((p) => ({ project: p, proposals: counts.get(p.id) ?? 0 }));
 }
 
+/** Recently completed projects, with both sides' ratings: proof the flow delivers. */
+export async function listCompletedProjects(limit = 6) {
+  return db()
+    .select()
+    .from(projects)
+    .where(eq(projects.status, "completed"))
+    .orderBy(desc(projects.updatedAt))
+    .limit(limit);
+}
+
 async function proposalCounts(projectIds: string[]) {
   if (!projectIds.length) return new Map<string, number>();
   const rows = await db()

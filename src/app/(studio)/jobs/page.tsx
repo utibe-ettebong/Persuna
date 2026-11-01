@@ -5,7 +5,7 @@ import { createJobAction } from "@/app/actions/jobs";
 import { ActionForm } from "@/components/action-form";
 import { VoiceRecorder } from "@/components/voice-recorder";
 import { Badge, Card, Field, inputClass, PageHeader } from "@/components/ui";
-import { approvalStats, listJobs } from "@/lib/jobs/service";
+import { approvalStats, listJobs, listOrdersFor } from "@/lib/jobs/service";
 import { visibleSkillIds } from "@/lib/auth/access";
 import { requireUser } from "@/lib/auth/session";
 import { listSkills } from "@/lib/skill/service";
@@ -22,9 +22,10 @@ const STATUS_BADGE = {
 
 export default async function JobsPage() {
   const user = await requireUser();
-  const [jobs, skills] = await Promise.all([
+  const [jobs, skills, orders] = await Promise.all([
     visibleSkillIds(user).then(listJobs),
     listSkills(user.isAdmin ? null : user.id),
+    listOrdersFor(user.id),
   ]);
   const publishable = skills.filter((s) => s.publishedVersionId);
   const queue = jobs.filter((j) => j.job.status === "review");
@@ -106,7 +107,46 @@ export default async function JobsPage() {
         empty="Nothing waiting."
       />
       <JobList title="Reviewed" rows={done} empty="No reviewed jobs yet." />
+      <OrderList orders={orders} />
     </div>
+  );
+}
+
+/** Tasks this person rented from the marketplace: check, revise, accept. */
+function OrderList({ orders }: { orders: Awaited<ReturnType<typeof listOrdersFor>> }) {
+  if (orders.length === 0) return null;
+  return (
+    <section>
+      <h2 className="mb-3 font-display text-lg font-medium tracking-[-0.02em]">
+        Your orders ({orders.length})
+      </h2>
+      <Card>
+        <ul className="divide-y divide-line text-sm">
+          {orders.map(({ job, skill }) => {
+            const badge = STATUS_BADGE[job.status];
+            return (
+              <li key={job.id}>
+                <Link
+                  href={`/market/orders/${job.id}`}
+                  className="flex flex-wrap items-center justify-between gap-2 p-3 hover:bg-subtle"
+                >
+                  <span className="min-w-0">
+                    <span className="font-medium">{skill.name}</span>{" "}
+                    <span className="text-muted">
+                      {job.createdAt.toLocaleString("en-GB", {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      })}
+                    </span>
+                  </span>
+                  <Badge tone={badge.tone}>{badge.label}</Badge>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </Card>
+    </section>
   );
 }
 

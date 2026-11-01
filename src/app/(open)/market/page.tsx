@@ -1,13 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { CompositeLine, RatingLine, VerifiedBadge } from "@/components/market";
+import { CompositeLine, RatingLine, Stars, VerifiedBadge } from "@/components/market";
 import { PersunaOrb } from "@/components/persuna/orb";
 import { Badge, buttonClass, Card, inputClass, PageHeader } from "@/components/ui";
 import { isFiltered, parseBrowseQuery, SORTS, TURNAROUNDS } from "@/lib/market/browse";
-import { browseListings } from "@/lib/market/service";
+import { browseListings, marketplaceHighlights } from "@/lib/market/service";
 import { dollarsInput, formatUsd } from "@/lib/money";
 import { persunasByOwner } from "@/lib/persuna/service";
 import { plural } from "@/lib/plural";
+import { peopleFor } from "@/lib/profile/service";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
@@ -23,11 +24,28 @@ type Params = { searchParams: Promise<Record<string, string | string[] | undefin
 
 export default async function MarketPage({ searchParams }: Params) {
   const query = parseBrowseQuery(await searchParams);
-  const { results, total, types } = await browseListings(query);
-  const persunas = await persunasByOwner([
-    ...new Set(results.flatMap((l) => (l.skill.ownerId ? [l.skill.ownerId] : []))),
-  ]);
   const filtered = isFiltered(query);
+  const [{ results, total, types }, highlights] = await Promise.all([
+    browseListings(query),
+    filtered ? Promise.resolve(null) : marketplaceHighlights(),
+  ]);
+  const ownerIds = [
+    ...new Set(
+      [...results, ...(highlights?.top ?? [])]
+        .flatMap((l) => (l.skill.ownerId ? [l.skill.ownerId] : []))
+        .concat((highlights?.creators ?? []).map((c) => c.ownerId)),
+    ),
+  ];
+  const [persunas, people] = await Promise.all([persunasByOwner(ownerIds), peopleFor(ownerIds)]);
+  /** Every card names its creator; the profile link needs a public handle. */
+  const creatorOf = (ownerId: string | null) => {
+    if (!ownerId) return null;
+    const persuna = persunas.get(ownerId);
+    const person = people.get(ownerId);
+    const name = person?.name ?? persuna?.name;
+    if (!name) return null;
+    return { name, handle: person?.handle ?? persuna?.handle ?? null, avatar: persuna?.avatar };
+  };
 
   return (
     <div className="space-y-8">
@@ -40,6 +58,96 @@ export default async function MarketPage({ searchParams }: Params) {
           Post a project instead
         </Link>
       </PageHeader>
+
+      {highlights && highlights.top.length > 0 && (
+        <section aria-labelledby="top-heading" className="space-y-3">
+          <h2 id="top-heading" className="font-display text-2xl font-medium tracking-[-0.02em]">
+            Top performing
+          </h2>
+          <ol className="divide-y divide-line rounded-md border border-line bg-card">
+            {highlights.top.map((r, i) => {
+              const creator = creatorOf(r.skill.ownerId);
+              return (
+                <li key={r.listing.id}>
+                  <Link
+                    href={`/market/${r.listing.id}`}
+                    className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-3 hover:bg-accent-soft/40"
+                  >
+                    <span className="font-display text-lg tabular-nums text-faint">{i + 1}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="font-medium">{r.listing.title}</span>{" "}
+                      {creator && <span className="text-sm text-muted">by {creator.name}</span>}
+                    </span>
+                    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted">
+                      {r.ratings.average !== null ? (
+                        <span className="inline-flex items-center gap-1">
+                          <Stars rating={r.ratings.average} />
+                          <span className="tabular-nums">{r.ratings.average.toFixed(1)}</span>
+                        </span>
+                      ) : (
+                        <span>Not rated yet</span>
+                      )}
+                      <span>{plural(r.rentals, "rental")}</span>
+                      <span className="font-display text-base tabular-nums text-foreground">
+                        {formatUsd(r.listing.priceCents)}
+                      </span>
+                    </span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      )}
+
+      {highlights && highlights.creators.length > 0 && (
+        <section aria-labelledby="creators-heading" className="space-y-3">
+          <h2
+            id="creators-heading"
+            className="font-display text-2xl font-medium tracking-[-0.02em]"
+          >
+            Verified creators
+          </h2>
+          <ul className="grid gap-px overflow-hidden rounded-md border border-line bg-line sm:grid-cols-2 lg:grid-cols-3">
+            {highlights.creators.map((c) => {
+              const creator = creatorOf(c.ownerId);
+              if (!creator) return null;
+              const body = (
+                <span className="flex items-center gap-3">
+                  {creator.avatar ? (
+                    <PersunaOrb look={creator.avatar} size={36} animate={false} />
+                  ) : (
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-accent font-display text-sm font-semibold text-accent-ink">
+                      {creator.name[0]}
+                    </span>
+                  )}
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">{creator.name}</span>
+                    <span className="label-mono block text-muted">
+                      {plural(c.skills, "skill")} · {plural(c.rentals, "rental")}
+                      {c.averageRating !== null && ` · ★ ${c.averageRating.toFixed(1)}`}
+                    </span>
+                  </span>
+                </span>
+              );
+              return (
+                <li key={c.ownerId} className="bg-card">
+                  {creator.handle ? (
+                    <Link
+                      href={`/persunas/${creator.handle}`}
+                      className="block p-4 transition-colors hover:bg-accent-soft/40"
+                    >
+                      {body}
+                    </Link>
+                  ) : (
+                    <span className="block p-4">{body}</span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       <form
         method="get"
@@ -146,7 +254,14 @@ export default async function MarketPage({ searchParams }: Params) {
       ) : (
         <ul className="grid gap-px overflow-hidden rounded-md border border-line bg-line sm:grid-cols-2 lg:grid-cols-3">
           {results.map((r) => {
-            const persuna = r.skill.ownerId ? persunas.get(r.skill.ownerId) : undefined;
+            const creator = creatorOf(r.skill.ownerId);
+            const byline = creator && (
+              <span className="inline-flex items-center gap-2">
+                {creator.avatar && <PersunaOrb look={creator.avatar} size={22} animate={false} />}
+                by {creator.name}
+                {creator.handle ? " →" : ""}
+              </span>
+            );
             return (
               <li key={r.listing.id} className="flex flex-col bg-card">
                 <Link
@@ -181,16 +296,19 @@ export default async function MarketPage({ searchParams }: Params) {
                     <span className="label-mono text-accent">View →</span>
                   </div>
                 </Link>
-                {persuna?.handle && (
+                {creator?.handle ? (
                   <Link
-                    href={`/persunas/${persuna.handle}`}
+                    href={`/persunas/${creator.handle}`}
                     className="label-mono border-t border-line px-6 py-3 text-muted hover:text-accent"
                   >
-                    <span className="inline-flex items-center gap-2">
-                      <PersunaOrb look={persuna.avatar} size={22} animate={false} />
-                      by {persuna.name} →
-                    </span>
+                    {byline}
                   </Link>
+                ) : (
+                  creator && (
+                    <span className="label-mono border-t border-line px-6 py-3 text-muted">
+                      {byline}
+                    </span>
+                  )
                 )}
               </li>
             );

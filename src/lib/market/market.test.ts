@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { browse, isFiltered, parseBrowseQuery, typeOptions, type BrowseItem } from "./browse";
+import {
+  browse,
+  isFiltered,
+  parseBrowseQuery,
+  topCreators,
+  typeOptions,
+  type BrowseItem,
+} from "./browse";
 import { isVerified, ratingSummary, shouldPauseListing } from "./rules";
 
 const item = (over: Partial<BrowseItem> & { title: string }): BrowseItem => ({
@@ -118,7 +125,54 @@ describe("browse", () => {
     expect(run({ sort: "price_high" })[0]).toBe("Grant proposal");
   });
 
+  it("sorts top performing by rentals, then rating, then score", () => {
+    const ranked = browse(
+      [
+        item({ title: "Unrented gem", score: 99, rentals: 0, rating: 5 }),
+        item({ title: "Workhorse", score: 82, rentals: 12, rating: 4.5 }),
+        item({ title: "Loved", score: 80, rentals: 12, rating: 4.9 }),
+      ],
+      parseBrowseQuery({ sort: "top" }),
+    ).map((i) => i.title);
+    expect(ranked).toEqual(["Loved", "Workhorse", "Unrented gem"]);
+  });
+
   it("lists the output types on offer", () => {
     expect(typeOptions(items)).toEqual(["minutes", "proposal"]);
+  });
+});
+
+describe("topCreators", () => {
+  it("ranks owners by rentals, averaging every rating", () => {
+    const creators = topCreators(
+      [
+        { ownerId: "ada", rentals: 4, rating: 5, ratingCount: 2, score: 90 },
+        { ownerId: "ada", rentals: 6, rating: 4, ratingCount: 2, score: 80 },
+        { ownerId: "sam", rentals: 12, rating: null, ratingCount: 0, score: 85 },
+        { ownerId: null, rentals: 99, rating: 5, ratingCount: 9, score: 99 },
+      ],
+      5,
+    );
+    expect(creators.map((c) => c.ownerId)).toEqual(["sam", "ada"]);
+    expect(creators[1]).toMatchObject({
+      skills: 2,
+      rentals: 10,
+      averageRating: 4.5,
+      ratings: 4,
+      averageScore: 85,
+    });
+  });
+
+  it("breaks ties by rating, then skill count, and keeps only the limit", () => {
+    const creators = topCreators(
+      [
+        { ownerId: "ada", rentals: 5, rating: 5, ratingCount: 1, score: null },
+        { ownerId: "sam", rentals: 5, rating: 4, ratingCount: 3, score: null },
+        { ownerId: "jo", rentals: 5, rating: 4, ratingCount: 1, score: null },
+        { ownerId: "jo", rentals: 0, rating: null, ratingCount: 0, score: null },
+      ],
+      2,
+    );
+    expect(creators.map((c) => c.ownerId)).toEqual(["ada", "jo"]);
   });
 });
