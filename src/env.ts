@@ -53,6 +53,9 @@ const envSchema = z.object({
   /** Notion public integration. Redirect: {APP_URL}/api/connections/notion/callback */
   NOTION_CLIENT_ID: z.string().min(1).optional(),
   NOTION_CLIENT_SECRET: z.string().min(1).optional(),
+  /** Meta app (Facebook Pages + Instagram). Redirect: {APP_URL}/api/connections/meta/callback */
+  META_CLIENT_ID: z.string().min(1).optional(),
+  META_CLIENT_SECRET: z.string().min(1).optional(),
   /** The ElevenLabs agent created by `npm run voice:agent`. */
   ELEVENLABS_AGENT_ID: z.string().min(1).optional(),
   /** Shared secret ElevenLabs sends when it calls Persuna's brain (/api/persuna/llm). */

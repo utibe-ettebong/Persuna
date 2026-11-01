@@ -2,7 +2,23 @@
  * The apps Persuna can connect to, and their OAuth details. Pure except for
  * the token calls, which take a fetch so they can be tested.
  */
+/** Pinned Meta Graph API version (verified against Meta's changelog). */
+export const META_GRAPH_VERSION = "v24.0";
+
 export const PROVIDERS = {
+  meta: {
+    name: "Meta",
+    apps: "Facebook Pages and Instagram",
+    authorizeUrl: `https://www.facebook.com/${META_GRAPH_VERSION}/dialog/oauth`,
+    tokenUrl: `https://graph.facebook.com/${META_GRAPH_VERSION}/oauth/access_token`,
+    scopes: [
+      "pages_show_list",
+      "pages_read_engagement",
+      "pages_manage_posts",
+      "instagram_business_basic",
+    ],
+    extra: {},
+  },
   google: {
     name: "Google",
     apps: "Gmail and Google Calendar",
@@ -55,7 +71,8 @@ export function authorizeUrl(
     redirect_uri: input.redirectUri,
     response_type: "code",
     state: input.state,
-    ...(p.scopes.length && { scope: p.scopes.join(" ") }),
+    // Meta takes its permissions comma-separated; Google space-separated.
+    ...(p.scopes.length && { scope: p.scopes.join(provider === "meta" ? "," : " ") }),
     ...p.extra,
   });
   return `${p.authorizeUrl}?${params}`;
@@ -75,6 +92,49 @@ export async function exchangeCode(
   input: { code: string; redirectUri: string } & ClientCredentials,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Tokens> {
+  if (provider === "meta") {
+    const query = (params: Record<string, string>) =>
+      `${PROVIDERS.meta.tokenUrl}?${new URLSearchParams(params)}`;
+    const short = await readJson(
+      await fetchImpl(
+        query({
+          client_id: input.clientId,
+          client_secret: input.clientSecret,
+          redirect_uri: input.redirectUri,
+          code: input.code,
+        }),
+      ),
+      "Meta sign-in",
+    );
+    // A code gives an hour-long token; exchanging it gives ~60 days.
+    const long = await readJson(
+      await fetchImpl(
+        query({
+          grant_type: "fb_exchange_token",
+          client_id: input.clientId,
+          client_secret: input.clientSecret,
+          fb_exchange_token: String(short.access_token ?? ""),
+        }),
+      ),
+      "Meta sign-in",
+    );
+    const accessToken = String(long.access_token ?? "");
+    const me = await readJson(
+      await fetchImpl(
+        `https://graph.facebook.com/${META_GRAPH_VERSION}/me?fields=name&access_token=${encodeURIComponent(accessToken)}`,
+      ),
+      "Meta account lookup",
+    );
+    return {
+      accessToken,
+      // Meta has no refresh tokens: re-exchanging the long-lived token extends
+      // it, so it doubles as the refresh credential (see refreshAccess).
+      refreshToken: accessToken || null,
+      expiresAt: expiry(long.expires_in),
+      account: String(me.name ?? "Meta account"),
+      scopes: PROVIDERS.meta.scopes.join(","),
+    };
+  }
   if (provider === "google") {
     const data = await readJson(
       await fetchImpl(PROVIDERS.google.tokenUrl, {
@@ -136,6 +196,23 @@ export async function refreshAccess(
   creds: ClientCredentials,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ accessToken: string; refreshToken: string | null; expiresAt: Date | null }> {
+  if (provider === "meta") {
+    // Re-exchanging a live long-lived token extends it another ~60 days; an
+    // expired one fails here and the user reconnects.
+    const data = await readJson(
+      await fetchImpl(
+        `${PROVIDERS.meta.tokenUrl}?${new URLSearchParams({
+          grant_type: "fb_exchange_token",
+          client_id: creds.clientId,
+          client_secret: creds.clientSecret,
+          fb_exchange_token: refreshToken,
+        })}`,
+      ),
+      "Meta refresh",
+    );
+    const accessToken = String(data.access_token ?? "");
+    return { accessToken, refreshToken: accessToken || null, expiresAt: expiry(data.expires_in) };
+  }
   const res =
     provider === "google"
       ? await fetchImpl(PROVIDERS.google.tokenUrl, {

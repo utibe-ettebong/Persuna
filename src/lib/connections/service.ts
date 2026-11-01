@@ -15,6 +15,7 @@ import type { OffsetMinutes } from "@/lib/persuna/when";
 import { runAppTask } from "./agent";
 import { readToken, seal, signToken, unseal } from "./crypto";
 import {
+  META_GRAPH_VERSION,
   PROVIDERS,
   PROVIDER_IDS,
   authorizeUrl,
@@ -35,7 +36,9 @@ export function credentialsFor(provider: Provider): ClientCredentials | null {
   const [clientId, clientSecret] =
     provider === "google"
       ? [e.GOOGLE_CLIENT_ID, e.GOOGLE_CLIENT_SECRET]
-      : [e.NOTION_CLIENT_ID, e.NOTION_CLIENT_SECRET];
+      : provider === "meta"
+        ? [e.META_CLIENT_ID, e.META_CLIENT_SECRET]
+        : [e.NOTION_CLIENT_ID, e.NOTION_CLIENT_SECRET];
   return clientId && clientSecret && connectionsKey() ? { clientId, clientSecret } : null;
 }
 
@@ -163,11 +166,18 @@ export async function disconnect(userId: string, provider: Provider, actor: Acto
     .where(and(eq(appConnections.userId, userId), eq(appConnections.provider, provider)))
     .returning();
   if (!row) return;
-  // Also tell Google to forget the grant; Notion has no revoke call.
+  // Also tell the provider to forget the grant; Notion has no revoke call.
   if (provider === "google" && key) {
     const token = unseal(row.refreshToken ?? row.accessToken, key);
     await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, {
       method: "POST",
+    }).catch(() => {});
+  }
+  if (provider === "meta" && key) {
+    const token = unseal(row.accessToken, key);
+    await fetch(`https://graph.facebook.com/${META_GRAPH_VERSION}/me/permissions`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${token}` },
     }).catch(() => {});
   }
   await audit({
@@ -297,6 +307,7 @@ export async function confirmAppAction(userId: string, token: string, actor: Act
     gmail_send: "Sent.",
     calendar_create: "It's on your calendar.",
     notion_create_page: "Added to Notion.",
+    facebook_post: "Posted to Facebook.",
   };
   return { message: done[tool.name] ?? "Done.", href: result.link ?? result.url ?? null };
 }

@@ -5,7 +5,7 @@
  */
 import { z } from "zod";
 import { localToUtc, type OffsetMinutes } from "@/lib/persuna/when";
-import type { Provider } from "./providers";
+import { META_GRAPH_VERSION, type Provider } from "./providers";
 
 export interface ToolContext {
   token: string;
@@ -47,6 +47,7 @@ const GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me";
 const CALENDAR = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
 const NOTION = "https://api.notion.com/v1";
 const NOTION_HEADERS = { "notion-version": "2022-06-28" };
+const META = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
 const localTime = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/, "YYYY-MM-DDTHH:mm");
 
 /** An RFC 822 message, base64url-encoded as Gmail wants it. */
@@ -69,6 +70,52 @@ const email = z.object({
   subject: z.string().trim().max(300),
   body: z.string().trim().min(1).max(20_000),
 });
+
+/** A Facebook Page the user manages, with its token and linked Instagram account. */
+interface MetaPage {
+  id: string;
+  name: string;
+  category: string | null;
+  token: string | null;
+  instagram: { id: string; username: string } | null;
+}
+
+async function metaPages(ctx: ToolContext): Promise<MetaPage[]> {
+  const data = await call(
+    ctx,
+    `${META}/me/accounts?fields=id,name,category,access_token,instagram_business_account{id,username}&limit=25`,
+  );
+  return ((data.data ?? []) as Record<string, unknown>[]).map((p) => {
+    const ig = p.instagram_business_account as { id?: string; username?: string } | undefined;
+    return {
+      id: String(p.id ?? ""),
+      name: String(p.name ?? "Untitled page"),
+      category: typeof p.category === "string" ? p.category : null,
+      token: typeof p.access_token === "string" ? p.access_token : null,
+      instagram:
+        ig?.id && ig.username ? { id: String(ig.id), username: String(ig.username) } : null,
+    };
+  });
+}
+
+/** The user's Page by id or name; page work always goes through its own token. */
+async function resolvePage(ctx: ToolContext, page: string): Promise<MetaPage> {
+  const pages = await metaPages(ctx);
+  const want = page.trim();
+  const lowered = want.toLowerCase();
+  const found =
+    pages.find((p) => p.id === want) ??
+    pages.find((p) => p.name.toLowerCase() === lowered) ??
+    pages.find((p) => p.name.toLowerCase().includes(lowered));
+  if (!found) {
+    throw new Error(
+      pages.length
+        ? `No Facebook Page called "${want}". Yours: ${pages.map((p) => p.name).join(", ")}.`
+        : "No Facebook Pages on this account. Create one, or connect the account that owns it.",
+    );
+  }
+  return found;
+}
 
 const notionTitle = (page: Record<string, unknown>) => {
   const props = (page.properties ?? {}) as Record<
@@ -257,6 +304,110 @@ export const TOOLS: Tool[] = [
         NOTION_HEADERS,
       );
       return { created: true, url: page.url ?? null };
+    },
+  }),
+  tool({
+    name: "meta_list_pages",
+    provider: "meta",
+    description:
+      "List the Facebook Pages this user manages, with any linked Instagram business account. args: {} (no arguments)",
+    args: z.object({}),
+    writes: false,
+    async run(_args, ctx) {
+      // Names and handles only: page tokens never leave this call.
+      return (await metaPages(ctx)).map((p) => ({
+        name: p.name,
+        category: p.category,
+        instagram: p.instagram?.username ?? null,
+      }));
+    },
+  }),
+  tool({
+    name: "facebook_list_posts",
+    provider: "meta",
+    description:
+      'Recent posts on one of the user\'s Facebook Pages. args: {"page": name or id, "limit": 1-10}',
+    args: z.object({
+      page: z.string().trim().min(1).max(200),
+      limit: z.number().int().min(1).max(10).default(5),
+    }),
+    writes: false,
+    async run({ page, limit }, ctx) {
+      const found = await resolvePage(ctx, page);
+      if (!found.token) throw new Error(`I can't open "${found.name}" right now. Reconnect Meta.`);
+      const data = await call(
+        ctx,
+        `${META}/${found.id}/posts?fields=message,created_time,permalink_url,likes.summary(true).limit(0),comments.summary(true).limit(0)&limit=${limit}`,
+        {},
+        { authorization: `Bearer ${found.token}` },
+      );
+      return ((data.data ?? []) as Record<string, unknown>[]).map((p) => ({
+        message: String(p.message ?? "").slice(0, 300),
+        at: p.created_time ?? null,
+        url: p.permalink_url ?? null,
+        likes: (p.likes as { summary?: { total_count?: number } })?.summary?.total_count ?? null,
+        comments:
+          (p.comments as { summary?: { total_count?: number } })?.summary?.total_count ?? null,
+      }));
+    },
+  }),
+  tool({
+    name: "instagram_list_media",
+    provider: "meta",
+    description:
+      'Recent posts on the Instagram business account linked to one of the user\'s Facebook Pages. args: {"page": name or id, "limit": 1-10}',
+    args: z.object({
+      page: z.string().trim().min(1).max(200),
+      limit: z.number().int().min(1).max(10).default(5),
+    }),
+    writes: false,
+    async run({ page, limit }, ctx) {
+      const found = await resolvePage(ctx, page);
+      if (!found.instagram) {
+        throw new Error(
+          `"${found.name}" has no linked Instagram business account. Link one in the Page's settings first.`,
+        );
+      }
+      const data = await call(
+        ctx,
+        `${META}/${found.instagram.id}/media?fields=caption,timestamp,permalink,like_count,comments_count&limit=${limit}`,
+      );
+      return ((data.data ?? []) as Record<string, unknown>[]).map((m) => ({
+        caption: String(m.caption ?? "").slice(0, 300),
+        at: m.timestamp ?? null,
+        url: m.permalink ?? null,
+        likes: m.like_count ?? null,
+        comments: m.comments_count ?? null,
+      }));
+    },
+  }),
+  tool({
+    name: "facebook_post",
+    provider: "meta",
+    description:
+      'Post text (and an optional link) to one of the user\'s Facebook Pages. args: {"page": name or id, "message", "link": URL or null}',
+    args: z.object({
+      page: z.string().trim().min(1).max(200),
+      message: z.string().trim().min(1).max(5000),
+      link: z.string().trim().url().max(2000).nullish(),
+    }),
+    writes: true,
+    preview: (a) =>
+      `Post to the "${a.page}" Facebook Page:\n\n${a.message}${a.link ? `\n\n${a.link}` : ""}`,
+    async run({ page, message, link }, ctx) {
+      const found = await resolvePage(ctx, page);
+      if (!found.token)
+        throw new Error(`I can't post as "${found.name}" right now. Reconnect Meta.`);
+      const posted = await call(
+        ctx,
+        `${META}/${found.id}/feed`,
+        {
+          method: "POST",
+          body: JSON.stringify({ message, ...(link ? { link } : {}) }),
+        },
+        { authorization: `Bearer ${found.token}` },
+      );
+      return { posted: true, id: posted.id ?? null };
     },
   }),
 ];
