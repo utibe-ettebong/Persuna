@@ -24,7 +24,7 @@
     "db:migrate": "node scripts/migrate.mjs",
     "db:studio": "drizzle-kit studio",
     "skill": "tsx --env-file-if-exists=.env scripts/skill.ts",
-    "demo:seed": "tsx --env-file-if-exists=.env scripts/demo-seed.ts",
+    "demo:seed": "tsx --env-file-if-exists=.env --env-file=scripts/demo-seed.env scripts/demo-seed.ts",
     "voice:agent": "tsx --env-file-if-exists=.env scripts/voice-agent.ts",
     "voice:latency": "tsx --env-file-if-exists=.env scripts/voice-latency.ts"
   },
