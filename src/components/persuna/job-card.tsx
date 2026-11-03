@@ -106,7 +106,9 @@ export function JobCard({ jobId, initial }: { jobId: string; initial?: ChatJob }
               ? "✓ Approved"
               : job.status === "rejected"
                 ? "Sent back"
-                : job.status}
+                : job.status === "awaiting_approval"
+                  ? "Waiting for approval"
+                  : job.status}
           </span>
         )}
         <Link href={`/jobs/${job.id}`} className="label-mono ml-auto text-muted underline">

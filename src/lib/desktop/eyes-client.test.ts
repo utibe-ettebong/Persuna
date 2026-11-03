@@ -137,6 +137,21 @@ describe("createEyesClient", () => {
     expect(await threw.ask("read 3")).toEqual({ ok: false, why: "blocked" });
   });
 
+  it("asks twice when sharing is off, so actions never share", async () => {
+    const { eyes, helpers } = client();
+    const one = eyes.ask("type 1 aGk=", 2500, { share: false });
+    const two = eyes.ask("type 1 aGk=", 2500, { share: false });
+    expect(two).not.toBe(one);
+    await settle();
+    expect(helpers[0].received).toEqual(["type 1 aGk="]);
+    helpers[0].reply('{"done":true,"length":2}');
+    expect(await one).toEqual({ ok: true, value: { done: true, length: 2 } });
+    await settle();
+    expect(helpers[0].received).toEqual(["type 1 aGk=", "type 1 aGk="]);
+    helpers[0].reply('{"done":true,"length":2}');
+    expect(await two).toEqual({ ok: true, value: { done: true, length: 2 } });
+  });
+
   it("calls nonsense and the helper's own errors unreadable", async () => {
     const { eyes, helpers } = client();
     const nonsense = eyes.ask("read 1");

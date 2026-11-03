@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { Markdown } from "@/components/markdown";
+import { parseCsv } from "@/lib/docs/csv";
 import { flowSvg } from "@/lib/persuna/flow-layout";
 import type { MadeFile } from "@/lib/persuna/service";
 import { FlowDiagram } from "./screen-drawing";
@@ -10,36 +11,6 @@ type Saver = {
   saveFile?(file: { name: string; ext: string; data: string }): Promise<string | null>;
   savePdf?(doc: { name: string; html: string }): Promise<string | null>;
 };
-
-/** Rows of a CSV table (quoted cells may hold commas and quotes). */
-export function parseCsv(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let cell = "";
-  let quoted = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (quoted) {
-      if (c === '"' && text[i + 1] === '"') {
-        cell += '"';
-        i++;
-      } else if (c === '"') quoted = false;
-      else cell += c;
-    } else if (c === '"') quoted = true;
-    else if (c === ",") {
-      row.push(cell);
-      cell = "";
-    } else if (c === "\n" || c === "\r") {
-      if (c === "\r" && text[i + 1] === "\n") i++;
-      row.push(cell);
-      rows.push(row);
-      row = [];
-      cell = "";
-    } else cell += c;
-  }
-  if (cell || row.length) rows.push([...row, cell]);
-  return rows.filter((r) => r.some((c) => c.trim()));
-}
 
 const PRINT_CSS = `body{font:14px/1.55 -apple-system,"Segoe UI",sans-serif;color:#1d161d;margin:48px;}h1,h2,h3{line-height:1.25;margin:1.2em 0 .4em}h1{font-size:24px}h2{font-size:18px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 8px;text-align:left}ul,ol{padding-left:22px}`;
 
@@ -119,7 +90,24 @@ export function MadeFileCard({
       : file.kind === "table"
         ? ["csv", "pdf"]
         : ["png", "svg"];
+  const office: ("docx" | "xlsx" | "pptx")[] =
+    file.kind === "document" ? ["docx", "pptx"] : file.kind === "table" ? ["xlsx"] : [];
   const rows = file.kind === "table" ? parseCsv(file.body) : [];
+
+  async function saveOffice(format: "docx" | "xlsx" | "pptx") {
+    setSaved(null);
+    try {
+      const res = await fetch("/api/files/render", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: file.kind, title: file.title, body: file.body, format }),
+      });
+      if (!res.ok) return;
+      download(`${file.title}.${format}`, await res.blob());
+    } catch {
+      // Stay quiet: the local formats below always work.
+    }
+  }
 
   return (
     <div className="persuna-in space-y-3 rounded-[24px] bg-black p-4 text-sm text-white ring-1 ring-white/10">
@@ -188,6 +176,16 @@ export function MadeFileCard({
             key={f}
             type="button"
             onClick={() => void save(f)}
+            className="label-mono rounded-full px-3 py-1.5 text-[10px] text-white/80 ring-1 ring-white/20 hover:ring-[#b794ff]"
+          >
+            Save {f.toUpperCase()}
+          </button>
+        ))}
+        {office.map((f) => (
+          <button
+            key={f}
+            type="button"
+            onClick={() => void saveOffice(f)}
             className="label-mono rounded-full px-3 py-1.5 text-[10px] text-white/80 ring-1 ring-white/20 hover:ring-[#b794ff]"
           >
             Save {f.toUpperCase()}

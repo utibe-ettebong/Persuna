@@ -1617,11 +1617,11 @@ export function Companion(props: CompanionProps) {
   ): Promise<{ sight: Awaited<ReturnType<typeof screenNow>>; mode: TurnMode }> {
     if (workModeRef.current) return { sight: await screenNow("work"), mode: "work" };
     const reason = circledRef.current
-      ? "what you circled"
+      ? "You circled something."
       : show
-        ? "what you're showing me"
+        ? "You asked me to look."
         : screenyRef.current || (said && wantsSight(said))
-          ? "your question is about the screen"
+          ? "Your question is about what's on it."
           : null;
     if (!reason) return { sight: null, mode: "talk" };
     if (!(await ensureLook(reason))) {

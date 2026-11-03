@@ -1,11 +1,15 @@
 import type { Metadata } from "next";
 import { acceptOrderAction, complainAction, requestChangesAction } from "@/app/actions/market";
 import { ActionForm } from "@/components/action-form";
+import { JobApprovals, JobToolSetup } from "@/components/job-tools";
 import { Markdown } from "@/components/markdown";
 import { Badge, buttonClass, Card, Field, inputClass, PageHeader } from "@/components/ui";
 import { assertOrderAccess } from "@/lib/auth/access";
 import { requireUser } from "@/lib/auth/session";
+import { listConnections } from "@/lib/connections/service";
+import { jobApprovalsFor, jobToolSetup } from "@/lib/jobs/tools";
 import { orNotFound } from "@/lib/load";
+import { listMcpServers } from "@/lib/mcp/service";
 import { formatMoney } from "@/lib/money";
 import { getOrder } from "@/lib/market/service";
 
@@ -34,6 +38,12 @@ export default async function OrderPage({ params, searchParams }: Params) {
     return getOrder(id);
   }, id);
   const escrow = ESCROW[order.escrow];
+  const [setup, approvals, apps, servers] = await Promise.all([
+    jobToolSetup(id, user.id),
+    jobApprovalsFor(id, user.id),
+    listConnections(user.id).catch(() => []),
+    listMcpServers(user.id).catch(() => []),
+  ]);
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -44,6 +54,7 @@ export default async function OrderPage({ params, searchParams }: Params) {
       />
       <div className="flex flex-wrap gap-2">
         {order.status === "awaiting_payment" && <Badge>waiting for payment</Badge>}
+        {order.status === "awaiting_approval" && <Badge tone="accent">needs your approval</Badge>}
         {order.status === "review" && <Badge tone="accent">with the owner for review</Badge>}
         {order.premiumReview && <Badge tone="accent">guaranteed owner review</Badge>}
         {order.status === "approved" && <Badge tone="good">delivered</Badge>}
@@ -73,6 +84,12 @@ export default async function OrderPage({ params, searchParams }: Params) {
         </Card>
       )}
 
+      {setup && !setup.started && setup.declaredTools.length > 0 && order.escrow !== "pending" && (
+        <JobToolSetup jobId={id} page="order" setup={setup} apps={apps} servers={servers} />
+      )}
+
+      <JobApprovals jobId={id} page="order" approvals={approvals} />
+
       {order.output && (
         <>
           <Card className="p-4">
@@ -86,7 +103,19 @@ export default async function OrderPage({ params, searchParams }: Params) {
                   href={`/jobs/${order.id}/download?format=docx`}
                   className={buttonClass("secondary")}
                 >
-                  Download .docx
+                  .docx
+                </a>
+                <a
+                  href={`/jobs/${order.id}/download?format=pdf`}
+                  className={buttonClass("secondary")}
+                >
+                  .pdf
+                </a>
+                <a
+                  href={`/jobs/${order.id}/download?format=pptx`}
+                  className={buttonClass("secondary")}
+                >
+                  .pptx
                 </a>
               </span>
             </div>

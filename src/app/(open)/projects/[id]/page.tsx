@@ -12,6 +12,7 @@ import {
   requestMilestoneChangesAction,
   resolveMilestoneAction,
   resumeProjectAction,
+  saveMilestoneFileAction,
   savePlanAction,
   submitDeliveryAction,
 } from "@/app/actions/projects";
@@ -203,6 +204,58 @@ export default async function ProjectPage({ params, searchParams }: Params) {
                           </details>
                         )}
                         {party && m.check && <CheckReport check={m.check} />}
+
+                        {isPoster && m.delivery && (
+                          <div className="space-y-2 border-t border-line pt-3">
+                            <ActionForm
+                              action={saveMilestoneFileAction}
+                              pendingLabel="Saving…"
+                              className="flex flex-wrap items-center gap-2"
+                              buttons={[
+                                { label: "Save to Drive", intent: "drive" },
+                                { label: "Save to OneDrive", intent: "onedrive" },
+                              ]}
+                            >
+                              <input type="hidden" name="projectId" value={project.id} />
+                              <input type="hidden" name="milestoneId" value={m.id} />
+                              <select
+                                name="format"
+                                defaultValue="docx"
+                                className={inputClass}
+                                aria-label="File format"
+                              >
+                                <option value="docx">.docx</option>
+                                <option value="pdf">.pdf</option>
+                                <option value="pptx">.pptx</option>
+                                <option value="xlsx">.xlsx</option>
+                                <option value="md">.md</option>
+                              </select>
+                            </ActionForm>
+                            {m.savedFiles.length > 0 && (
+                              <ul className="space-y-1 text-sm">
+                                {m.savedFiles.map((f, i) => (
+                                  <li key={`${f.name}-${i}`} className="text-muted">
+                                    Saved {f.name} to{" "}
+                                    {f.provider === "drive" ? "Drive" : "OneDrive"}
+                                    {f.link && (
+                                      <>
+                                        {" "}
+                                        <a
+                                          href={f.link}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="underline hover:text-foreground"
+                                        >
+                                          Open
+                                        </a>
+                                      </>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        )}
 
                         {isPoster && project.status === "in_progress" && m.status === "pending" && (
                           <ActionForm

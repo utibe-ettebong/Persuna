@@ -5,6 +5,7 @@
  */
 import type { Completion, ContentPart, ModelClient } from "@/lib/models/gateway";
 import { z } from "zod";
+import type { JobToolCall } from "@/db/schema";
 import { completeJson } from "@/lib/models/json";
 import {
   deterministicFlags,
@@ -25,6 +26,7 @@ import {
   redraftMessages,
   reviseMessages,
   selfCheckMessages,
+  toolLoopMessages,
   type SkillMeta,
 } from "./prompts";
 import {
@@ -41,10 +43,12 @@ import {
   correctionProposal,
   scoreBreakdown,
   skillSheet,
+  toolLoopStep,
   type CorrectionProposal,
   type Pair,
   type ScoreBreakdown,
   type SkillSheet,
+  type ToolSpec,
 } from "./types";
 
 export async function extractSheet(
@@ -201,6 +205,118 @@ export async function selfCheck(
     selfCheckResult,
   );
   return mergeFlags(value.flags, deterministicFlags(input, draft, trainingInputLengths));
+}
+
+/** One call the tool loop asks the runner to make. */
+export interface ToolCall {
+  tool: string;
+  server: string | null;
+  args: Record<string, unknown>;
+}
+
+/** What a tool call came back with. */
+export interface ToolOutcome {
+  status: "done" | "pending" | "denied" | "error";
+  result: unknown;
+  targetId: string | null;
+  preview: string;
+  approvalId?: string;
+  message?: string;
+}
+
+/**
+ * Runs a job's tool calls: the loop below decides, the runner executes
+ * against the renter's linked connections under the job's policy. Like
+ * ModelClient, storage lives in the implementation, so tests pass a fake.
+ */
+export interface ToolRunner {
+  list(): ToolSpec[] | Promise<ToolSpec[]>;
+  run(call: ToolCall): Promise<ToolOutcome>;
+}
+
+export interface ToolLoopResult {
+  transcript: JobToolCall[];
+  done: boolean;
+  findings: string;
+  /** The call waiting for approval, when the loop paused for one. */
+  pending: JobToolCall | null;
+  exhausted: boolean;
+}
+
+/** Tool turns before the loop stops and the draft proceeds without more tools. */
+const TOOL_LOOP_TURNS = 8;
+
+/**
+ * Works through the renter's apps for a job: the model picks one call at a
+ * time, the runner executes it, and the transcript grows. Pauses when a
+ * call waits for approval (resuming re-runs it first) and stops after
+ * `maxTurns` turns. Storage-free: the caller persists the transcript.
+ */
+export async function runToolLoop(
+  client: ModelClient,
+  runner: ToolRunner,
+  input: {
+    brief: string;
+    specs?: ToolSpec[];
+    transcript?: JobToolCall[];
+    maxTurns?: number;
+  },
+): Promise<ToolLoopResult> {
+  const specs = input.specs ?? (await runner.list());
+  const transcript = [...(input.transcript ?? [])];
+  const last = transcript.at(-1);
+  if (last?.status === "pending") {
+    const outcome = await runner.run({ tool: last.tool, server: last.server, args: last.args });
+    transcript[transcript.length - 1] = {
+      ...last,
+      status: outcome.status,
+      result: outcome.result,
+      targetId: outcome.targetId,
+      approvalId: outcome.approvalId ?? last.approvalId,
+    };
+    if (outcome.status === "pending") {
+      return {
+        transcript,
+        done: false,
+        findings: "",
+        pending: transcript.at(-1)!,
+        exhausted: false,
+      };
+    }
+  }
+  const maxTurns = input.maxTurns ?? TOOL_LOOP_TURNS;
+  for (let turn = 0; turn < maxTurns; turn++) {
+    const { value: step } = await completeJson(
+      client,
+      "draft",
+      toolLoopMessages({ brief: input.brief, tools: specs, transcript }),
+      toolLoopStep,
+      { maxTokens: 2048 },
+    );
+    if (step.action === "done") {
+      return { transcript, done: true, findings: step.findings, pending: null, exhausted: false };
+    }
+    const outcome = await runner.run({
+      tool: step.tool,
+      server: step.server ?? null,
+      args: step.args,
+    });
+    const entry: JobToolCall = {
+      tool: step.tool,
+      server: step.server ?? null,
+      args: step.args,
+      status: outcome.status,
+      result: outcome.result,
+      targetId: outcome.targetId,
+      approvalId: outcome.approvalId ?? null,
+      verified: null,
+    };
+    transcript.push(entry);
+    if (outcome.status === "pending") {
+      return { transcript, done: false, findings: "", pending: entry, exhausted: false };
+    }
+  }
+  return { transcript, done: false, findings: "", pending: null, exhausted: true };
 }
 
 /** Maps over items with at most `limit` in flight, preserving order. */

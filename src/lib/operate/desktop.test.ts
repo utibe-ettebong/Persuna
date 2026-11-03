@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 // The desktop's operate module is plain Node (no Electron), pinned from here.
-import { osaScripts, validOperateAction } from "../../../desktop/operate.js";
+import { osaScripts, validOperateAction, winActLine } from "../../../desktop/operate.js";
 
 describe("validOperateAction (desktop)", () => {
   it("accepts what the server proposes, and refuses the rest twice", () => {
@@ -58,6 +58,38 @@ describe("the desktop's own check", () => {
     expect(validOperateAction({ kind: "type", text: "a\nb", label: "Type" })).toBeNull();
     expect(validOperateAction({ kind: "type", text: "a\rb", label: "Type" })).toBeNull();
     expect(validOperateAction({ kind: "type", text: "a b", label: "Type" })).not.toBeNull();
+  });
+});
+
+describe("winActLine", () => {
+  it("builds one helper line per validated action", () => {
+    expect(winActLine({ kind: "click", x: 10, y: 20, label: "Send" }, 123)).toBe("click 123 10 20");
+    expect(winActLine({ kind: "type", text: "hi", label: "greet" }, 123)).toBe("type 123 aGk=");
+    expect(winActLine({ kind: "key", key: "s", modifiers: ["command"], label: "save" }, 123)).toBe(
+      "key 123 ctrl s",
+    );
+    expect(winActLine({ kind: "key", key: "enter", modifiers: [], label: "go" }, 123)).toBe(
+      "key 123 - enter",
+    );
+    expect(winActLine({ kind: "open", app: "Notepad", label: "notes" }, 123)).toBe(
+      `open 123 ${Buffer.from("Notepad", "utf8").toString("base64")}`,
+    );
+  });
+
+  it("maps Mac modifiers to PC keys", () => {
+    expect(
+      winActLine(
+        { kind: "key", key: "tab", modifiers: ["command", "option", "shift"], label: "switch" },
+        7,
+      ),
+    ).toBe("key 7 ctrl,alt,shift tab");
+  });
+
+  it("builds nothing for refused actions", () => {
+    expect(winActLine({ kind: "click", x: 1, y: 2, label: "" }, 123)).toBeNull();
+    expect(winActLine({ kind: "type", text: "a\nb", label: "t" }, 123)).toBeNull();
+    expect(winActLine({ kind: "key", key: "f13", label: "no" }, 123)).toBeNull();
+    expect(winActLine({ kind: "click", x: 10, y: 20, label: "Send" }, -1)).toBeNull();
   });
 });
 

@@ -1,0 +1,1 @@
+ALTER TABLE "project_milestones" ADD COLUMN "saved_files" jsonb DEFAULT '[]'::jsonb NOT NULL;

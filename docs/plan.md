@@ -1,6 +1,6 @@
 # Persuna: the plan
 
-_Updated 31 October 2026. This is the working plan for the product: what Persuna is, the rules it keeps, what it learns and how, and what gets built next. Change it when the decisions change._
+_Updated 3 November 2026. This is the working plan for the product: what Persuna is, the rules it keeps, what it learns and how, and what gets built next. Change it when the decisions change._
 
 ## 1. What Persuna is
 
@@ -134,9 +134,9 @@ Targets: tick ≤ 50 ms, first sound ≤ 800 ms (p50) and ≤ 1.5 s (p95), no ga
 Skills are for doing, not only writing. Persuna already connects Gmail, Calendar and Notion, proposes MCP calls you approve, and has a Work mode that guides, leads or follows.
 
 - **Operate apps in Work mode.** Click, type and navigate on your behalf with your hand on the mouse to take over. Every action shown before it happens; a stop word always works.
-- **Rented jobs on your Mac first**, as decided, with a visible job indicator and a log you can read. Then the **cloud worker**: an isolated machine per job, the default once it exists.
+- **Rented jobs in the renter's connected apps first.** The skill reads and writes through the renter's own connection (MCP with sign-in, or a native API), with their permission and approval. Then **plugins** inside the apps for live work on an open file, then **desktop control** on the account owner's own computer for desktop-only apps. A rented job never runs on the seller's Mac, and never on a cloud machine holding the renter's password.
 - **MCP as the tool layer.** Each connected server's tools are what Persuna can do; each call is proposed, approved, audited.
-- **Every delivered job checked** against its input and the skill's rules, with the self-check and grounding that exist today.
+- **Every delivered job checked** against its input and the skill's rules, with the self-check and grounding that exist today: after writing, the result is read back and checked.
 
 ## 7. Other improvements
 
@@ -207,8 +207,8 @@ Each phase ships on its own and is useful alone.
 
 **Phase 5: doing the work** (months)
 
-- Operating apps in Work mode with take-over; rented jobs on the owner's Mac; then the cloud worker.
-- Done when a rented minutes job runs end to end with no owner input and passes its checks.
+- MCP sign-in (OAuth), so rented skills reach the renter's apps; tool-using skills for jobs and projects, with an approval policy and a read-back check; real file outputs; plugins in Google Docs and Word first; desktop control where no API exists.
+- Done when a rented minutes job writes into the renter's connected app end to end with no owner input and passes its checks.
 
 Throughout: the "other improvements" list, picked by what blocks the current phase.
 

@@ -1,0 +1,23 @@
+{
+  "timeZone": "Etc/UTC",
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/documents.currentonly",
+    "https://www.googleapis.com/auth/script.container.ui",
+    "https://www.googleapis.com/auth/script.external_request",
+    "https://www.googleapis.com/auth/script.storage"
+  ],
+  "urlFetchWhitelist": ["https://PERSUNA_URL/"],
+  "addOns": {
+    "common": {
+      "name": "Persuna",
+      "logoUrl": "https://PERSUNA_URL/icon.png",
+      "homepageTrigger": {
+        "runFunction": "showSidebar",
+        "enabled": true
+      }
+    },
+    "docs": {}
+  }
+}

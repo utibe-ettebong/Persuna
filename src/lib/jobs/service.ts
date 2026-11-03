@@ -6,17 +6,31 @@
  */
 import { and, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import { db, schema } from "@/db/client";
+import type { JobToolCall, JobToolPolicy } from "@/db/schema";
 import { env, trustThresholds } from "@/env";
 import { audit, type Actor } from "@/lib/audit";
+import { accessTokenFor, connectionAccountFor } from "@/lib/connections/service";
+import { TOOLS, toolNamed } from "@/lib/connections/tools";
+import { listMcpServers, mcpServerClient } from "@/lib/mcp/service";
 import type { ModelClient } from "@/lib/models/gateway";
 import { refundForJob } from "@/lib/payments/service";
-import { draftGrounded, selfCheck } from "@/lib/skill/engine";
+import { draftGrounded, runToolLoop, selfCheck } from "@/lib/skill/engine";
+import type { ToolCall, ToolOutcome, ToolRunner } from "@/lib/skill/engine";
+import type { ToolSpec } from "@/lib/skill/types";
 import { closestPairs } from "@/lib/skill/retrieve";
 import { NotFoundError, trainingPairs } from "@/lib/skill/service";
 import { normalizeText } from "@/lib/text";
 import { classifyEdit } from "./edit-size";
 import { groundingFlags } from "./grounding";
 import { mergeFlags } from "./self-check";
+import {
+  jobLinks,
+  policyAllows,
+  setJobToolPolicy,
+  targetInText,
+  targetOf,
+  truncateValue,
+} from "./tools";
 import {
   canSetLevel,
   eligibility,
@@ -25,7 +39,7 @@ import {
   type TrustRecord,
 } from "./trust";
 
-const { jobs, jobRounds, skills, skillVersions } = schema;
+const { jobs, jobApprovals, jobRounds, skills, skillVersions } = schema;
 
 export interface NewJob {
   skillId: string;
@@ -88,8 +102,28 @@ export async function openJob(job: NewJob, status: "awaiting_payment" | "review"
 /**
  * Drafts the job with the published version, runs the self-check, then either
  * sends it to the owner or auto-approves it, depending on the trust level.
+ * Jobs with linked connections work in the renter's apps first (pausing for
+ * approvals); revisions keep the first run's transcript — writes are never
+ * redone.
  */
 export async function draftJob(client: ModelClient, jobId: string, random = Math.random) {
+  const job = await getJob(jobId);
+  if (job.draft) return job;
+  if ((await jobLinks(jobId)).length && !job.toolCalls.length) {
+    const outcome = await runJobTools(client, jobId);
+    if (outcome.paused) return getJob(jobId);
+    return draftJobText(client, jobId, outcome.findings, random);
+  }
+  return draftJobText(client, jobId, job.toolFindings ?? "", random);
+}
+
+/** The text phase: draft from the input (plus tool findings), check, review or auto-approve. */
+async function draftJobText(
+  client: ModelClient,
+  jobId: string,
+  findings: string,
+  random: () => number,
+) {
   const job = await getJob(jobId);
   if (job.draft) return job;
   const version = await db().query.skillVersions.findFirst({
@@ -99,8 +133,9 @@ export async function draftJob(client: ModelClient, jobId: string, random = Math
   const skill = await db().query.skills.findFirst({ where: eq(skills.id, job.skillId) });
   if (!skill) throw new NotFoundError("No such skill");
 
+  const input = findings ? `${job.input}\n\nTool findings:\n${findings}` : job.input;
   const train = await trainingPairs(job.skillId);
-  const shots = closestPairs(job.input, train, 3);
+  const shots = closestPairs(input, train, 3);
   // A renter asked for changes: revise the version they saw, with their request.
   const [round] = await db()
     .select()
@@ -113,7 +148,7 @@ export async function draftJob(client: ModelClient, jobId: string, random = Math
     client,
     version.sheet,
     shots,
-    job.input,
+    input,
     round ? { previous: round.output, request: round.request } : undefined,
   );
   const flags = mergeFlags(
@@ -121,7 +156,7 @@ export async function draftJob(client: ModelClient, jobId: string, random = Math
     await selfCheck(
       client,
       version.sheet,
-      job.input,
+      input,
       draft,
       train.map((p) => p.input.length),
     ),
@@ -227,6 +262,459 @@ export async function reviseJob(
 export async function createJob(client: ModelClient, job: NewJob) {
   const row = await openJob(job);
   return draftJob(client, row.id);
+}
+
+/** A tool skill's job with no links yet waits for the requester to set it up. */
+export async function jobNeedsSetup(jobId: string): Promise<boolean> {
+  const { job, version } = await getJobWithSkill(jobId);
+  if (job.draft || !(version.sheet.tools ?? []).length) return false;
+  return (await jobLinks(jobId)).length === 0;
+}
+
+/**
+ * The requester starts a job that waited for setup: links are required when
+ * the skill declares tools, and the policy defaults to asking for each write.
+ */
+export async function startJob(client: ModelClient, jobId: string, userId: string) {
+  const { job, version } = await getJobWithSkill(jobId);
+  if (job.requesterUserId !== userId) {
+    throw new Error("Only the person who asked for the job starts it.");
+  }
+  if (job.draft) return job;
+  if (job.status === "awaiting_payment") {
+    throw new Error("Work starts once the payment is confirmed.");
+  }
+  const actor: Actor = job.origin === "renter" ? `renter:${job.requesterName}` : "owner";
+  const links = await jobLinks(jobId);
+  if ((version.sheet.tools ?? []).length && !links.length) {
+    throw new Error("Link at least one of your apps first.");
+  }
+  if (links.length && !job.toolPolicy) {
+    await setJobToolPolicy(jobId, userId, { mode: "approve_each", tools: [] }, actor);
+  }
+  return draftJob(client, jobId);
+}
+
+/* ---------- Tool-using jobs ---------- */
+
+interface RunnerContext {
+  jobId: string;
+  skillId: string;
+  /** Whose tokens: the requester, or the skill owner for owner jobs. */
+  ownerId: string;
+  links: { kind: "app" | "mcp"; ref: string }[];
+  policy: JobToolPolicy | null;
+  /** Tools the skill declares; empty means any linked tool. */
+  declaredTools: string[];
+  actor: Actor;
+  fetchFn?: typeof fetch;
+}
+
+async function runnerContext(
+  jobId: string,
+  actor: Actor,
+  fetchFn?: typeof fetch,
+): Promise<RunnerContext> {
+  const { job, skill, version } = await getJobWithSkill(jobId);
+  const ownerId = job.requesterUserId ?? skill.ownerId;
+  if (!ownerId) throw new Error("This job has no account to act through.");
+  return {
+    jobId,
+    skillId: job.skillId,
+    ownerId,
+    links: await jobLinks(jobId),
+    policy: job.toolPolicy,
+    declaredTools: version.sheet.tools ?? [],
+    actor,
+    fetchFn,
+  };
+}
+
+interface ResolvedTool extends ToolSpec {
+  link: { kind: "app" | "mcp"; ref: string };
+  serverId: string | null;
+}
+
+async function listRunnerTools(ctx: RunnerContext): Promise<ResolvedTool[]> {
+  const specs: ResolvedTool[] = [];
+  const servers = ctx.links.some((l) => l.kind === "mcp")
+    ? await listMcpServers(ctx.ownerId).catch(() => [])
+    : [];
+  for (const link of ctx.links) {
+    if (link.kind === "app") {
+      for (const tool of TOOLS.filter((t) => t.provider === link.ref)) {
+        specs.push({
+          name: tool.name,
+          server: null,
+          description: tool.description,
+          writes: tool.writes,
+          link,
+          serverId: null,
+        });
+      }
+    } else {
+      // A server disconnected since linking offers nothing, rather than failing the job.
+      const server = servers.find((s) => s.id === link.ref);
+      if (!server) continue;
+      // MCP servers don't say which tools write, so every MCP tool needs
+      // approval (fail-closed).
+      for (const t of server.tools) {
+        specs.push({
+          name: t.name,
+          server: server.name,
+          description: t.description,
+          writes: true,
+          link,
+          serverId: server.id,
+        });
+      }
+    }
+  }
+  if (ctx.declaredTools.length) return specs.filter((s) => ctx.declaredTools.includes(s.name));
+  return specs;
+}
+
+/** Latest decision for this exact call, if the renter made one. */
+async function latestDecision(
+  ctx: RunnerContext,
+  call: ToolCall,
+): Promise<{ status: string; id: string } | null> {
+  const rows = await db()
+    .select()
+    .from(jobApprovals)
+    .where(and(eq(jobApprovals.jobId, ctx.jobId), eq(jobApprovals.tool, call.tool)))
+    .orderBy(desc(jobApprovals.createdAt))
+    .limit(5);
+  // Stored args are truncated; compare truncated forms.
+  const want = JSON.stringify(truncateValue(call.args));
+  return rows.find((r) => JSON.stringify(r.args) === want) ?? null;
+}
+
+async function runRunnerTool(ctx: RunnerContext, call: ToolCall): Promise<ToolOutcome> {
+  const specs = await listRunnerTools(ctx);
+  const serverName = call.server?.trim() || null;
+  const spec =
+    specs.find((s) => s.name === call.tool && s.server === serverName) ??
+    (serverName
+      ? specs.find(
+          (s) => s.name === call.tool && s.server?.toLowerCase() === serverName.toLowerCase(),
+        )
+      : undefined);
+  if (!spec) {
+    return {
+      status: "error",
+      result: null,
+      targetId: null,
+      preview: call.tool,
+      message: `No tool ${serverName ? `${serverName} / ` : ""}${call.tool} on this job.`,
+    };
+  }
+  const appTool = spec.server ? null : toolNamed(spec.name);
+  let parsedArgs: Record<string, unknown> = call.args;
+  if (appTool) {
+    try {
+      parsedArgs = appTool.args.parse(call.args) as Record<string, unknown>;
+    } catch {
+      return {
+        status: "error",
+        result: null,
+        targetId: null,
+        preview: spec.name,
+        message: `Those arguments don't fit ${spec.name}.`,
+      };
+    }
+  }
+  const argText = JSON.stringify(call.args);
+  const preview = spec.server
+    ? `Run ${spec.name} on ${spec.server} with ${argText.length > 300 ? `${argText.slice(0, 300)}…` : argText}`
+    : (appTool?.preview?.(parsedArgs) ?? spec.name);
+  const decision = spec.writes ? await latestDecision(ctx, call) : null;
+  if (decision?.status === "denied") {
+    return {
+      status: "denied",
+      result: null,
+      targetId: null,
+      preview,
+      approvalId: decision.id,
+      message: "The renter declined this call.",
+    };
+  }
+  const verdict = policyAllows(
+    ctx.policy,
+    { writes: spec.writes, tool: spec.name },
+    decision?.status === "approved",
+  );
+  if (verdict === "ask") {
+    if (decision?.status === "pending") {
+      return { status: "pending", result: null, targetId: null, preview, approvalId: decision.id };
+    }
+    const [row] = await db()
+      .insert(jobApprovals)
+      .values({
+        jobId: ctx.jobId,
+        tool: spec.name,
+        server: spec.server,
+        args: truncateValue(call.args) as Record<string, unknown>,
+        preview,
+        status: "pending",
+      })
+      .returning({ id: jobApprovals.id });
+    await audit({
+      actor: ctx.actor,
+      action: "job.tool_pending",
+      entityType: "job",
+      entityId: ctx.jobId,
+      skillId: ctx.skillId,
+      details: { tool: spec.name, ...(spec.server && { server: spec.server }) },
+    });
+    return { status: "pending", result: null, targetId: null, preview, approvalId: row.id };
+  }
+  try {
+    const raw = spec.server
+      ? await runMcpTool(ctx, spec, call.args)
+      : await runAppTool(ctx, appTool!, parsedArgs);
+    const targetId =
+      spec.server && typeof raw === "string" ? targetInText(raw) : targetOf(spec.name, raw);
+    const result = truncateValue(raw);
+    await audit({
+      actor: ctx.actor,
+      action: "job.tool_call",
+      entityType: "job",
+      entityId: ctx.jobId,
+      skillId: ctx.skillId,
+      details: {
+        tool: spec.name,
+        ...(spec.server && { server: spec.server }),
+        ...(targetId && { targetId }),
+        status: "done",
+      },
+    });
+    return { status: "done", result, targetId, preview };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The call failed.";
+    await audit({
+      actor: ctx.actor,
+      action: "job.tool_call",
+      entityType: "job",
+      entityId: ctx.jobId,
+      skillId: ctx.skillId,
+      details: {
+        tool: spec.name,
+        ...(spec.server && { server: spec.server }),
+        status: "error",
+      },
+    });
+    return { status: "error", result: null, targetId: null, preview, message };
+  }
+}
+
+async function runAppTool(
+  ctx: RunnerContext,
+  tool: NonNullable<ReturnType<typeof toolNamed>>,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const token = await accessTokenFor(ctx.ownerId, tool.provider);
+  const account = await connectionAccountFor(ctx.ownerId, tool.provider);
+  // Jobs carry no clock; local times in args are read as UTC.
+  return tool.run(args, { token, account, offset: 0, fetch: ctx.fetchFn ?? fetch });
+}
+
+async function runMcpTool(
+  ctx: RunnerContext,
+  spec: ResolvedTool,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const { client } = await mcpServerClient(ctx.ownerId, spec.serverId!, ctx.fetchFn);
+  const out = await client.callTool(spec.name, args);
+  if (out.isError) throw new Error(out.text.slice(0, 500));
+  return out.text;
+}
+
+/** The real runner for a job: linked connections, policy, approvals, audit. */
+export async function jobToolRunner(
+  jobId: string,
+  actor: Actor,
+  fetchFn?: typeof fetch,
+): Promise<ToolRunner> {
+  const ctx = await runnerContext(jobId, actor, fetchFn);
+  return {
+    list: () => listRunnerTools(ctx),
+    run: (call) => runRunnerTool(ctx, call),
+  };
+}
+
+/**
+ * The tool phase: works through the renter's apps, persists the transcript,
+ * and pauses for approvals. Returns findings for the draft, or paused.
+ */
+export async function runJobTools(
+  client: ModelClient,
+  jobId: string,
+  fetchFn?: typeof fetch,
+): Promise<{ paused: boolean; findings: string }> {
+  const job = await getJob(jobId);
+  const actor: Actor = job.origin === "renter" ? `renter:${job.requesterName}` : "owner";
+  const runner = await jobToolRunner(jobId, actor, fetchFn);
+  const result = await runToolLoop(client, runner, { brief: job.input, transcript: job.toolCalls });
+  await db().update(jobs).set({ toolCalls: result.transcript }).where(eq(jobs.id, jobId));
+  if (result.pending) {
+    await db().update(jobs).set({ status: "awaiting_approval" }).where(eq(jobs.id, jobId));
+    await audit({
+      actor,
+      action: "job.tools_paused",
+      entityType: "job",
+      entityId: jobId,
+      skillId: job.skillId,
+      details: { tool: result.pending.tool },
+    });
+    return { paused: true, findings: "" };
+  }
+  const findings = result.done ? result.findings : "(Tool work stopped before finishing.)";
+  await db()
+    .update(jobs)
+    .set({ toolFindings: findings || null })
+    .where(eq(jobs.id, jobId));
+  await verifyJobWrites(jobId, result.transcript, runner, actor);
+  return { paused: false, findings };
+}
+
+/**
+ * The renter decides on a write, then the job resumes: the loop re-runs the
+ * decided call first and drafting continues when nothing else waits.
+ */
+export async function decideJobApproval(
+  client: ModelClient,
+  jobId: string,
+  input: { approvalId: string; approve: boolean; userId: string; actor: Actor },
+  fetchFn?: typeof fetch,
+) {
+  const job = await getJob(jobId);
+  if (job.requesterUserId !== input.userId) {
+    throw new Error("Only the person who asked for the job decides on its writes.");
+  }
+  const [approval] = await db()
+    .select()
+    .from(jobApprovals)
+    .where(and(eq(jobApprovals.id, input.approvalId), eq(jobApprovals.jobId, jobId)));
+  if (!approval || approval.status !== "pending") {
+    throw new Error("That request is already decided.");
+  }
+  await db()
+    .update(jobApprovals)
+    .set({
+      status: input.approve ? "approved" : "denied",
+      decidedBy: input.actor,
+      decidedAt: new Date(),
+    })
+    .where(eq(jobApprovals.id, approval.id));
+  await audit({
+    actor: input.actor,
+    action: input.approve ? "job.tool_approved" : "job.tool_denied",
+    entityType: "job",
+    entityId: jobId,
+    skillId: job.skillId,
+    details: { tool: approval.tool, ...(approval.server && { server: approval.server }) },
+  });
+  if (job.draft) return getJob(jobId);
+  const outcome = await runJobTools(client, jobId, fetchFn);
+  if (outcome.paused) return getJob(jobId);
+  return draftJobText(client, jobId, outcome.findings, Math.random);
+}
+
+/**
+ * Read-back: after writing, check the result is really there. Native writes
+ * with a known read-back are re-read; MCP writes pass when a later read in
+ * the transcript mentions what they created. Missing ones flag the job for
+ * owner review. Verification reads are audited but stay out of the
+ * transcript, which is the loop's own work.
+ */
+async function verifyJobWrites(
+  jobId: string,
+  transcript: JobToolCall[],
+  runner: ToolRunner,
+  actor: Actor,
+): Promise<void> {
+  const job = await getJob(jobId);
+  const specs = await runner.list();
+  const writes = new Set(specs.filter((s) => s.writes).map((s) => `${s.server ?? ""} ${s.name}`));
+  let changed = false;
+  for (let i = 0; i < transcript.length; i++) {
+    const call = transcript[i];
+    if (call.status !== "done" || !writes.has(`${call.server ?? ""} ${call.tool}`)) continue;
+    const verified = await verifyOneWrite(runner, transcript, i);
+    if (verified !== call.verified) {
+      call.verified = verified;
+      changed = true;
+    }
+  }
+  const missing = transcript.filter((c) => c.verified === false);
+  if (changed || missing.length) {
+    await db()
+      .update(jobs)
+      .set({
+        ...(changed && { toolCalls: transcript }),
+        ...(missing.length && {
+          flags: [
+            ...job.flags,
+            ...missing.map((c) => ({
+              kind: "uncertain" as const,
+              message: `Created with ${c.server ? `${c.server} / ` : ""}${c.tool} but couldn't read it back.`,
+            })),
+          ],
+        }),
+      })
+      .where(eq(jobs.id, jobId));
+  }
+  await audit({
+    actor,
+    action: "job.tools_verified",
+    entityType: "job",
+    entityId: jobId,
+    skillId: job.skillId,
+    details: {
+      checked: transcript.filter((c) => c.verified !== null).length,
+      missing: missing.length,
+    },
+  });
+}
+
+async function verifyOneWrite(
+  runner: ToolRunner,
+  transcript: JobToolCall[],
+  index: number,
+): Promise<boolean | null> {
+  const call = transcript[index];
+  // An MCP write passes when a later read in the transcript mentions its receipt.
+  if (call.server) {
+    if (!call.targetId) return null;
+    const receipt: string = call.targetId;
+    return transcript
+      .slice(index + 1)
+      .some((later) => later.status === "done" && JSON.stringify(later.result).includes(receipt))
+      ? true
+      : null;
+  }
+  const read = async (tool: string, args: Record<string, unknown>) => {
+    const out = await runner.run({ tool, server: null, args });
+    return out.status === "done" ? JSON.stringify(out.result) : null;
+  };
+  const args = call.args as Record<string, unknown>;
+  if (call.tool === "notion_create_page" && typeof args.title === "string") {
+    const found = await read("notion_search", { query: args.title });
+    if (found === null) return null;
+    return found.includes(call.targetId ?? args.title);
+  }
+  if (
+    call.tool === "calendar_create" &&
+    typeof args.title === "string" &&
+    typeof args.start === "string"
+  ) {
+    const found = await read("calendar_list", { from: args.start, days: 1 });
+    if (found === null) return null;
+    return found.includes(args.title);
+  }
+  // Sends and posts are accepted on the provider's confirmation.
+  return null;
 }
 
 /** The owner's decision. Approving with changes records how big the edit was. */

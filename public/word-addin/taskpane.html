@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Persuna</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+      body {
+        font-family: "Segoe UI", Arial, sans-serif;
+        font-size: 13px;
+        color: #1f2937;
+        margin: 12px;
+      }
+      label {
+        display: block;
+        margin: 12px 0 4px;
+        font-weight: 600;
+      }
+      input,
+      select,
+      textarea {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px;
+        font-size: 13px;
+      }
+      textarea {
+        height: 56px;
+      }
+      button.primary {
+        margin-top: 12px;
+        padding: 8px 12px;
+        width: 100%;
+        font-size: 13px;
+        background: #1d4ed8;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      button.primary:disabled {
+        background: #93c5fd;
+        cursor: wait;
+      }
+      button.link {
+        background: none;
+        border: none;
+        color: #1d4ed8;
+        padding: 0;
+        margin-top: 8px;
+        cursor: pointer;
+      }
+      #status {
+        margin-top: 12px;
+        min-height: 18px;
+      }
+      #status.error {
+        color: #b91c1c;
+      }
+      #status.ok {
+        color: #15803d;
+      }
+      .hint {
+        color: #6b7280;
+        font-size: 12px;
+        margin-top: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="signin">
+      <label for="key">Persuna agent key</label>
+      <input id="key" type="password" placeholder="Paste a key from Persuna → Skills → Import" />
+      <button class="primary" id="saveKey">Save key</button>
+      <p class="hint">The key is stored only in this browser, and only you can use it.</p>
+    </div>
+    <div id="main" style="display: none">
+      <label for="skill">Skill</label>
+      <select id="skill"></select>
+      <label for="instruction">Direction (optional)</label>
+      <textarea id="instruction" placeholder="e.g. Shorten to three bullet points"></textarea>
+      <label for="mode">Apply as</label>
+      <select id="mode">
+        <option value="replace_selection">Replace the selection</option>
+        <option value="insert_after">Insert after the selection</option>
+        <option value="append">Append to the document</option>
+      </select>
+      <button class="primary" id="apply">Apply skill</button>
+      <p class="hint">
+        With nothing selected, the skill reads the whole document. Undo anytime with Ctrl/Cmd+Z.
+      </p>
+      <button class="link" id="forget">Remove my key from this add-in</button>
+    </div>
+    <div id="status"></div>
+    <script src="./taskpane.js"></script>
+  </body>
+</html>

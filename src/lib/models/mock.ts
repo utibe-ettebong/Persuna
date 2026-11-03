@@ -41,6 +41,9 @@ export function createMockClient(): ModelClient {
         text = JSON.stringify(mockOnboardingGrade(user));
       else if (user.includes("<onboarding_question>"))
         text = JSON.stringify(mockOnboardingAsk(user));
+      // Before the tags below: the tool-loop brief is renter job text holding anything.
+      else if (user.includes("<tool_loop_brief>"))
+        text = JSON.stringify({ action: "done", findings: "" });
       else if (user.includes("<project_brief>")) text = JSON.stringify(mockProjectPlan(user));
       else if (user.includes("<proposal_fit>")) text = JSON.stringify(mockProposalFit(user));
       else if (user.includes("<milestone_delivery>"))

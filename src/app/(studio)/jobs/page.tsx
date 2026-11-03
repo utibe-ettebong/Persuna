@@ -15,6 +15,7 @@ export const metadata: Metadata = { title: "Jobs" };
 
 const STATUS_BADGE = {
   awaiting_payment: { tone: "neutral", label: "awaiting payment" },
+  awaiting_approval: { tone: "accent", label: "needs your approval" },
   review: { tone: "accent", label: "needs review" },
   approved: { tone: "good", label: "approved" },
   rejected: { tone: "danger", label: "rejected" },

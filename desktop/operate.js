@@ -98,4 +98,25 @@ function osaScripts(action) {
   return [`tell application "${appleEscape(run.app)}" to activate`];
 }
 
-module.exports = { validOperateAction, osaScripts };
+/**
+ * The Windows helper line for a validated action (desktop/native/win/eyes.cs):
+ * clicks prefer the element under the point, typing sets the focused field,
+ * keys and opens map directly. Null for anything unvalidated. `skip` is
+ * Persuna's own pid, so the helper skips its windows and focus.
+ */
+function winActLine(action, skip) {
+  const run = validOperateAction(action);
+  if (!run || !Number.isInteger(skip) || skip < 0) return null;
+  const b64 = (text) => Buffer.from(text, "utf8").toString("base64");
+  if (run.kind === "click") return `click ${skip} ${run.x} ${run.y}`;
+  if (run.kind === "type") return `type ${skip} ${b64(run.text)}`;
+  if (run.kind === "key") {
+    const mods = run.modifiers.map((m) =>
+      m === "command" || m === "control" ? "ctrl" : m === "option" ? "alt" : m,
+    );
+    return `key ${skip} ${[...new Set(mods)].join(",") || "-"} ${run.key}`;
+  }
+  return `open ${skip} ${b64(run.app)}`;
+}
+
+module.exports = { validOperateAction, osaScripts, winActLine };

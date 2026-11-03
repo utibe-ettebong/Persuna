@@ -12,7 +12,7 @@ import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import { env, paystackConfig } from "@/env";
 import { audit, type Actor } from "@/lib/audit";
-import { createJob, draftJob, jobRoundsFor, openJob, reviseJob } from "@/lib/jobs/service";
+import { draftJob, jobNeedsSetup, jobRoundsFor, openJob, reviseJob } from "@/lib/jobs/service";
 import type { ModelClient } from "@/lib/models/gateway";
 import { createPaystack, paymentMatches } from "@/lib/payments/paystack";
 import { NotFoundError, publishedScore, skillComposite } from "@/lib/skill/service";
@@ -477,7 +477,9 @@ export async function rentSkill(
 
   const paystack = paystackConfig();
   if (!paystack) {
-    const row = await createJob(client, job);
+    // Tool skills wait for the renter to link their apps on the order page.
+    const row = await openJob(job);
+    if (!(await jobNeedsSetup(row.id))) await draftJob(client, row.id);
     const [txn] = await db()
       .insert(transactions)
       .values({ ...ledger, jobId: row.id, provider: "mock", status: "held" })
@@ -552,7 +554,7 @@ export async function confirmPayment(client: ModelClient, reference: string) {
       .update(jobs)
       .set({ status: "review" })
       .where(and(eq(jobs.id, txn.jobId), eq(jobs.status, "awaiting_payment")));
-    await draftJob(client, txn.jobId);
+    if (!(await jobNeedsSetup(txn.jobId))) await draftJob(client, txn.jobId);
   }
   return held;
 }

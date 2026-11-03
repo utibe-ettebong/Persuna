@@ -24,7 +24,7 @@ import { MAX_FIRST_SKILLS } from "@/lib/persuna/onboarding";
 import { readAudio } from "@/lib/models/transcribe";
 import { takeTurns } from "@/lib/persuna/voice-agent";
 import { PROVIDER_IDS } from "@/lib/connections/providers";
-import { disconnect } from "@/lib/connections/service";
+import { connectManualToken, disconnect } from "@/lib/connections/service";
 import { connectMcpServer, disconnectMcpServer, refreshMcpTools } from "@/lib/mcp/service";
 import {
   approveOperateFromChat,
@@ -642,6 +642,26 @@ export async function disconnectAppAction(provider: string) {
     const user = await requireUser();
     await disconnect(user.id, z.enum(PROVIDER_IDS).parse(provider), actorOf(user));
     revalidatePath("/persuna");
+  });
+}
+
+export async function connectManualTokenAction(provider: string, account: string, token: string) {
+  return run(async () => {
+    const user = await requireUser();
+    const parsed = z
+      .object({
+        provider: z.enum(PROVIDER_IDS),
+        account: z.string().trim().min(1).max(200),
+        token: z.string().trim().min(1).max(500),
+      })
+      .parse({ provider, account, token });
+    const { account: connected } = await connectManualToken(user.id, parsed.provider, {
+      account: parsed.account,
+      token: parsed.token,
+      actor: actorOf(user),
+    });
+    revalidatePath("/persuna");
+    return connected;
   });
 }
 

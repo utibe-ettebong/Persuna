@@ -2,15 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import { McpClient, parseSseMessages } from "./client";
 
 /** A fake streamable-HTTP MCP server behind a fetch-shaped function. */
-function fakeServer() {
-  const calls: { method: string; headers: Record<string, string> }[] = [];
+function fakeServer(options: { stateless?: boolean; initializeError?: number } = {}) {
+  const calls: { method: string; headers: Record<string, string>; params: unknown }[] = [];
   const fetchFn = vi.fn(async (_url: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body)) as {
       id?: number;
       method: string;
       params?: { name?: string };
     };
-    calls.push({ method: body.method, headers: init.headers as Record<string, string> });
+    calls.push({
+      method: body.method,
+      headers: init.headers as Record<string, string>,
+      params: body.params,
+    });
     const json = (payload: unknown, headers: Record<string, string> = {}) =>
       new Response(JSON.stringify(payload), {
         status: 200,
@@ -18,6 +22,20 @@ function fakeServer() {
       });
     if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
     if (body.method === "initialize") {
+      if (options.initializeError) {
+        return json({
+          jsonrpc: "2.0",
+          id: body.id,
+          error: { code: options.initializeError, message: "Invalid request" },
+        });
+      }
+      if (options.stateless) {
+        return json({
+          jsonrpc: "2.0",
+          id: body.id,
+          error: { code: -32601, message: "Method not found" },
+        });
+      }
       return json(
         { jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-03-26" } },
         { "mcp-session-id": "sess-1" },
@@ -72,6 +90,36 @@ describe("McpClient", () => {
       // @ts-expect-error reaching past the typed surface to hit an unknown method
       client.request("bogus", {}),
     ).rejects.toThrow(/MCP error -32601/);
+  });
+
+  it("sends version and routing headers with self-describing requests", async () => {
+    const { fetchFn, calls } = fakeServer();
+    const client = new McpClient("https://mcp.example.com", "tok", fetchFn);
+    await client.callTool("list_issues", { state: "open" });
+    for (const call of calls) {
+      expect(call.headers["MCP-Protocol-Version"]).toBe("2026-07-28");
+      expect(call.headers["Mcp-Method"]).toBe(call.method);
+    }
+    const call = calls.find((c) => c.method === "tools/call")!;
+    expect(call.headers["Mcp-Name"]).toBe("list_issues");
+    expect(call.params).toMatchObject({
+      name: "list_issues",
+      _meta: { protocolVersion: "2026-07-28", clientInfo: { name: "persuna" } },
+    });
+  });
+
+  it("works stateless when the server retired the handshake", async () => {
+    const { fetchFn, calls } = fakeServer({ stateless: true });
+    const client = new McpClient("https://mcp.example.com", "", fetchFn);
+    const tools = await client.listTools();
+    expect(tools.map((t) => t.name)).toEqual(["list_issues"]);
+    expect(calls.map((c) => c.method)).toEqual(["initialize", "tools/list"]);
+  });
+
+  it("still throws other handshake errors", async () => {
+    const { fetchFn } = fakeServer({ initializeError: -32600 });
+    const client = new McpClient("https://mcp.example.com", "", fetchFn);
+    await expect(client.listTools()).rejects.toThrow(/MCP error -32600/);
   });
 });
 

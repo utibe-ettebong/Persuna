@@ -1,0 +1,168 @@
+<!doctype html>
+<html>
+  <head>
+    <base target="_top" />
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        font-size: 13px;
+        color: #1f2937;
+        margin: 12px;
+      }
+      label {
+        display: block;
+        margin: 12px 0 4px;
+        font-weight: bold;
+      }
+      input,
+      select,
+      textarea {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px;
+        font-size: 13px;
+      }
+      textarea {
+        height: 56px;
+      }
+      button {
+        margin-top: 12px;
+        padding: 8px 12px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      button.primary {
+        background: #1d4ed8;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        width: 100%;
+      }
+      button.primary:disabled {
+        background: #93c5fd;
+        cursor: wait;
+      }
+      button.link {
+        background: none;
+        border: none;
+        color: #1d4ed8;
+        padding: 0;
+        margin-top: 8px;
+      }
+      #status {
+        margin-top: 12px;
+        min-height: 18px;
+      }
+      #status.error {
+        color: #b91c1c;
+      }
+      #status.ok {
+        color: #15803d;
+      }
+      .hint {
+        color: #6b7280;
+        font-size: 12px;
+        margin-top: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="signin">
+      <label for="key">Persuna agent key</label>
+      <input id="key" type="password" placeholder="Paste a key from Persuna → Skills → Import" />
+      <button class="primary" id="saveKey">Save key</button>
+      <p class="hint">
+        The key is stored only in your own Google account, and only you can use it.
+      </p>
+    </div>
+    <div id="main" style="display: none">
+      <label for="skill">Skill</label>
+      <select id="skill"></select>
+      <label for="instruction">Direction (optional)</label>
+      <textarea id="instruction" placeholder="e.g. Shorten to three bullet points"></textarea>
+      <label for="mode">Apply as</label>
+      <select id="mode">
+        <option value="replace_selection">Replace the selection</option>
+        <option value="insert_after">Insert after the selection</option>
+        <option value="append">Append to the document</option>
+      </select>
+      <button class="primary" id="apply">Apply skill</button>
+      <p class="hint">
+        With nothing selected, the skill reads the whole document. Undo anytime with Ctrl/Cmd+Z.
+      </p>
+      <button class="link" id="forget">Remove my key from this add-on</button>
+    </div>
+    <div id="status"></div>
+    <script>
+      var statusEl = document.getElementById("status");
+      function status(text, kind) {
+        statusEl.textContent = text;
+        statusEl.className = kind || "";
+      }
+      function failed(err) {
+        status(err && err.message ? err.message : String(err), "error");
+        document.getElementById("apply").disabled = false;
+      }
+      function showMain() {
+        document.getElementById("signin").style.display = "none";
+        document.getElementById("main").style.display = "block";
+        google.script.run
+          .withSuccessHandler(function (skills) {
+            var select = document.getElementById("skill");
+            select.innerHTML = "";
+            skills.forEach(function (skill) {
+              var option = document.createElement("option");
+              option.value = skill.slug;
+              option.textContent = skill.name;
+              select.appendChild(option);
+            });
+            if (!skills.length) status("Publish a skill in Persuna first.", "error");
+          })
+          .withFailureHandler(failed)
+          .listSkills();
+      }
+      document.getElementById("saveKey").addEventListener("click", function () {
+        status("Saving…");
+        google.script.run
+          .withSuccessHandler(function (ok) {
+            if (ok) {
+              status("");
+              showMain();
+            } else status("That key did not work.", "error");
+          })
+          .withFailureHandler(failed)
+          .saveAgentKey(document.getElementById("key").value);
+      });
+      document.getElementById("apply").addEventListener("click", function () {
+        var button = document.getElementById("apply");
+        button.disabled = true;
+        status("Applying…");
+        google.script.run
+          .withSuccessHandler(function (result) {
+            button.disabled = false;
+            status("Applied " + result.edits + " edit(s). Undo with Ctrl/Cmd+Z.", "ok");
+          })
+          .withFailureHandler(failed)
+          .applySkill(
+            document.getElementById("skill").value,
+            document.getElementById("mode").value,
+            document.getElementById("instruction").value,
+          );
+      });
+      document.getElementById("forget").addEventListener("click", function () {
+        google.script.run
+          .withSuccessHandler(function () {
+            window.location.reload();
+          })
+          .withFailureHandler(failed)
+          .forgetAgentKey();
+      });
+      google.script.run
+        .withSuccessHandler(function (has) {
+          if (has) showMain();
+        })
+        .withFailureHandler(failed)
+        .hasAgentKey();
+    </script>
+  </body>
+</html>

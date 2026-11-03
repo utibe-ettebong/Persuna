@@ -4,6 +4,11 @@
  * injected fetch so tests drive it against a fake server. Responses may be
  * plain JSON or an SSE stream; a session id, when the server issues one, is
  * echoed back on later requests.
+ *
+ * Speaks 2026-07-28 (version and routing headers, self-describing requests)
+ * and still handshakes with older servers: when `initialize` answers
+ * "method not found", the server retired the handshake and calls go out
+ * stateless.
  */
 export interface McpTool {
   name: string;
@@ -18,7 +23,8 @@ export interface McpCallResult {
 
 type FetchFn = typeof fetch;
 
-const PROTOCOL_VERSION = "2025-03-26";
+const PROTOCOL_VERSION = "2026-07-28";
+const CLIENT_INFO = { name: "persuna", version: "1.0.0" };
 const REQUEST_TIMEOUT_MS = 30_000;
 
 interface JsonRpcResponse {
@@ -44,6 +50,12 @@ export function parseSseMessages(body: string): JsonRpcResponse[] {
   return out;
 }
 
+/** A server that no longer knows this method (JSON-RPC -32601): retired, not broken. */
+function isMethodNotFound(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("-32601") || /method not found/i.test(message);
+}
+
 export class McpClient {
   private nextId = 1;
   private sessionId: string | null = null;
@@ -55,10 +67,17 @@ export class McpClient {
     private readonly fetchFn: FetchFn = fetch,
   ) {}
 
-  private async send(message: Record<string, unknown>): Promise<JsonRpcResponse | null> {
+  private async send(
+    message: Record<string, unknown>,
+    name?: string,
+  ): Promise<JsonRpcResponse | null> {
+    const method = String(message.method ?? "");
     const headers: Record<string, string> = {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
+      "MCP-Protocol-Version": PROTOCOL_VERSION,
+      "Mcp-Method": method,
+      "Mcp-Name": name ?? method,
     };
     if (this.token) headers.authorization = `Bearer ${this.token}`;
     if (this.sessionId) headers["mcp-session-id"] = this.sessionId;
@@ -85,21 +104,40 @@ export class McpClient {
     return match;
   }
 
-  private async request<T>(method: string, params?: unknown): Promise<T> {
-    const res = await this.send({ jsonrpc: "2.0", id: this.nextId++, method, params });
+  private async request<T>(method: string, params?: unknown, name?: string): Promise<T> {
+    const res = await this.send(
+      {
+        jsonrpc: "2.0",
+        id: this.nextId++,
+        method,
+        params: {
+          ...((params as Record<string, unknown> | undefined) ?? {}),
+          _meta: { protocolVersion: PROTOCOL_VERSION, clientInfo: CLIENT_INFO },
+        },
+      },
+      name,
+    );
     if (!res) throw new Error(`MCP server gave no result for ${method}`);
     return res.result as T;
   }
 
-  /** initialize + notifications/initialized, once per client. */
+  /**
+   * initialize + notifications/initialized, once per client; older servers
+   * answer with a session to echo back. Servers on 2026-07-28 retired the
+   * handshake, so "method not found" here means stateless, not broken.
+   */
   async connect(): Promise<void> {
     if (this.initialized) return;
-    await this.request("initialize", {
-      protocolVersion: PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: { name: "persuna", version: "1.0.0" },
-    });
-    await this.send({ jsonrpc: "2.0", method: "notifications/initialized" }).catch(() => null);
+    try {
+      await this.request("initialize", {
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: CLIENT_INFO,
+      });
+      await this.send({ jsonrpc: "2.0", method: "notifications/initialized" }).catch(() => null);
+    } catch (error) {
+      if (!isMethodNotFound(error)) throw error;
+    }
     this.initialized = true;
   }
 
@@ -118,7 +156,7 @@ export class McpClient {
     const result = await this.request<{
       content?: { type: string; text?: string }[];
       isError?: boolean;
-    }>("tools/call", { name, arguments: args });
+    }>("tools/call", { name, arguments: args }, name);
     const text = (result.content ?? [])
       .filter((c) => c.type === "text")
       .map((c) => c.text ?? "")

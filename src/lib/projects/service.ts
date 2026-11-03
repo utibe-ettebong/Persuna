@@ -16,6 +16,8 @@ import { db, schema } from "@/db/client";
 import type { Project, ProjectMilestone } from "@/db/schema";
 import { env, paystackConfig } from "@/env";
 import { audit, type Actor } from "@/lib/audit";
+import { accessTokenFor } from "@/lib/connections/service";
+import { saveTextToDrive, saveTextToOneDrive, type SaveFormat } from "@/lib/docs/save";
 import { isVerified, splitPayment } from "@/lib/market/rules";
 import { verificationFor } from "@/lib/market/verification";
 import type { ModelClient } from "@/lib/models/gateway";
@@ -447,6 +449,7 @@ export async function getProject(projectId: string, viewer: Viewer) {
       ...m,
       delivery: party ? m.delivery : null,
       check: party ? m.check : null,
+      savedFiles: role === "poster" || role === "admin" ? (m.savedFiles ?? []) : [],
     })),
     proposals: (role === "poster" || role === "admin" ? proposals : mine ? [mine] : []).map(
       (p) => ({
@@ -904,6 +907,52 @@ async function release(
       tx,
     );
   });
+}
+
+/**
+ * The poster saves a delivery to their own Drive or OneDrive: rendered to
+ * the chosen format (Office files convert to editable Google files on
+ * Drive) and recorded on the milestone. The check already ran on the text.
+ */
+export async function saveMilestoneFile(
+  user: NonNullable<Viewer>,
+  milestoneId: string,
+  input: { provider: "drive" | "onedrive"; format: SaveFormat },
+  fetchFn?: typeof fetch,
+) {
+  const { milestone, project } = await milestoneFor(milestoneId);
+  requirePoster(project, user);
+  if (!milestone.delivery) throw new ProjectRuleError("Nothing delivered yet.");
+  const token = await accessTokenFor(user.id, input.provider === "drive" ? "google" : "microsoft");
+  const save = input.provider === "drive" ? saveTextToDrive : saveTextToOneDrive;
+  const saved = await save({
+    token,
+    title: `${project.title} - ${milestone.title}`.slice(0, 100),
+    body: milestone.delivery,
+    format: input.format,
+    fetchFn,
+  });
+  const files = [
+    ...(milestone.savedFiles ?? []),
+    {
+      provider: input.provider,
+      name: saved.name,
+      link: saved.link,
+      savedAt: new Date().toISOString(),
+    },
+  ];
+  await db()
+    .update(projectMilestones)
+    .set({ savedFiles: files })
+    .where(eq(projectMilestones.id, milestoneId));
+  await audit({
+    actor: actorOf(user),
+    action: "milestone.file_saved",
+    entityType: "milestone",
+    entityId: milestoneId,
+    details: { provider: input.provider, name: saved.name },
+  });
+  return saved;
 }
 
 /** The poster approves a delivery: escrow is released to the seller minus the platform fee. */

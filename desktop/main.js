@@ -466,7 +466,7 @@ ipcMain.handle("persuna:paste", async (event, text) => {
 
 /* ---------- Operating apps in Work mode ---------- */
 
-const { validOperateAction, osaScripts } = require("./operate");
+const { validOperateAction, osaScripts, winActLine } = require("./operate");
 
 /** Runs one AppleScript line; resolves null on success, else a short error. */
 function runOsa(script) {
@@ -480,22 +480,29 @@ function runOsa(script) {
 /** The stop word, Esc or Take over sets this; typing checks it between chunks. */
 let operateCancelled = false;
 
-/** What this action will really do, for the Mac's own confirmation. */
+/** What this action will really do, for the computer's own confirmation. */
 function operateDescription(run) {
   if (run.kind === "click") return `Click "${run.label}" at ${run.x}, ${run.y}.`;
   if (run.kind === "type") return `Type this, exactly:\n\n${run.text}`;
-  if (run.kind === "key") return `Press ${[...run.modifiers, run.key].join(" + ")}.`;
+  if (run.kind === "key") {
+    const mods = MAC
+      ? run.modifiers
+      : run.modifiers.map((m) =>
+          m === "command" || m === "control" ? "ctrl" : m === "option" ? "alt" : m,
+        );
+    return `Press ${[...new Set(mods), run.key].join(" + ")}.`;
+  }
   return `Open ${run.app}.`;
 }
 
 /**
  * Asked here, not on the page: a web page can show any card it likes, but it
- * can't answer this. Nothing runs on the Mac without it.
+ * can't answer this. Nothing runs on the computer without it.
  */
-async function confirmedByMac(run) {
+async function confirmedByComputer(run) {
   const { response } = await ask({
     type: "warning",
-    message: "Let Persuna do this on your Mac?",
+    message: MAC ? "Let Persuna do this on your Mac?" : "Let Persuna do this on your PC?",
     detail: `${operateDescription(run)}\n\nPress Esc while it runs to stop it.`,
     buttons: ["Cancel", "Do it"],
     defaultId: 0,
@@ -517,7 +524,7 @@ ipcMain.handle("persuna:operate", async (event, action) => {
   if (!fromOverlay(event)) return { status: "denied", detail: "not from Persuna" };
   const run = validOperateAction(action);
   if (!run) return { status: "denied", detail: "that action isn't shaped safely" };
-  if (!MAC) return { status: "denied", detail: "operating apps needs a Mac for now" };
+  if (!MAC) return operateWindows(run);
   if (!keyboardAllowed()) {
     return {
       status: "denied",
@@ -525,7 +532,7 @@ ipcMain.handle("persuna:operate", async (event, action) => {
         "Persuna needs Accessibility permission (System Settings → Privacy & Security → Accessibility)",
     };
   }
-  if (!(await confirmedByMac(run))) return { status: "denied", detail: "you said no" };
+  if (!(await confirmedByComputer(run))) return { status: "denied", detail: "you said no" };
   operateCancelled = false;
   // Esc stops it from anywhere, because Persuna's own controls are out of the way.
   const stopKey = globalShortcut.register("Escape", () => {
@@ -557,6 +564,68 @@ ipcMain.handle("persuna:operate", async (event, action) => {
     if (hidden) overlay.showInactive();
   }
 });
+
+/**
+ * One approved action on Windows, through the UI Automation helper: the same
+ * native confirmation as the Mac, then a single act line over the reader
+ * connection (never shared with another request). The helper skips Persuna's
+ * own windows and focus; anything it refuses, or a helper that won't answer,
+ * reports failed. UI Automation needs no permission prompt on Windows, so
+ * there is no permission gate here — only the per-action confirmation.
+ */
+async function operateWindows(run) {
+  if (!fs.existsSync(EYES)) {
+    return { status: "denied", detail: "Persuna's Windows helper is missing from this install" };
+  }
+  const line = winActLine(run, process.pid);
+  if (!line) return { status: "denied", detail: "that action isn't shaped safely" };
+  if (!(await confirmedByComputer(run))) return { status: "denied", detail: "you said no" };
+  operateCancelled = false;
+  // Esc stops it from anywhere, because Persuna's own controls are out of the way.
+  const stopKey = globalShortcut.register("Escape", () => {
+    operateCancelled = true;
+  });
+  const hidden = overlay && !overlay.isDestroyed() && overlay.isVisible();
+  if (hidden) overlay.hide();
+  // The confirmation took focus: give the app a beat to take it back, so keys
+  // and typed text land there. Typing still fails closed when they don't.
+  await delay(200);
+  try {
+    if (operateCancelled) return { status: "took_over", detail: "stopped" };
+    // Acts are slow (a cold helper, a busy app): ten seconds, not two and a half.
+    const answer = await winReader.ask(line, 10000, { share: false });
+    if (!answer.ok) return { status: "failed", detail: winActWhy(answer.why) };
+    if (!answer.value || answer.value.done !== true) {
+      return { status: "failed", detail: winActWhy(answer.value?.why) };
+    }
+    return { status: "done" };
+  } finally {
+    if (stopKey) globalShortcut.unregister("Escape");
+    if (hidden) overlay.showInactive();
+  }
+}
+
+/** A helper refusal in plain words. Unknown whys stay vague, never leak. */
+function winActWhy(why) {
+  const known = {
+    "not found": "Persuna couldn't find that in the front window",
+    "can't invoke that": "that doesn't press like a button",
+    "can't select that": "that doesn't select like a list item",
+    "needs a text field": "that isn't a text field Persuna can write in",
+    "can't type that": "that text has characters Persuna can't press on this keyboard",
+    "nothing is focused": "nothing is focused to type into",
+    "field is too full": "that field is too full to add to",
+    "too long": "that text is too long",
+    "bad point": "that point isn't on the screen",
+    "bad key": "that key isn't allowed",
+    "bad name": "that app name isn't allowed",
+    "can't open that": "Windows wouldn't open that app",
+    blocked: "Persuna's helper wouldn't start",
+    timeout: "Persuna's helper stopped answering",
+    unreadable: "Persuna's helper answered nonsense",
+  };
+  return known[why] ?? "Persuna couldn't do that";
+}
 
 /** A free name in Downloads: "Plan.pdf", then "Plan (2).pdf"… */
 function downloadPath(name, ext) {

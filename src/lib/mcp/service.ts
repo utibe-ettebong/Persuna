@@ -8,10 +8,26 @@
  */
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db/client";
-import { mcpServers, type McpServer, type McpToolInfo } from "@/db/schema";
+import {
+  mcpServers,
+  type McpOAuthCredentials,
+  type McpServer,
+  type McpToolInfo,
+} from "@/db/schema";
 import { audit, type Actor } from "@/lib/audit";
+import { env } from "@/env";
 import { connectionsKey } from "@/lib/connections/service";
 import { readToken, seal, signToken, unseal } from "@/lib/connections/crypto";
+import {
+  authorizationUrl,
+  createPkcePair,
+  discoverAuthServer,
+  exchangeCode,
+  refreshAccessToken,
+  registerClientDynamic,
+  tokenUsableFor,
+  type McpVendor,
+} from "./auth";
 import { McpClient } from "./client";
 
 /** How long a proposed tool call waits for the user's OK. */
@@ -28,11 +44,18 @@ export interface McpServerView {
   id: string;
   name: string;
   url: string;
+  authType: "token" | "oauth";
   tools: McpToolInfo[];
 }
 
 function view(row: McpServer): McpServerView {
-  return { id: row.id, name: row.name, url: row.url, tools: row.tools ?? [] };
+  return {
+    id: row.id,
+    name: row.name,
+    url: row.url,
+    authType: row.authType === "oauth" ? "oauth" : "token",
+    tools: row.tools ?? [],
+  };
 }
 
 export async function listMcpServers(userId: string): Promise<McpServerView[]> {
@@ -50,9 +73,23 @@ async function serverRow(userId: string, serverId: string): Promise<McpServer> {
   return row;
 }
 
-function clientFor(row: McpServer, fetchFn?: typeof fetch): McpClient {
-  const token = row.token ? unseal(row.token, requireKey()) : "";
-  return new McpClient(row.url, token, fetchFn);
+async function clientFor(row: McpServer, fetchFn?: typeof fetch): Promise<McpClient> {
+  return new McpClient(row.url, await serverAccessToken(row, fetchFn), fetchFn);
+}
+
+/** A trimmed http(s) server URL, or an error the user can act on. */
+function checkedServerUrl(url: string): string {
+  const trimmed = url.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error("That server address is not a valid URL.");
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error("MCP servers are connected by http(s) URL in this version.");
+  }
+  return trimmed;
 }
 
 /**
@@ -66,17 +103,8 @@ export async function connectMcpServer(
   fetchFn?: typeof fetch,
 ): Promise<McpServerView> {
   const name = input.name.trim();
-  const url = input.url.trim();
   if (!name) throw new Error("Give the server a name.");
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error("That server address is not a valid URL.");
-  }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    throw new Error("MCP servers are connected by http(s) URL in this version.");
-  }
+  const url = checkedServerUrl(input.url);
   const probe = new McpClient(url, input.token?.trim() ?? "", fetchFn);
   const tools = await probe.listTools();
   const sealed = input.token?.trim() ? seal(input.token.trim(), requireKey()) : "";
@@ -87,6 +115,8 @@ export async function connectMcpServer(
       name,
       url,
       token: sealed,
+      authType: "token",
+      oauth: null,
       tools: tools.map((t) => ({ name: t.name, description: t.description.slice(0, 500) })),
     })
     .onConflictDoUpdate({
@@ -94,6 +124,8 @@ export async function connectMcpServer(
       set: {
         name,
         token: sealed,
+        authType: "token",
+        oauth: null,
         tools: tools.map((t) => ({ name: t.name, description: t.description.slice(0, 500) })),
         updatedAt: new Date(),
       },
@@ -121,16 +153,305 @@ export async function disconnectMcpServer(userId: string, serverId: string, acto
   });
 }
 
+/**
+ * A client for one of the user's MCP servers, with a working access token
+ * (fixed token, or OAuth refreshed when expired). For the jobs runner: job
+ * calls are approved through the job, not the chat confirm flow.
+ */
+export async function mcpServerClient(
+  userId: string,
+  serverId: string,
+  fetchFn?: typeof fetch,
+): Promise<{ client: McpClient; server: McpServerView }> {
+  const row = await serverRow(userId, serverId);
+  return { client: await clientFor(row, fetchFn), server: view(row) };
+}
+
 /** Re-runs tool discovery for a connected server and caches the result. */
 export async function refreshMcpTools(userId: string, serverId: string, fetchFn?: typeof fetch) {
   const row = await serverRow(userId, serverId);
-  const tools = await clientFor(row, fetchFn).listTools();
+  const tools = await (await clientFor(row, fetchFn)).listTools();
   const cached = tools.map((t) => ({ name: t.name, description: t.description.slice(0, 500) }));
   await db()
     .update(mcpServers)
     .set({ tools: cached, updatedAt: new Date() })
     .where(eq(mcpServers.id, row.id));
   return cached;
+}
+
+/* ---------- OAuth ("Sign in with…") ---------- */
+
+/** How long a sign-in lasts between the sign-in page and the callback. */
+const OAUTH_STATE_TTL_MS = 10 * 60_000;
+
+/**
+ * How Persuna identifies itself to an MCP server's sign-in provider: a
+ * pre-registered client (per-vendor ids come from env in the callback
+ * route), a Client ID Metadata Document URL used as the client id, or
+ * nothing, in which case the provider registers Persuna on the spot.
+ */
+export interface McpOAuthClientConfig {
+  clientId?: string;
+  clientSecret?: string;
+  cimdUrl?: string;
+}
+
+export { MCP_VENDORS, MCP_VENDOR_NAMES, isMcpVendor, type McpVendor } from "./auth";
+
+/** The pre-registered OAuth client for a vendor, or null when unset. */
+export function mcpVendorClient(vendor: McpVendor): {
+  clientId: string;
+  clientSecret?: string;
+} | null {
+  const e = env();
+  const pair = {
+    slack: [e.SLACK_MCP_CLIENT_ID, e.SLACK_MCP_CLIENT_SECRET],
+    asana: [e.ASANA_MCP_CLIENT_ID, e.ASANA_MCP_CLIENT_SECRET],
+    zoom: [e.ZOOM_MCP_CLIENT_ID, e.ZOOM_MCP_CLIENT_SECRET],
+    x: [e.X_MCP_CLIENT_ID, e.X_MCP_CLIENT_SECRET],
+    github: [e.GITHUB_MCP_CLIENT_ID, e.GITHUB_MCP_CLIENT_SECRET],
+  }[vendor];
+  if (!pair[0]) return null;
+  return { clientId: pair[0], ...(pair[1] && { clientSecret: pair[1] }) };
+}
+
+/** Where providers send the browser after sign-in; same derivation at start and callback. */
+export function mcpOAuthRedirectUri(origin: string): string {
+  return `${(env().APP_URL ?? origin).replace(/\/+$/, "")}/api/mcp/oauth/callback`;
+}
+
+/** Persuna's Client ID Metadata Document, used as the client id by default. */
+export function mcpCimdUrl(origin: string): string {
+  return `${(env().APP_URL ?? origin).replace(/\/+$/, "")}/api/mcp/client-metadata`;
+}
+
+/** The cookie holding the OAuth secret half between start and callback. */
+export const MCP_OAUTH_COOKIE = "persuna_mcp_oauth";
+
+export interface McpOAuthBegin {
+  /** The sign-in page URL to send the browser to. */
+  url: string;
+  /** Signed public state for the callback URL. */
+  state: string;
+  /** Secret half (PKCE verifier + client secret) for an httpOnly cookie. */
+  secret: string;
+}
+
+/** The signed half of a sign-in in flight: public facts only, no secrets. */
+interface OAuthState {
+  u: string;
+  name: string;
+  url: string;
+  scope: string;
+  issuer: string;
+  tokenEndpoint: string;
+  clientId: string;
+}
+
+/**
+ * Starts OAuth for an MCP server: discovers its sign-in provider, resolves
+ * the client, and returns the sign-in page URL with a signed state. Nothing
+ * is stored until the callback completes.
+ */
+export async function beginMcpOAuth(
+  userId: string,
+  input: {
+    name: string;
+    url: string;
+    scope?: string;
+    redirectUri: string;
+    client?: McpOAuthClientConfig;
+    wwwAuthenticate?: string | null;
+  },
+  actor: Actor,
+  fetchFn?: typeof fetch,
+): Promise<McpOAuthBegin> {
+  const key = requireKey();
+  const name = input.name.trim();
+  if (!name) throw new Error("Give the server a name.");
+  const url = checkedServerUrl(input.url);
+  const scope = input.scope?.trim() ?? "";
+  const { authServer } = await discoverAuthServer(url, input.wwwAuthenticate ?? null, fetchFn);
+  let clientId = input.client?.clientId?.trim() || "";
+  let clientSecret = input.client?.clientSecret?.trim() || "";
+  if (!clientId && input.client?.cimdUrl?.trim()) {
+    clientId = input.client.cimdUrl.trim();
+  }
+  if (!clientId) {
+    const registered = await registerClientDynamic(
+      authServer,
+      { redirectUris: [input.redirectUri], clientName: "Persuna" },
+      fetchFn,
+    );
+    clientId = registered.clientId;
+    clientSecret = registered.clientSecret ?? "";
+  }
+  const pkce = createPkcePair();
+  const state = signToken(
+    {
+      u: userId,
+      name,
+      url,
+      scope,
+      issuer: authServer.issuer,
+      tokenEndpoint: authServer.tokenEndpoint,
+      clientId,
+    } satisfies OAuthState,
+    key,
+    Date.now() + OAUTH_STATE_TTL_MS,
+  );
+  await audit({
+    actor,
+    action: "mcp.oauth_started",
+    entityType: "mcp_server",
+    details: { name, issuer: authServer.issuer },
+  });
+  return {
+    url: authorizationUrl({
+      authServer,
+      clientId,
+      redirectUri: input.redirectUri,
+      resource: url,
+      ...(scope && { scope }),
+      state,
+      codeChallenge: pkce.challenge,
+    }),
+    state,
+    secret: `${pkce.verifier}.${clientSecret}`,
+  };
+}
+
+/**
+ * Finishes OAuth: checks the state and secret, trades the code for tokens,
+ * and stores the server with its credentials sealed. Replaces any
+ * token-auth entry for the same address.
+ */
+export async function completeMcpOAuth(
+  userId: string,
+  input: { state: string; secret: string; code: string; redirectUri: string },
+  actor: Actor,
+  fetchFn?: typeof fetch,
+): Promise<McpServerView> {
+  const key = requireKey();
+  const state = readToken<OAuthState>(input.state, key);
+  if (!state || state.u !== userId) {
+    throw new Error("That sign-in expired or wasn't started here. Try connecting again.");
+  }
+  const dot = input.secret.indexOf(".");
+  if (dot <= 0) {
+    throw new Error("That sign-in expired or wasn't started here. Try connecting again.");
+  }
+  const verifier = input.secret.slice(0, dot);
+  const clientSecret = input.secret.slice(dot + 1) || undefined;
+  const tokens = await exchangeCode(
+    {
+      authServer: { issuer: state.issuer, tokenEndpoint: state.tokenEndpoint },
+      resource: state.url,
+      clientId: state.clientId,
+      ...(clientSecret && { clientSecret }),
+      code: input.code,
+      redirectUri: input.redirectUri,
+      codeVerifier: verifier,
+    },
+    fetchFn,
+  );
+  const probe = new McpClient(state.url, tokens.accessToken, fetchFn);
+  const tools = await probe.listTools();
+  const oauth: McpOAuthCredentials = {
+    issuer: tokens.issuer,
+    resource: tokens.resource,
+    tokenEndpoint: state.tokenEndpoint,
+    clientId: state.clientId,
+    clientSecret: clientSecret ? seal(clientSecret, key) : null,
+    accessToken: seal(tokens.accessToken, key),
+    refreshToken: tokens.refreshToken ? seal(tokens.refreshToken, key) : null,
+    expiresAt: tokens.expiresAt,
+    scope: tokens.scope,
+  };
+  const cached = tools.map((t) => ({ name: t.name, description: t.description.slice(0, 500) }));
+  const [row] = await db()
+    .insert(mcpServers)
+    .values({
+      userId,
+      name: state.name,
+      url: state.url,
+      token: "",
+      authType: "oauth",
+      oauth,
+      tools: cached,
+    })
+    .onConflictDoUpdate({
+      target: [mcpServers.userId, mcpServers.url],
+      set: {
+        name: state.name,
+        token: "",
+        authType: "oauth",
+        oauth,
+        tools: cached,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+  await audit({
+    actor,
+    action: "mcp.oauth_connected",
+    entityType: "mcp_server",
+    entityId: row.id,
+    details: { name: state.name, tools: tools.length },
+  });
+  return view(row);
+}
+
+/**
+ * A working access token for a connected server: the fixed token, or the
+ * OAuth token, refreshed without asking when it expired. OAuth tokens are
+ * checked against the server they were requested for and never sent elsewhere.
+ */
+async function serverAccessToken(row: McpServer, fetchFn?: typeof fetch): Promise<string> {
+  const key = requireKey();
+  if (row.authType !== "oauth" || !row.oauth) {
+    return row.token ? unseal(row.token, key) : "";
+  }
+  const creds = row.oauth;
+  if (!tokenUsableFor(creds, row.url)) {
+    throw new Error("Those sign-in details belong to another server. Reconnect it to continue.");
+  }
+  if (!creds.expiresAt || creds.expiresAt > Date.now()) {
+    return unseal(creds.accessToken, key);
+  }
+  if (!creds.refreshToken) {
+    throw new Error("That sign-in expired. Reconnect the server to continue.");
+  }
+  const fresh = await refreshAccessToken(
+    {
+      authServer: { issuer: creds.issuer, tokenEndpoint: creds.tokenEndpoint },
+      resource: creds.resource,
+      clientId: creds.clientId,
+      ...(creds.clientSecret && { clientSecret: unseal(creds.clientSecret, key) }),
+      refreshToken: unseal(creds.refreshToken, key),
+      ...(creds.scope && { scope: creds.scope }),
+    },
+    fetchFn,
+  );
+  const next: McpOAuthCredentials = {
+    ...creds,
+    accessToken: seal(fresh.accessToken, key),
+    refreshToken: fresh.refreshToken ? seal(fresh.refreshToken, key) : creds.refreshToken,
+    expiresAt: fresh.expiresAt,
+    scope: fresh.scope ?? creds.scope,
+  };
+  await db()
+    .update(mcpServers)
+    .set({ oauth: next, updatedAt: new Date() })
+    .where(eq(mcpServers.id, row.id));
+  await audit({
+    actor: "system",
+    action: "mcp.oauth_refreshed",
+    entityType: "mcp_server",
+    entityId: row.id,
+    details: { name: row.name },
+  });
+  return fresh.accessToken;
 }
 
 /* ---------- Ask-before-acting, mirroring connected apps ---------- */
@@ -181,7 +502,7 @@ export async function confirmMcpCall(
   if (usedConfirmations.has(token)) throw new Error("That's already done.");
   usedConfirmations.add(token);
   const row = await serverRow(userId, pending.s);
-  const result = await clientFor(row, fetchFn).callTool(pending.t, pending.a ?? {});
+  const result = await (await clientFor(row, fetchFn)).callTool(pending.t, pending.a ?? {});
   await audit({
     actor,
     action: "mcp.call",
