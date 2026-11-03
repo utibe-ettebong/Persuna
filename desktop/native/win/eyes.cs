@@ -14,7 +14,10 @@
 //   click <skip> <x> <y>       Invoke the element under the point, else a real
 //                               mouse click there. Answers {"done":true,"how":
 //                               "invoke"|"mouse"}. Points are physical pixels.
-//   type <skip> <b64-text>      Append to the focused field (ValuePattern).
+//   type <skip> <b64-text>      Append to the focused field: its own setter
+//                               when it has one (ValuePattern), else real
+//                               keystrokes. Answers {"done":true,"how":
+//                               "value"|"keys"}.
 //   set <skip> <b64-label> <b64-text>
 //                               Replace the named field's text (ValuePattern).
 //   invoke <skip> <b64-label>   Press the named button or link (InvokePattern).
@@ -25,8 +28,8 @@
 //   open <skip> <b64-app>       Start an app by plain name (no paths).
 //
 // An act answers {"done":true,...} or {"done":false,"why":"..."}; type and set
-// include "length" (re-read from the field, never its text). Anything else —
-// an unknown request, a crash — answers {"error":"..."}, as before.
+// include "length" when the field exposes it (re-read, never its text).
+// Anything else — an unknown request, a crash — answers {"error":"..."}.
 //
 // Built by build.js with the C# compiler that comes with Windows, so it needs
 // nothing installed and one file runs on both x64 and arm64.
@@ -48,6 +51,7 @@ static class Eyes
     [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attribute, out int value, int size);
     [DllImport("user32.dll")] static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    [DllImport("user32.dll")] static extern short VkKeyScan(char ch);
     [DllImport("user32.dll")] static extern bool SetCursorPos(int X, int Y);
     [DllImport("user32.dll")] static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
 
@@ -267,8 +271,11 @@ static class Eyes
     }
 
     /// <summary>
-    /// Append to the focused field. Refuses when Persuna itself still holds the
-    /// focus (typing must never land in Persuna) or it isn't a writable field.
+    /// Append to the focused field: its own setter when it has one, else real
+    /// keystrokes (Notepad's editor takes no ValuePattern). Refuses when
+    /// Persuna itself still holds the focus — typing must never land in
+    /// Persuna — or when any char has no key on this layout (checked first,
+    /// so it never half-types).
     /// </summary>
     static string TypeIntoFocus(uint skip, string text)
     {
@@ -292,13 +299,53 @@ static class Eyes
             return Undone("nothing is focused");
         }
         object pattern;
-        if (!focused.TryGetCurrentPattern(ValuePattern.Pattern, out pattern)) return Undone("needs a text field");
-        var field = (ValuePattern)pattern;
-        if (field.Current.IsReadOnly) return Undone("needs a text field");
-        var current = field.Current.Value ?? "";
-        if (current.Length > MaxValue) return Undone("field is too full");
-        field.SetValue(current + text);
-        return "{\"done\":true,\"length\":" + ValueLength(focused, current.Length + text.Length) + "}";
+        if (focused.TryGetCurrentPattern(ValuePattern.Pattern, out pattern))
+        {
+            var field = (ValuePattern)pattern;
+            if (!field.Current.IsReadOnly)
+            {
+                var current = field.Current.Value ?? "";
+                if (current.Length > MaxValue) return Undone("field is too full");
+                field.SetValue(current + text);
+                return "{\"done\":true,\"how\":\"value\",\"length\":"
+                    + ValueLength(focused, current.Length + text.Length) + "}";
+            }
+        }
+        var keys = new List<short>();
+        foreach (var c in text)
+        {
+            var key = VkKeyScan(c);
+            var shift = (key >> 8) & 0xFF;
+            if (key == -1 || (shift != 0 && shift != 1)) return Undone("can't type that");
+            keys.Add(key);
+        }
+        foreach (var key in keys)
+        {
+            var code = (byte)(key & 0xFF);
+            var shifted = ((key >> 8) & 0xFF) == 1;
+            if (shifted) keybd_event(0x10, 0, 0, UIntPtr.Zero);
+            keybd_event(code, 0, 0, UIntPtr.Zero);
+            keybd_event(code, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            if (shifted) keybd_event(0x10, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        }
+        var length = TextLength(focused);
+        return "{\"done\":true,\"how\":\"keys\"" + (length >= 0 ? ",\"length\":" + length : "") + "}";
+    }
+
+    /// <summary>Focused text's length via TextPattern, or -1 when it won't say.</summary>
+    static int TextLength(AutomationElement element)
+    {
+        try
+        {
+            object pattern;
+            if (!element.TryGetCurrentPattern(TextPattern.Pattern, out pattern)) return -1;
+            var text = ((TextPattern)pattern).DocumentRange.GetText(MaxValue);
+            return text != null ? text.Length : -1;
+        }
+        catch (Exception)
+        {
+            return -1;
+        }
     }
 
     /// <summary>

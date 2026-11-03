@@ -612,6 +612,7 @@ function winActWhy(why) {
     "can't invoke that": "that doesn't press like a button",
     "can't select that": "that doesn't select like a list item",
     "needs a text field": "that isn't a text field Persuna can write in",
+    "can't type that": "that text has characters Persuna can't press on this keyboard",
     "nothing is focused": "nothing is focused to type into",
     "field is too full": "that field is too full to add to",
     "too long": "that text is too long",
