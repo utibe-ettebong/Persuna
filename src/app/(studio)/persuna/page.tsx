@@ -12,6 +12,7 @@ import {
   ClearChatButton,
   DisconnectAppButton,
   ForgetButton,
+  ManualTokenForm,
   PersunaProfileForm,
   TeachNoteButton,
   ToneForm,
@@ -163,7 +164,27 @@ export default async function PersunaPage({ searchParams }: Props) {
                     {app.account && <span className="block text-muted">{app.account}</span>}
                   </span>
                   {app.account ? (
-                    <DisconnectAppButton provider={app.provider} name={app.name} />
+                    <span className="flex items-center gap-3">
+                      {app.needsReconnect && app.available && (
+                        <a
+                          href={`/api/connections/${app.provider}`}
+                          className="label-mono text-accent underline"
+                        >
+                          Reconnect for new access
+                        </a>
+                      )}
+                      <DisconnectAppButton provider={app.provider} name={app.name} />
+                    </span>
+                  ) : app.available && app.manual ? (
+                    <ManualTokenForm
+                      provider={app.provider}
+                      accountLabel={
+                        app.provider === "shopify" ? "acme.myshopify.com" : "Account name"
+                      }
+                      tokenLabel={
+                        app.provider === "shopify" ? "Admin API token" : "API key (-us21…)"
+                      }
+                    />
                   ) : app.available ? (
                     <a
                       href={`/api/connections/${app.provider}`}

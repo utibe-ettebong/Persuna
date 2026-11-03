@@ -1,10 +1,11 @@
 import { z } from "zod";
 
 /**
- * One thing Persuna may do on the Mac in Work mode (plan §6): click, type,
- * press a key, or open an app. The schema fails closed — anything outside it
- * never reaches the desktop — and every action carries the label the user
- * approved, shown before it runs.
+ * One thing Persuna may do on the computer in Work mode (plan §6): click,
+ * type, press a key, or open an app. The schema fails closed — anything
+ * outside it never reaches the desktop — and every action carries the label
+ * the user approved, shown before it runs. The Mac runs it as AppleScript;
+ * Windows sends one act line to the UI Automation helper.
  */
 export const operateAction = z.discriminatedUnion("kind", [
   z.object({

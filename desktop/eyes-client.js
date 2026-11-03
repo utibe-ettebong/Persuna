@@ -1,8 +1,9 @@
 // Talks to persuna-eyes.exe, which stays running on Windows so a read takes
 // milliseconds instead of a new process each time. Pure (it's handed how to
 // start the helper), so the web suite pins it. Requests go one at a time, an
-// identical one already waiting is shared, and a helper that stops answering
-// is killed and started again for the next request.
+// identical read already waiting is shared (actions pass { share: false }),
+// and a helper that stops answering is killed and started again for the next
+// request.
 
 /**
  * @param {{ start: () => import("node:child_process").ChildProcess, coldMs?: number }} opts
@@ -87,12 +88,17 @@ function createEyesClient({ start, coldMs = 8000 }) {
   /**
    * One request. Never rejects: `{ ok: true, value }`, or `{ ok: false, why }`
    * with why "blocked" (it wouldn't start or stay up), "timeout" or "unreadable".
+   * Identical lines share one request, unless `{ share: false }`: reads share,
+   * actions never do (two approvals run twice, even for the same line).
    * @param {string} line
    * @param {number} [ms]
+   * @param {{ share?: boolean }} [opts]
    */
-  function ask(line, ms = 2500) {
-    const same = current?.line === line ? current : waiting.find((w) => w.line === line);
-    if (same) return same.promise;
+  function ask(line, ms = 2500, opts = {}) {
+    if (opts.share !== false) {
+      const same = current?.line === line ? current : waiting.find((w) => w.line === line);
+      if (same) return same.promise;
+    }
     let resolve;
     const promise = new Promise((r) => (resolve = r));
     waiting.push({ line, ms, promise, resolve });

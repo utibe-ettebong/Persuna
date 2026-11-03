@@ -56,6 +56,28 @@ const envSchema = z.object({
   /** Meta app (Facebook Pages + Instagram). Redirect: {APP_URL}/api/connections/meta/callback */
   META_CLIENT_ID: z.string().min(1).optional(),
   META_CLIENT_SECRET: z.string().min(1).optional(),
+  /** X app with OAuth 2.0. Redirect: {APP_URL}/api/connections/x/callback */
+  X_CLIENT_ID: z.string().min(1).optional(),
+  X_CLIENT_SECRET: z.string().min(1).optional(),
+  /** Multi-tenant Entra app for OneDrive. Redirect: {APP_URL}/api/connections/microsoft/callback */
+  MICROSOFT_CLIENT_ID: z.string().min(1).optional(),
+  MICROSOFT_CLIENT_SECRET: z.string().min(1).optional(),
+  /**
+   * Pre-registered OAuth clients for MCP servers that accept only those.
+   * Redirect for each: {APP_URL}/api/mcp/oauth/callback
+   */
+  SLACK_MCP_CLIENT_ID: z.string().min(1).optional(),
+  SLACK_MCP_CLIENT_SECRET: z.string().min(1).optional(),
+  ASANA_MCP_CLIENT_ID: z.string().min(1).optional(),
+  ASANA_MCP_CLIENT_SECRET: z.string().min(1).optional(),
+  ZOOM_MCP_CLIENT_ID: z.string().min(1).optional(),
+  ZOOM_MCP_CLIENT_SECRET: z.string().min(1).optional(),
+  X_MCP_CLIENT_ID: z.string().min(1).optional(),
+  X_MCP_CLIENT_SECRET: z.string().min(1).optional(),
+  GITHUB_MCP_CLIENT_ID: z.string().min(1).optional(),
+  GITHUB_MCP_CLIENT_SECRET: z.string().min(1).optional(),
+  /** Comma-separated browser origins allowed to call /api/plugins/* (Canva app origin, Chrome extension id). Figma's opaque `null` origin is always allowed. */
+  PLUGIN_ORIGINS: z.string().min(1).optional(),
   /** The ElevenLabs agent created by `npm run voice:agent`. */
   ELEVENLABS_AGENT_ID: z.string().min(1).optional(),
   /** Shared secret ElevenLabs sends when it calls Persuna's brain (/api/persuna/llm). */

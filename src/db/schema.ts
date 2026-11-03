@@ -47,6 +47,7 @@ export const ruleEvidenceSource = pgEnum("rule_evidence_source", [
 export const jobOrigin = pgEnum("job_origin", ["owner", "renter"]);
 export const jobStatus = pgEnum("job_status", [
   "awaiting_payment",
+  "awaiting_approval",
   "review",
   "approved",
   "rejected",
@@ -318,6 +319,33 @@ export const ruleEvidence = pgTable(
   (t) => [index().on(t.skillId, t.ruleId), index().on(t.skillId, t.source, t.sourceId)],
 );
 
+/** Which tools a job may use in the renter's apps, and whether writes ask first. */
+export interface JobToolPolicy {
+  mode: "approve_each" | "preapproved";
+  /** Tool names allowed without asking when preapproved. */
+  tools: string[];
+}
+
+/**
+ * One tool call a job made, with its outcome. Material like the rest of the
+ * job: stored with it and purged with it. Never copied into skills.
+ */
+export interface JobToolCall {
+  tool: string;
+  /** MCP server name, for MCP tools; null for connected apps. */
+  server: string | null;
+  /** Arguments as sent, truncated. */
+  args: Record<string, unknown>;
+  status: "done" | "pending" | "denied" | "error";
+  /** Result as returned, truncated. */
+  result: unknown;
+  /** Id or link of what the call created, when the result carried one. */
+  targetId: string | null;
+  approvalId: string | null;
+  /** Read-back: true found again, false missing, null not verifiable. */
+  verified: boolean | null;
+}
+
 /** One task run through a published skill version. Material: deleted after retention. */
 export const jobs = pgTable(
   "jobs",
@@ -360,6 +388,12 @@ export const jobs = pgTable(
     completionTokens: integer("completion_tokens").notNull().default(0),
     rating: integer("rating"),
     ratingComment: text("rating_comment"),
+    /** Tool policy for this job; null when the job uses no tools. */
+    toolPolicy: jsonb("tool_policy").$type<JobToolPolicy | null>(),
+    /** Tool calls the job made, with outcomes. Material: purged with the job. */
+    toolCalls: jsonb("tool_calls").$type<JobToolCall[]>().notNull().default([]),
+    /** What the job's tools established, for the draft. Material: purged with the job. */
+    toolFindings: text("tool_findings"),
     createdAt: createdAt(),
     reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -764,6 +798,24 @@ export interface McpToolInfo {
 }
 
 /**
+ * OAuth ("Sign in with…") credentials for one user's MCP server. Tokens and
+ * the client secret are sealed with CONNECTIONS_KEY; the rest is plain
+ * metadata describing where they came from and where they may be used.
+ */
+export interface McpOAuthCredentials {
+  issuer: string;
+  resource: string;
+  tokenEndpoint: string;
+  clientId: string;
+  clientSecret: string | null;
+  accessToken: string;
+  refreshToken: string | null;
+  /** ms since epoch, or null when the server gave no expiry. */
+  expiresAt: number | null;
+  scope: string | null;
+}
+
+/**
  * Remote MCP servers the user connected for Persuna to use (Slack, Linear,
  * GitHub, Figma, databases…). The access token is sealed with CONNECTIONS_KEY
  * exactly like app-connection tokens and never leaves the server; v1 speaks
@@ -782,6 +834,10 @@ export const mcpServers = pgTable(
     url: text("url").notNull(),
     /** Sealed bearer token, or empty when the server needs no auth. */
     token: text("token").notNull().default(""),
+    /** How Persuna signs in: a fixed bearer token, or OAuth ("Sign in with…"). */
+    authType: text("auth_type").notNull().default("token"),
+    /** OAuth credentials for this user and server; null for token-auth servers. */
+    oauth: jsonb("oauth").$type<McpOAuthCredentials | null>(),
     /** Tools found at connect time; refreshed on demand. */
     tools: jsonb("tools").$type<McpToolInfo[]>().notNull().default([]),
     createdAt: createdAt(),
@@ -790,6 +846,47 @@ export const mcpServers = pgTable(
   (t) => [unique().on(t.userId, t.url)],
 );
 export type McpServer = typeof mcpServers.$inferSelect;
+
+/**
+ * The renter's own connections linked to a job: what the skill may act
+ * through. "app" names a connected app by provider ("notion"); "mcp" names
+ * an MCP server by id. The seller never sees these.
+ */
+export const jobConnections = pgTable(
+  "job_connections",
+  {
+    id: id(),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    ref: text("ref").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [unique().on(t.jobId, t.kind, t.ref)],
+);
+export type JobConnection = typeof jobConnections.$inferSelect;
+
+/**
+ * A write a job asked to make, waiting for the renter's decision. Decided
+ * rows stay as the record; all are purged with the job.
+ */
+export const jobApprovals = pgTable("job_approvals", {
+  id: id(),
+  jobId: uuid("job_id")
+    .notNull()
+    .references(() => jobs.id, { onDelete: "cascade" }),
+  tool: text("tool").notNull(),
+  /** MCP server name, for MCP tools; null for connected apps. */
+  server: text("server"),
+  args: jsonb("args").$type<Record<string, unknown>>().notNull().default({}),
+  preview: text("preview").notNull(),
+  status: text("status").notNull().default("pending"),
+  decidedBy: text("decided_by"),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  createdAt: createdAt(),
+});
+export type JobApproval = typeof jobApprovals.$inferSelect;
 
 /**
  * Earlier versions of a renter's order and the changes they asked for, one row
@@ -963,6 +1060,14 @@ export const projects = pgTable(
 );
 
 /** One deliverable with its acceptance criteria and its own escrow. Amounts in US cents. */
+/** A delivery file the poster saved to their own Drive or OneDrive. */
+export interface SavedMilestoneFile {
+  provider: "drive" | "onedrive";
+  name: string;
+  link: string | null;
+  savedAt: string;
+}
+
 export const projectMilestones = pgTable(
   "project_milestones",
   {
@@ -991,6 +1096,8 @@ export const projectMilestones = pgTable(
     fundedAt: timestamp("funded_at", { withTimezone: true }),
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
     settledAt: timestamp("settled_at", { withTimezone: true }),
+    /** Delivery files the poster saved to their own drives. */
+    savedFiles: jsonb("saved_files").$type<SavedMilestoneFile[]>().notNull().default([]),
     createdAt: createdAt(),
   },
   (t) => [

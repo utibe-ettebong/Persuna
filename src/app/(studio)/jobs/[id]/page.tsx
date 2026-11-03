@@ -1,11 +1,16 @@
 import type { Metadata } from "next";
 import { reviewJobAction, teachFromJobAction } from "@/app/actions/jobs";
 import { ActionForm } from "@/components/action-form";
+import { JobApprovals, JobToolSetup } from "@/components/job-tools";
 import { Badge, buttonClass, Card, Field, inputClass, PageHeader, Prose } from "@/components/ui";
 import { WordDiff } from "@/components/word-diff";
 import { getJobWithSkill, jobRoundsFor } from "@/lib/jobs/service";
+import { jobApprovalsFor, jobToolSetup } from "@/lib/jobs/tools";
+import { listConnections } from "@/lib/connections/service";
+import { listMcpServers } from "@/lib/mcp/service";
 import { assertJobOwner } from "@/lib/auth/access";
 import { requireUser } from "@/lib/auth/session";
+import { looksLikeCsv } from "@/lib/docs/csv";
 import { orNotFound } from "@/lib/load";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +28,14 @@ export default async function JobPage({ params }: Params) {
   const edited = job.status === "approved" && job.editSize !== "none";
   const rounds = await jobRoundsFor(job.id);
   const lastRound = rounds.at(-1);
+  // Setup and approvals show only when you are the requester (your own jobs);
+  // a renter's links and approvals stay on their order page.
+  const [setup, approvals, apps, servers] = await Promise.all([
+    jobToolSetup(id, user.id),
+    jobApprovalsFor(id, user.id),
+    listConnections(user.id).catch(() => []),
+    listMcpServers(user.id).catch(() => []),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -42,8 +55,19 @@ export default async function JobPage({ params }: Params) {
             <a href={`/jobs/${job.id}/download?format=docx`} className={buttonClass("primary")}>
               Download .docx
             </a>
+            <a href={`/jobs/${job.id}/download?format=pdf`} className={buttonClass("secondary")}>
+              .pdf
+            </a>
+            <a href={`/jobs/${job.id}/download?format=pptx`} className={buttonClass("secondary")}>
+              .pptx
+            </a>
+            {job.finalOutput && looksLikeCsv(job.finalOutput) && (
+              <a href={`/jobs/${job.id}/download?format=xlsx`} className={buttonClass("secondary")}>
+                .xlsx
+              </a>
+            )}
             <a href={`/jobs/${job.id}/download?format=md`} className={buttonClass("secondary")}>
-              Download .md
+              .md
             </a>
           </>
         )}
@@ -51,6 +75,11 @@ export default async function JobPage({ params }: Params) {
 
       <div className="flex flex-wrap gap-2">
         {job.status === "awaiting_payment" && <Badge>waiting for the renter&apos;s payment</Badge>}
+        {job.status === "awaiting_approval" && (
+          <Badge tone="accent">
+            {job.origin === "renter" ? "waiting for the renter's approval" : "needs your approval"}
+          </Badge>
+        )}
         {job.status === "review" && <Badge tone="accent">needs your review</Badge>}
         {job.approvedBy === "auto" && <Badge>auto-approved at trust level {job.trustLevel}</Badge>}
         {job.ownerReviewRequired && <Badge tone="accent">renter paid for your review</Badge>}
@@ -114,6 +143,12 @@ export default async function JobPage({ params }: Params) {
         </Card>
       )}
 
+      {setup && !setup.started && setup.declaredTools.length > 0 && (
+        <JobToolSetup jobId={id} page="job" setup={setup} apps={apps} servers={servers} />
+      )}
+
+      <JobApprovals jobId={id} page="job" approvals={approvals} />
+
       {lastRound && (
         <Card className="space-y-2 p-4">
           <h2 className="label-mono text-muted">
@@ -166,13 +201,20 @@ export default async function JobPage({ params }: Params) {
                 ? "Approved output, changes from the draft marked"
                 : job.status === "awaiting_payment"
                   ? "Draft"
-                  : "Rejected draft"}
+                  : job.status === "awaiting_approval"
+                    ? "Paused"
+                    : "Rejected draft"}
             </h2>
             {job.status === "approved" ? (
               <WordDiff draft={job.draft} reference={job.finalOutput ?? ""} />
             ) : job.status === "awaiting_payment" ? (
               <p className="text-sm text-muted">
                 Drafting starts once the renter&apos;s payment is confirmed.
+              </p>
+            ) : job.status === "awaiting_approval" ? (
+              <p className="text-sm text-muted">
+                Paused: waiting for {job.origin === "renter" ? "the renter" : "you"} to approve a
+                write in {job.origin === "renter" ? "their" : "your"} apps.
               </p>
             ) : (
               <Prose>{job.draft}</Prose>

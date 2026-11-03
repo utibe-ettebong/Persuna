@@ -225,6 +225,34 @@
       "when": 1793445980133,
       "tag": "0031_flowery_the_fallen",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1793712808806,
+      "tag": "0032_typical_madelyne_pryor",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1793720480043,
+      "tag": "0033_flashy_gideon",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1793720792458,
+      "tag": "0034_powerful_rumiko_fujikawa",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1793723769422,
+      "tag": "0035_broad_tiger_shark",
+      "breakpoints": true
     }
   ]
 }

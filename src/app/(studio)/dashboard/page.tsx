@@ -14,6 +14,7 @@ export const dynamic = "force-dynamic";
 const ROLE = { poster: "Client", seller: "Seller", proposer: "Proposed" } as const;
 const ORDER = {
   awaiting_payment: "Awaiting payment",
+  awaiting_approval: "Needs your approval",
   review: "With the owner",
   approved: "Delivered",
   rejected: "Declined",

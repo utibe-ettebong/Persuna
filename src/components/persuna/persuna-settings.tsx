@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import {
+  connectManualTokenAction,
   disconnectAppAction,
   persunaClearChatAction,
   persunaForgetAction,
@@ -261,6 +262,59 @@ export function ToneForm({ tone, instruction }: { tone: Tone; instruction: strin
         {instruction}
       </p>
     </div>
+  );
+}
+
+/** Pastes a manual API token (Shopify, Mailchimp): verified, then stored sealed. */
+export function ManualTokenForm({
+  provider,
+  accountLabel,
+  tokenLabel,
+}: {
+  provider: string;
+  accountLabel: string;
+  tokenLabel: string;
+}) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+  return (
+    <form
+      className="mt-2 flex flex-wrap items-center gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const form = new FormData(e.currentTarget);
+        start(async () => {
+          const res = await connectManualTokenAction(
+            provider,
+            String(form.get("account") ?? ""),
+            String(form.get("token") ?? ""),
+          );
+          if (res.ok) router.refresh();
+          else setError(res.error);
+        });
+      }}
+    >
+      <input
+        name="account"
+        required
+        placeholder={accountLabel}
+        autoComplete="off"
+        className={`${inputClass} w-44`}
+      />
+      <input
+        name="token"
+        required
+        type="password"
+        placeholder={tokenLabel}
+        autoComplete="off"
+        className={`${inputClass} min-w-48 flex-1`}
+      />
+      <button type="submit" disabled={pending} className={buttonClass()}>
+        {pending ? "Checking…" : "Connect"}
+      </button>
+      {error && <p className="w-full text-sm text-danger">{error}</p>}
+    </form>
   );
 }
 

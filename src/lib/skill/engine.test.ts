@@ -8,9 +8,13 @@ import {
   mapLimit,
   proposeCorrection,
   runTestCase,
+  runToolLoop,
   transcribeDocument,
+  type ToolCall,
+  type ToolOutcome,
+  type ToolRunner,
 } from "./engine";
-import type { Pair, SkillSheet } from "./types";
+import type { Pair, SkillSheet, ToolSpec } from "./types";
 
 type Reply = string | ((messages: ChatMessage[]) => string);
 
@@ -238,5 +242,121 @@ describe("transcribeDocument", () => {
     expect(pages).toEqual([{ page: 1, text: "Ops sync" }]);
     const parts = calls[0].messages[1].content as { type: string }[];
     expect(parts.map((p) => p.type)).toEqual(["text", "file"]);
+  });
+});
+
+const toolSpecs: ToolSpec[] = [
+  { name: "notion_search", server: null, description: "Find pages", writes: false },
+  { name: "notion_create_page", server: null, description: "Add a page", writes: true },
+];
+
+/** A tool runner that replays scripted outcomes and records calls. */
+function fakeRunner(outcomes: (ToolOutcome | ((call: ToolCall) => ToolOutcome))[]) {
+  const calls: ToolCall[] = [];
+  const runner: ToolRunner = {
+    list: () => toolSpecs,
+    async run(call) {
+      calls.push(call);
+      const next = outcomes.shift();
+      if (!next) throw new Error(`No scripted outcome for ${call.tool}`);
+      return typeof next === "function" ? next(call) : next;
+    },
+  };
+  return { runner, calls };
+}
+
+const doneStep = (findings: string) => JSON.stringify({ action: "done", findings });
+const callStep = (tool: string, args: Record<string, unknown> = {}) =>
+  JSON.stringify({ action: "call", tool, server: null, args });
+
+describe("runToolLoop", () => {
+  it("calls tools until done, keeping the transcript and findings", async () => {
+    const { client } = fakeClient({
+      draft: [
+        callStep("notion_search", { query: "standup" }),
+        doneStep("Found the standup notes."),
+      ],
+    });
+    const { runner, calls } = fakeRunner([
+      { status: "done", result: [{ title: "Standup" }], targetId: null, preview: "Search Notion" },
+    ]);
+    const result = await runToolLoop(client, runner, { brief: "Summarize the standup notes." });
+    expect(result.done).toBe(true);
+    expect(result.findings).toBe("Found the standup notes.");
+    expect(calls).toEqual([{ tool: "notion_search", server: null, args: { query: "standup" } }]);
+    expect(result.transcript).toHaveLength(1);
+    expect(result.transcript[0]).toMatchObject({ tool: "notion_search", status: "done" });
+  });
+
+  it("pauses on pending and re-runs the call when resumed", async () => {
+    const { client } = fakeClient({
+      draft: [callStep("notion_create_page", { title: "Notes" })],
+    });
+    const pending: ToolOutcome = {
+      status: "pending",
+      result: null,
+      targetId: null,
+      preview: "Add a page",
+      approvalId: "appr-1",
+    };
+    const first = fakeRunner([pending]);
+    const paused = await runToolLoop(client, first.runner, { brief: "File the notes." });
+    expect(paused.done).toBe(false);
+    expect(paused.pending?.approvalId).toBe("appr-1");
+
+    const { client: resumedClient } = fakeClient({ draft: [doneStep("Page created.")] });
+    const second = fakeRunner([
+      {
+        status: "done",
+        result: { url: "https://notion.so/x" },
+        targetId: "https://notion.so/x",
+        preview: "Add a page",
+      },
+    ]);
+    const resumed = await runToolLoop(resumedClient, second.runner, {
+      brief: "File the notes.",
+      transcript: paused.transcript,
+    });
+    expect(second.calls).toHaveLength(1);
+    expect(resumed.done).toBe(true);
+    expect(resumed.transcript).toHaveLength(1);
+    expect(resumed.transcript[0]).toMatchObject({
+      status: "done",
+      targetId: "https://notion.so/x",
+    });
+  });
+
+  it("feeds errors back so the model can work around them", async () => {
+    const { client, calls } = fakeClient({
+      draft: [callStep("notion_search"), doneStep("Nothing found; drafted from the brief.")],
+    });
+    const { runner } = fakeRunner([
+      {
+        status: "error",
+        result: null,
+        targetId: null,
+        preview: "Search Notion",
+        message: "Notion is down",
+      },
+    ]);
+    const result = await runToolLoop(client, runner, { brief: "Summarize." });
+    expect(result.done).toBe(true);
+    expect(result.transcript[0].status).toBe("error");
+    // The second turn saw the failure.
+    expect(JSON.stringify(calls[1].messages)).toContain("error");
+  });
+
+  it("stops after maxTurns", async () => {
+    const { client } = fakeClient({
+      draft: [callStep("notion_search"), callStep("notion_search")],
+    });
+    const { runner } = fakeRunner([
+      { status: "done", result: [], targetId: null, preview: "Search" },
+      { status: "done", result: [], targetId: null, preview: "Search" },
+    ]);
+    const result = await runToolLoop(client, runner, { brief: "Summarize.", maxTurns: 1 });
+    expect(result.done).toBe(false);
+    expect(result.exhausted).toBe(true);
+    expect(result.transcript).toHaveLength(1);
   });
 });

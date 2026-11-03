@@ -26,6 +26,7 @@ import {
   type HoldRecording,
 } from "@/components/persuna/voice";
 import { toTranscribableWav } from "@/lib/audio/convert";
+import { accessContinues, type Access } from "@/lib/desktop/access";
 import { LOOKS, LOOK_IDS, lookOf, type LookId } from "@/lib/persuna/looks";
 import {
   INTRO_ACKS,
@@ -37,8 +38,6 @@ import {
   describeSkill,
   type IntroAnswers,
 } from "@/lib/persuna/onboarding";
-
-type Access = "granted" | "denied" | "not-determined" | "restricted" | "unknown";
 
 /** What Persuna Desktop's setup window can ask the app (desktop/setup-preload.js). */
 interface SetupBridge {
@@ -531,7 +530,11 @@ function AccessStep({ say, back, onDone }: { say: Say } & Nav) {
       drag: true,
     },
   ];
-  const needed = ok(state?.mic) && (ok(state?.keyboard) || !state?.mac);
+  const needed = accessContinues(mac, {
+    mic: state?.mic,
+    keyboard: state?.keyboard,
+    screen: state?.screen,
+  });
 
   return (
     <div className="flex flex-1 flex-col">
@@ -649,7 +652,9 @@ function AccessStep({ say, back, onDone }: { say: Say } & Nav) {
       <Footer back={back}>
         {!needed && (
           <span className="text-xs text-muted">
-            {mac ? "Microphone and Accessibility are" : "The microphone is"} needed to talk.
+            {mac
+              ? "Microphone and Accessibility are needed to talk."
+              : "Microphone, talk key and screen are all needed to continue."}
           </span>
         )}
         <button type="button" disabled={testing} onClick={() => void runTest()} className={quiet}>

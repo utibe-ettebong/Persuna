@@ -19,6 +19,7 @@ import {
   requestMilestoneChanges,
   resolveMilestone,
   resumeProject,
+  saveMilestoneFile,
   savePlan,
   submitDelivery,
 } from "@/lib/projects/service";
@@ -198,6 +199,24 @@ export async function disputeAction(_: ActionState, form: FormData): Promise<Act
       .max(2000)
       .parse(form.get("reason") ?? "");
     await raiseDispute(createModelClient(user), user, projectId, reason);
+    return page(projectId);
+  });
+}
+
+export async function saveMilestoneFileAction(
+  _: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  return attempt(async () => {
+    const user = await requireUser();
+    const projectId = uuidField.parse(form.get("projectId"));
+    const milestoneId = uuidField.parse(form.get("milestoneId"));
+    const provider = z
+      .enum(["drive", "onedrive"])
+      .parse(form.get("provider") ?? form.get("intent"));
+    const format = z.enum(["md", "docx", "pdf", "pptx", "xlsx"]).parse(form.get("format"));
+    await saveMilestoneFile(user, milestoneId, { provider, format });
+    revalidatePath(page(projectId));
     return page(projectId);
   });
 }

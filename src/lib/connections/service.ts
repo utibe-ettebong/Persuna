@@ -18,13 +18,16 @@ import {
   META_GRAPH_VERSION,
   PROVIDERS,
   PROVIDER_IDS,
+  X_API,
   authorizeUrl,
+  createPkce,
   exchangeCode,
+  isManualProvider,
   refreshAccess,
   type ClientCredentials,
   type Provider,
 } from "./providers";
-import { TOOLS, toolNamed } from "./tools";
+import { SHOPIFY_API_VERSION, TOOLS, mailchimpBase, toolNamed } from "./tools";
 
 /** The secret for sealing tokens, or null when connected apps aren't set up. */
 export function connectionsKey(): string | null {
@@ -32,13 +35,18 @@ export function connectionsKey(): string | null {
 }
 
 export function credentialsFor(provider: Provider): ClientCredentials | null {
+  if (isManualProvider(provider)) return null;
   const e = env();
   const [clientId, clientSecret] =
     provider === "google"
       ? [e.GOOGLE_CLIENT_ID, e.GOOGLE_CLIENT_SECRET]
       : provider === "meta"
         ? [e.META_CLIENT_ID, e.META_CLIENT_SECRET]
-        : [e.NOTION_CLIENT_ID, e.NOTION_CLIENT_SECRET];
+        : provider === "x"
+          ? [e.X_CLIENT_ID, e.X_CLIENT_SECRET]
+          : provider === "microsoft"
+            ? [e.MICROSOFT_CLIENT_ID, e.MICROSOFT_CLIENT_SECRET]
+            : [e.NOTION_CLIENT_ID, e.NOTION_CLIENT_SECRET];
   return clientId && clientSecret && connectionsKey() ? { clientId, clientSecret } : null;
 }
 
@@ -51,19 +59,25 @@ export async function listConnections(userId: string) {
     .select({
       provider: appConnections.provider,
       account: appConnections.account,
+      scopes: appConnections.scopes,
       createdAt: appConnections.createdAt,
     })
     .from(appConnections)
     .where(eq(appConnections.userId, userId));
   return PROVIDER_IDS.map((id) => {
     const row = rows.find((r) => r.provider === id);
+    const granted = new Set((row?.scopes ?? "").split(/[,\s]+/).filter(Boolean));
     return {
       provider: id,
       name: PROVIDERS[id].name,
       apps: PROVIDERS[id].apps,
-      available: Boolean(credentialsFor(id)),
+      manual: isManualProvider(id),
+      available: isManualProvider(id) ? Boolean(connectionsKey()) : Boolean(credentialsFor(id)),
       account: row?.account ?? null,
       connectedAt: row?.createdAt ?? null,
+      // Scopes grow over time (Google gained Drive and Sheets): an old grant
+      // reconnects to pick the new ones up (Google keeps the old ones too).
+      needsReconnect: Boolean(row) && !PROVIDERS[id].scopes.every((s) => granted.has(s)),
     };
   });
 }
@@ -88,19 +102,25 @@ export const NONCE_COOKIE = "persuna_connect";
  * in the same browser).
  */
 export function startConnecting(userId: string, provider: Provider, origin: string) {
+  if (isManualProvider(provider)) {
+    throw new Error(`${PROVIDERS[provider].name} connects with an API token, pasted below.`);
+  }
   const creds = credentialsFor(provider);
   const key = connectionsKey();
   if (!creds || !key)
     throw new Error(`${PROVIDERS[provider].name} isn't set up on this server yet.`);
   const nonce = randomBytes(16).toString("base64url");
   const state = signToken({ u: userId, p: provider, n: nonce }, key, Date.now() + STATE_TTL_MS);
+  // X requires PKCE: the verifier rides in the cookie next to the nonce.
+  const pkce = provider === "x" ? createPkce() : null;
   return {
     url: authorizeUrl(provider, {
       clientId: creds.clientId,
       redirectUri: redirectUri(provider, origin),
       state,
+      ...(pkce && { codeChallenge: pkce.challenge }),
     }),
-    nonce,
+    nonce: pkce ? `${nonce}.${pkce.verifier}` : nonce,
   };
 }
 
@@ -115,18 +135,14 @@ export async function finishConnecting(
   if (!creds || !key)
     throw new Error(`${PROVIDERS[provider].name} isn't set up on this server yet.`);
   const state = readToken<{ u: string; p: string; n: string }>(input.state, key);
-  if (
-    !state ||
-    state.u !== userId ||
-    state.p !== provider ||
-    !input.nonce ||
-    state.n !== input.nonce
-  ) {
+  const [nonce, verifier] = (input.nonce ?? "").split(".");
+  if (!state || state.u !== userId || state.p !== provider || !nonce || state.n !== nonce) {
     throw new Error("That sign-in link expired or wasn't started here. Try connecting again.");
   }
   const tokens = await exchangeCode(provider, {
     code: input.code,
     redirectUri: redirectUri(provider, input.origin),
+    ...(provider === "x" && { codeVerifier: verifier }),
     ...creds,
   });
   if (!tokens.accessToken)
@@ -159,6 +175,98 @@ export async function finishConnecting(
   return { account: tokens.account };
 }
 
+/** Which account a token belongs to, for tools that address it (Shopify's shop). */
+export async function connectionAccountFor(
+  userId: string,
+  provider: Provider,
+): Promise<string | null> {
+  const row = await db().query.appConnections.findFirst({
+    where: and(eq(appConnections.userId, userId), eq(appConnections.provider, provider)),
+  });
+  return row?.account ?? null;
+}
+
+/**
+ * Connects a manual-token app (Shopify, Mailchimp): checks the token with
+ * one cheap call, then stores it sealed like an OAuth token. Never expires;
+ * paste a new token to replace it.
+ */
+export async function connectManualToken(
+  userId: string,
+  provider: Provider,
+  input: { account: string; token: string; actor: Actor },
+  fetchFn: typeof fetch = fetch,
+): Promise<{ account: string }> {
+  if (!isManualProvider(provider)) {
+    throw new Error(`${PROVIDERS[provider].name} connects with a sign-in, not a token.`);
+  }
+  const key = connectionsKey();
+  if (!key) throw new Error("Connected apps aren't set up on this server.");
+  const token = input.token.trim();
+  if (!token) throw new Error("Paste the API token first.");
+  const account = provider === "shopify" ? normalizeShop(input.account) : input.account.trim();
+  if (!account) throw new Error("Name the account first.");
+  await verifyManualToken(provider, account, token, fetchFn);
+  const values = {
+    account,
+    scopes: "",
+    accessToken: seal(token, key),
+    refreshToken: null,
+    expiresAt: null,
+    updatedAt: new Date(),
+  };
+  await db().transaction(async (tx) => {
+    const [row] = await tx
+      .insert(appConnections)
+      .values({ userId, provider, ...values })
+      .onConflictDoUpdate({ target: [appConnections.userId, appConnections.provider], set: values })
+      .returning({ id: appConnections.id });
+    await audit(
+      {
+        actor: input.actor,
+        action: "connection.added",
+        entityType: "connection",
+        entityId: row.id,
+        details: { provider },
+      },
+      tx,
+    );
+  });
+  return { account };
+}
+
+function normalizeShop(account: string): string {
+  const shop = account
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "");
+  if (!shop) throw new Error("Name the shop first (acme.myshopify.com).");
+  return shop.includes(".") ? shop : `${shop}.myshopify.com`;
+}
+
+async function verifyManualToken(
+  provider: Provider,
+  account: string,
+  token: string,
+  fetchFn: typeof fetch,
+): Promise<void> {
+  const res =
+    provider === "shopify"
+      ? await fetchFn(`https://${account}/admin/api/${SHOPIFY_API_VERSION}/shop.json`, {
+          headers: { "X-Shopify-Access-Token": token },
+          signal: AbortSignal.timeout(20_000),
+        })
+      : await fetchFn(`${mailchimpBase(token)}/`, {
+          headers: { authorization: `Basic ${Buffer.from(`any:${token}`).toString("base64")}` },
+          signal: AbortSignal.timeout(20_000),
+        });
+  if (res.status === 401 || res.status === 403) {
+    throw new Error("That token didn't work. Check it and paste it again.");
+  }
+  if (!res.ok) throw new Error(`${PROVIDERS[provider].name} didn't answer. Try again?`);
+}
+
 export async function disconnect(userId: string, provider: Provider, actor: Actor) {
   const key = connectionsKey();
   const [row] = await db()
@@ -180,6 +288,18 @@ export async function disconnect(userId: string, provider: Provider, actor: Acto
       headers: { authorization: `Bearer ${token}` },
     }).catch(() => {});
   }
+  if (provider === "x" && key) {
+    const creds = credentialsFor(provider);
+    const token = unseal(row.accessToken, key);
+    await fetch(`${X_API}/oauth2/revoke`, {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${Buffer.from(`${creds?.clientId ?? ""}:${creds?.clientSecret ?? ""}`).toString("base64")}`,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ token, token_type_hint: "access_token" }),
+    }).catch(() => {});
+  }
   await audit({
     actor,
     action: "connection.removed",
@@ -192,8 +312,7 @@ export async function disconnect(userId: string, provider: Provider, actor: Acto
 /** A working access token for one of the user's apps, refreshed when it's about to expire. */
 export async function accessTokenFor(userId: string, provider: Provider): Promise<string> {
   const key = connectionsKey();
-  const creds = credentialsFor(provider);
-  if (!key || !creds) throw new Error(`${PROVIDERS[provider].name} isn't set up on this server.`);
+  if (!key) throw new Error("Connected apps aren't set up on this server.");
   const row = await db().query.appConnections.findFirst({
     where: and(eq(appConnections.userId, userId), eq(appConnections.provider, provider)),
   });
@@ -201,6 +320,8 @@ export async function accessTokenFor(userId: string, provider: Provider): Promis
   if (!row.expiresAt || row.expiresAt.getTime() > Date.now() || !row.refreshToken) {
     return unseal(row.accessToken, key);
   }
+  const creds = credentialsFor(provider);
+  if (!creds) throw new Error(`${PROVIDERS[provider].name} needs reconnecting.`);
   const fresh = await refreshAccess(provider, unseal(row.refreshToken, key), creds);
   await db()
     .update(appConnections)
@@ -252,6 +373,7 @@ export async function doAppTask(
     async (tool, args) => {
       const out = await tool.run(args, {
         token: await accessTokenFor(userId, tool.provider),
+        account: await connectionAccountFor(userId, tool.provider),
         offset: input.offset,
         fetch,
       });
@@ -294,6 +416,7 @@ export async function confirmAppAction(userId: string, token: string, actor: Act
   const args = tool.args.parse(pending.args);
   const result = (await tool.run(args, {
     token: await accessTokenFor(userId, tool.provider),
+    account: await connectionAccountFor(userId, tool.provider),
     offset: pending.o,
     fetch,
   })) as { link?: string | null; url?: string | null };
@@ -308,6 +431,8 @@ export async function confirmAppAction(userId: string, token: string, actor: Act
     calendar_create: "It's on your calendar.",
     notion_create_page: "Added to Notion.",
     facebook_post: "Posted to Facebook.",
+    x_post: "Posted to X.",
+    sheets_append_row: "Added to the sheet.",
   };
   return { message: done[tool.name] ?? "Done.", href: result.link ?? result.url ?? null };
 }

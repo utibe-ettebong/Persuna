@@ -22,6 +22,11 @@ export const skillSheet = z.object({
   summary: z.string().min(1),
   rules: z.array(rule).min(1),
   template: z.string().min(1),
+  /**
+   * Layer 4: tools the skill may use in the renter's apps, by name. Absent
+   * or empty: any linked tool. Never accounts — those link to the job.
+   */
+  tools: z.array(z.string().trim().min(1).max(120)).max(50).optional(),
 });
 
 export const ruleOp = z.discriminatedUnion("op", [
@@ -34,6 +39,33 @@ export const ruleOp = z.discriminatedUnion("op", [
   }),
   z.object({ op: z.literal("remove"), id: z.string() }),
 ]);
+
+/** One turn of a tool-using job: call a tool, or finish with findings. */
+export const toolLoopStep = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("call"),
+    tool: z.string().trim().min(1).max(120),
+    /** MCP server name, for MCP tools; null for connected apps. */
+    server: z.string().trim().max(80).nullish(),
+    args: z.record(z.string(), z.unknown()).default({}),
+  }),
+  z.object({
+    action: z.literal("done"),
+    /** What the tools established, for the draft. Empty when nothing was needed. */
+    findings: z.string().max(4000).default(""),
+  }),
+]);
+export type ToolLoopStep = z.infer<typeof toolLoopStep>;
+
+/** A tool a job may call: a connected app's tool, or an MCP server's. */
+export interface ToolSpec {
+  name: string;
+  /** MCP server name, for MCP tools; null for connected apps. */
+  server: string | null;
+  description: string;
+  /** Sends, creates, posts or pays: needs approval under the job's policy. */
+  writes: boolean;
+}
 
 export const correctionProposal = z.object({
   explanation: z.string().min(1),
