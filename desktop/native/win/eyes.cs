@@ -328,8 +328,37 @@ static class Eyes
             keybd_event(code, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
             if (shifted) keybd_event(0x10, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         }
-        var length = TextLength(focused);
+        var length = SettledLength(focused);
         return "{\"done\":true,\"how\":\"keys\"" + (length >= 0 ? ",\"length\":" + length : "") + "}";
+    }
+
+    /// <summary>
+    /// Focused text's length, waiting for typed keys to land: keystrokes queue
+    /// up behind the app, so an instant read sees stale text. Settles on four
+    /// agreeing reads in a row, or the last reading after five seconds.
+    /// </summary>
+    static int SettledLength(AutomationElement element)
+    {
+        var length = TextLength(element);
+        if (length < 0) return -1;
+        var steady = 0;
+        for (var i = 0; i < 50; i++)
+        {
+            Thread.Sleep(100);
+            var now = TextLength(element);
+            if (now < 0) return length;
+            if (now == length)
+            {
+                steady++;
+                if (steady >= 3) return now;
+            }
+            else
+            {
+                steady = 0;
+                length = now;
+            }
+        }
+        return length;
     }
 
     /// <summary>Focused text's length via TextPattern, or -1 when it won't say.</summary>
