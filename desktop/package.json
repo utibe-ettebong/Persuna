@@ -1,6 +1,6 @@
 {
   "name": "persuna-desktop",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "private": true,
   "description": "Persuna, your AI assistant, over your whole screen.",
   "main": "main.js",
@@ -34,6 +34,7 @@
       "preload.js",
       "setup-preload.js",
       "hold-key.js",
+      "mac-keys.js",
       "update-info.js",
       "updater.js",
       "operate.js",

@@ -189,12 +189,38 @@ switch args.count > 1 ? args[1] : "" {
 case "ax": emit(readTree(skip: pid_t(args.count > 2 ? Int32(args[2]) ?? 0 : 0)))
 case "ocr" where args.count > 2: emit(readText(path: args[2]))
 case "trusted": emit(["trusted": AXIsProcessTrusted()])
+case "keys":
+  // The talk key, heard without holding anyone's input up. A passive global
+  // monitor only observes: a slow Persuna, or Accessibility switched off
+  // mid-setup, can't freeze the Mac's keyboard and mouse, as an active event
+  // tap can. One line per key: "d <keycode>" down, "u <keycode>" up.
+  let app = NSApplication.shared
+  app.setActivationPolicy(.prohibited)
+  // Modifiers come as flag changes: down while the key's own device bit is set.
+  let deviceBits: [UInt16: UInt] = [54: 0x10, 55: 0x08, 56: 0x02, 58: 0x20, 59: 0x01, 60: 0x04, 61: 0x40, 62: 0x2000]
+  func say(_ down: Bool, _ code: UInt16) {
+    FileHandle.standardOutput.write("\(down ? "d" : "u") \(code)\n".data(using: .utf8)!)
+  }
+  _ = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { e in
+    switch e.type {
+    case .keyDown: say(true, e.keyCode)
+    case .keyUp: say(false, e.keyCode)
+    default:
+      if let bit = deviceBits[e.keyCode] { say(e.modifierFlags.rawValue & bit != 0, e.keyCode) }
+    }
+  }
+  // Persuna gone (its end of the pipe closed): stop listening with it.
+  DispatchQueue.global().async {
+    while !FileHandle.standardInput.availableData.isEmpty {}
+    exit(0)
+  }
+  app.run()
 case "haptic":
   NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
   // Give the tap time to play before the process ends.
   usleep(120_000)
   emit(["ok": true])
 default:
-  FileHandle.standardError.write("usage: persuna-eyes ax <skip-pid> | ocr <image> | trusted | haptic\n".data(using: .utf8)!)
+  FileHandle.standardError.write("usage: persuna-eyes ax <skip-pid> | ocr <image> | trusted | keys | haptic\n".data(using: .utf8)!)
   exit(2)
 }
