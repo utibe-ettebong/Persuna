@@ -14,6 +14,9 @@ describe("wantsSight", () => {
       "Why is this page blank?",
       "Summarize this page",
       "Point to the settings icon",
+      "What can you see?",
+      "What do you see?",
+      "Can you see my screen?",
     ]) {
       expect(wantsSight(text), text).toBe(true);
     }
@@ -29,6 +32,8 @@ describe("wantsSight", () => {
       "Teach me how you do it",
       "Add a todo: book flights",
       "What did we work on yesterday?",
+      "What can you do?",
+      "Can you see why this fails?",
     ]) {
       expect(wantsSight(text), text).toBe(false);
     }

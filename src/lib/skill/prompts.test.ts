@@ -60,5 +60,6 @@ describe("persunaChatMessages", () => {
     );
     expect(system).toContain("never read out the whole list");
     expect(system).toContain("browser's chrome");
+    expect(system).toContain("what it means");
   });
 });

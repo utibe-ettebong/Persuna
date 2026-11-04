@@ -18,7 +18,7 @@ import {
   tidyReply,
   type TurnStreamEvent,
 } from "./brain";
-import type { PersunaState } from "./types";
+import { persunaAction, type PersunaState } from "./types";
 
 const state = (over: Partial<PersunaState> = {}): PersunaState => ({
   today: "2026-10-27",
@@ -594,6 +594,43 @@ describe("drawing, files and the clipboard", () => {
       { type: "draw", title: null, marks: [{ item: "e1", note: "1. Reply" }], flow: null },
     ]);
     expect(tidyReply(draw([]), state(), null).actions).toEqual([]);
+  });
+
+  it("keeps a mark's shape when it resolves, by id or by name", () => {
+    const draw = (marks: { item: string; note: string; shape?: "circle" }[]) => ({
+      reply: "Here.",
+      actions: [{ type: "draw" as const, title: null, marks, flow: null }],
+    });
+    // A circled mark survives the schema, so streamed turns keep it too.
+    const parsed = persunaAction.safeParse({
+      type: "draw",
+      title: null,
+      marks: [{ item: "e2", note: "1. Search", shape: "circle" }],
+      flow: null,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.type === "draw") {
+      expect(parsed.data.marks?.[0]).toMatchObject({ item: "e2", shape: "circle" });
+    }
+    const kept = tidyReply(
+      draw([
+        { item: "e2", note: "1. Search", shape: "circle" },
+        { item: "Reply", note: "2. Reply", shape: "circle" },
+      ]),
+      state(),
+      { scene, image: null },
+    );
+    expect(kept.actions).toEqual([
+      {
+        type: "draw",
+        title: null,
+        marks: [
+          { item: "e2", note: "1. Search", shape: "circle" },
+          { item: "e1", note: "2. Reply", shape: "circle" },
+        ],
+        flow: null,
+      },
+    ]);
   });
 
   it("keeps notes named by what they're called, not just by id", () => {

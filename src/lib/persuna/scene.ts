@@ -202,12 +202,34 @@ export function wantsPicture(text: string): boolean {
   // Describing the screen itself needs the page, not just its list of chrome.
   return (
     /\bwhat am i looking at\b/i.test(text) ||
-    /\bwhat do you see\b/i.test(text) ||
+    /\bwhat (can|do) you see\b/i.test(text) ||
+    /\bcan you see (my|the|this|that|it)\b/i.test(text) ||
     /\bwhat('s| is) on (my|the|this) (screen|page|window)\b/i.test(text) ||
     /\b(describ\w+|summari[sz]\w+).{0,40}\b(this|that|my|the)\b.{0,20}\b(screen|page|window)\b/i.test(
       text,
     )
   );
+}
+
+/**
+ * Whether the turn's screenshot goes to the model with the first request
+ * (the client decides what to upload, the server what to use — same rule).
+ * A spoken question about the screen always takes it: the listening model is
+ * already on the case, so holding the picture back only buys a second round
+ * trip — dead air in the middle of the answer.
+ */
+export function pictureForTurn(input: {
+  sight: { scene: Scene | null; circled?: boolean };
+  image: boolean;
+  saidFirst: boolean;
+  spoken: boolean;
+  typed: string | null;
+  mode: string;
+}): boolean {
+  if (!input.image) return false;
+  if (input.saidFirst) return true;
+  if (input.spoken && input.mode === "look") return true;
+  return pictureNeeded(input.sight, input.typed);
 }
 
 /** The user asks for an illustration (a diagram, not a file): it shows in the chat. */

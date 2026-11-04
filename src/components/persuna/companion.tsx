@@ -31,7 +31,7 @@ import type { OperateAction } from "@/lib/operate/actions";
 import { parseFastIntent } from "@/lib/persuna/intents";
 import { warmHearing } from "@/components/persuna/live-hearing";
 import {
-  pictureNeeded,
+  pictureForTurn,
   sceneIsThin,
   sceneWithin,
   type Scene,
@@ -68,9 +68,12 @@ import {
   CircleLayer,
   CircledMark,
   DrawingLayer,
+  ShotStrip,
   cropPicture,
   notePlacement,
   onScreenSpot,
+  shotAreas,
+  shotIn,
   type Area,
 } from "./screen-drawing";
 import {
@@ -110,6 +113,8 @@ export interface CompanionMessage {
   switchTo?: { slug: string; name: string } | null;
   link?: { href: string; label: string } | null;
   job?: ChatJob;
+  /** Explanation pictures, cropped on the device from the look's screenshot. Never uploaded. */
+  shots?: { n: number; note: string; src: string }[] | null;
 }
 
 export interface CompanionProps {
@@ -956,7 +961,20 @@ export function Companion(props: CompanionProps) {
         const form = new FormData();
         if (typed === null) form.append("audio", (message as { audio: File }).audio);
         else form.append("text", typed);
-        let res = await post(form, Boolean(sight && pictureNeeded(sight, typed)));
+        let res = await post(
+          form,
+          Boolean(
+            sight &&
+            pictureForTurn({
+              sight,
+              image: Boolean(sight.image),
+              saidFirst: false,
+              spoken: typed === null,
+              typed,
+              mode: opts.mode,
+            }),
+          ),
+        );
         if (!res.ok || !res.body) {
           close();
           return res.status === 401 ? "Sign in first" : "The voice service didn't answer.";
@@ -1060,6 +1078,7 @@ export function Companion(props: CompanionProps) {
         } else {
           answered(result, opts.lead);
         }
+        void attachShots(result, sight);
         return null;
       } catch {
         close();
@@ -1233,6 +1252,37 @@ export function Companion(props: CompanionProps) {
     window.clearTimeout(pointTimer.current);
     setPointAt(spot);
     pointTimer.current = window.setTimeout(() => setPointAt(null), POINT_MS);
+  }
+
+  /**
+   * The explanation's pictures: each mark and point cropped from the look's
+   * screenshot, kept on the reply in this view. Cropping is local and late
+   * (after the answer shows), so it never holds up the reply or the voice.
+   */
+  async function attachShots(
+    result: ChatResult,
+    sight: { image: string | null; scene: Scene | null; crop?: Area | null } | null,
+  ) {
+    const areas = shotAreas(result.drawing, result.point);
+    if (!areas.length || !sight?.image) return;
+    const image = sight.image;
+    const screenWidth = sight.scene?.screen.w ?? window.innerWidth;
+    const shots = (
+      await Promise.all(
+        areas.map(async (s) => {
+          const at = shotIn(s.area, screenWidth, sight.crop ?? null);
+          return {
+            n: s.n,
+            note: s.note,
+            src: at ? await cropPicture(image, at.area, at.width).catch(() => null) : null,
+          };
+        }),
+      )
+    ).filter((s): s is { n: number; note: string; src: string } => s.src !== null);
+    if (!shots.length) return;
+    const replyId = result.messages[1]?.id;
+    if (!replyId) return;
+    setMessages((all) => all.map((m) => (m.id === replyId ? { ...m, shots } : m)));
   }
 
   function flash(line: string) {
@@ -3023,6 +3073,8 @@ export function Companion(props: CompanionProps) {
   const low = spot.y > 360;
   const side = right ? "right-[calc(100%+12px)] items-end" : "left-[calc(100%+12px)] items-start";
   const latestJob = [...messages].reverse().find((m) => m.jobId && m.jobId !== dismissedJob);
+  const latestReply = [...messages].reverse().find((m) => m.role === "assistant");
+  const latestShots = latestReply?.shots ?? null;
   // The first meeting's box can be put away until they're ready (it can sit over a page's buttons).
   const showSetupInput = !setupDone && busy === "idle" && !setupLater;
   const hasCards =
@@ -3540,6 +3592,11 @@ export function Companion(props: CompanionProps) {
                   ))}
                 </ul>
               )}
+              {latestShots && (
+                <div className="pointer-events-auto">
+                  <ShotStrip shots={latestShots} />
+                </div>
+              )}
               {attached && (
                 <form
                   onSubmit={(e) => {
@@ -4003,6 +4060,11 @@ export function Companion(props: CompanionProps) {
           >
             {caption.length > 260 ? `${caption.slice(0, 260)}…` : caption}
           </button>
+        )}
+        {latestShots && (
+          <div className={`persuna-in pointer-events-auto max-w-80 p-2 ${glass} rounded-[22px]`}>
+            <ShotStrip shots={latestShots} />
+          </div>
         )}
         {error && (
           <p className="persuna-in pointer-events-auto rounded-full bg-danger/10 px-3 py-1.5 text-sm text-danger backdrop-blur">

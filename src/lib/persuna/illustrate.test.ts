@@ -33,7 +33,12 @@ describe("illustrationOf", () => {
   });
 
   it("leaves walkthroughs and empty drawings over the screen", () => {
-    const mark = { n: 1, note: "1. Export", spot: { x: 1, y: 2, w: 60, h: 24, label: "Export" } };
+    const mark = {
+      n: 1,
+      note: "1. Export",
+      spot: { x: 1, y: 2, w: 60, h: 24, label: "Export" },
+      shape: null,
+    };
     expect(illustrationOf({ title: null, marks: [mark], flow: { ...flow } }, "Draw it")).toBeNull();
     expect(illustrationOf({ title: null, marks: [], flow: null }, "Draw it")).toBeNull();
   });

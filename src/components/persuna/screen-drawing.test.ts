@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loopOf, notePlacement, onScreenSpot } from "./screen-drawing";
+import { loopOf, notePlacement, onScreenSpot, shotAreas, shotIn } from "./screen-drawing";
 
 describe("circling something", () => {
   it("turns a drawn loop into a closed path and the box around it", () => {
@@ -65,5 +65,50 @@ describe("marks outside this view", () => {
     expect(onScreenSpot({ x: 100, y: 100, w: 60, h: 24 }, screen)).toBe(true);
     expect(onScreenSpot({ x: -500, y: 100, w: 60, h: 24 }, screen)).toBe(false);
     expect(onScreenSpot({ x: 2000, y: 100, w: 60, h: 24 }, screen)).toBe(false);
+  });
+});
+
+describe("explanation thumbnails", () => {
+  const spot = (x: number) => ({ x, y: 100, w: 60, h: 24 });
+
+  it("takes one thumbnail per mark, then the pointed thing, at most four", () => {
+    const drawing = {
+      marks: [
+        { n: 1, note: "First", spot: spot(100) },
+        { n: 2, note: "Second", spot: spot(300) },
+      ],
+    };
+    expect(shotAreas(drawing, null)).toEqual([
+      { n: 1, note: "First", area: spot(100) },
+      { n: 2, note: "Second", area: spot(300) },
+    ]);
+    expect(shotAreas(null, { ...spot(500), label: "Save" })).toEqual([
+      { n: 1, note: "Save", area: spot(500) },
+    ]);
+    const many = {
+      marks: [100, 200, 300, 400, 500].map((x, i) => ({ n: i + 1, note: `N${i}`, spot: spot(x) })),
+    };
+    expect(shotAreas(many, { ...spot(900), label: "Save" })).toHaveLength(4);
+    expect(shotAreas({ marks: [] }, null)).toEqual([]);
+  });
+});
+
+describe("shotIn", () => {
+  const mark = { x: 500, y: 300, w: 80, h: 40 };
+
+  it("takes the area as it is from a whole-screen picture", () => {
+    expect(shotIn(mark, 1440, null)).toEqual({ area: mark, width: 1440 });
+  });
+
+  it("measures from the circle when the picture is cropped to it", () => {
+    const crop = { x: 400, y: 200, w: 300, h: 200 };
+    expect(shotIn(mark, 1440, crop)).toEqual({
+      area: { x: 100, y: 100, w: 80, h: 40 },
+      width: 300,
+    });
+  });
+
+  it("has no picture of an area outside the circle", () => {
+    expect(shotIn(mark, 1440, { x: 0, y: 0, w: 200, h: 200 })).toBeNull();
   });
 });

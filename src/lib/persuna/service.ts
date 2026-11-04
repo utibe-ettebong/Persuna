@@ -86,7 +86,7 @@ import {
 import type { Flow, PersunaReply, PersunaState } from "./types";
 import { createLocator } from "@/lib/models/sam";
 import { stepsAsFlow } from "./illustrate";
-import { pictureNeeded, samSpot, sceneIsThin, spotOf, type Scene, type Spot } from "./scene";
+import { pictureForTurn, samSpot, sceneIsThin, spotOf, type Scene, type Spot } from "./scene";
 import type { TurnMode } from "./screen-mode";
 import { splitSentences } from "./sentences";
 import { logVoiceTurn, recordVoiceTurn, startTurn } from "./voice-metrics";
@@ -306,7 +306,7 @@ export interface ChatResult {
 
 export interface Drawing {
   title: string | null;
-  marks: { n: number; note: string; spot: Spot }[];
+  marks: { n: number; note: string; spot: Spot; shape: "circle" | null }[];
   flow: Flow | null;
 }
 
@@ -409,7 +409,15 @@ async function prepareTurn(userId: string, input: ChatMessageInput) {
   }));
   const sight = input.sight ?? null;
   const picture = Boolean(
-    sight?.image && (input.saidFirst !== undefined || pictureNeeded(sight, spoken ? null : typed)),
+    sight &&
+    pictureForTurn({
+      sight,
+      image: Boolean(sight.image),
+      saidFirst: input.saidFirst !== undefined,
+      spoken,
+      typed: spoken ? null : typed,
+      mode: input.mode ?? "talk",
+    }),
   );
   const file = input.file ?? null;
   const message = spoken ? { audio: input.audio } : typed;
@@ -772,9 +780,11 @@ async function applyTurn(
           return box ? samSpot(box, sight.scene, m.thing, sight.crop ?? null) : null;
         }),
       );
-      const marks = asked.flatMap((m, i) => {
+      const marks: Drawing["marks"] = asked.flatMap((m, i) => {
         const spot = spots[i];
-        return spot ? [{ n: i + 1, note: m.note, spot }] : [];
+        return spot
+          ? [{ n: i + 1, note: m.note, spot, shape: m.shape === "circle" ? "circle" : null }]
+          : [];
       });
       // Nothing to pin to: the steps still draw, as a diagram over the screen.
       const fallback = !marks.length && !action.flow ? stepsAsFlow(asked.map((m) => m.note)) : null;
