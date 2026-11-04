@@ -1175,7 +1175,7 @@ export function Companion(props: CompanionProps) {
     if (value.appConfirm) setAppConfirm(value.appConfirm);
     if (value.mcpConfirm) setMcpConfirm(value.mcpConfirm);
     if (value.operateConfirm) setOperateConfirm(value.operateConfirm);
-    const illustration = value.drawing ? illustrationOf(value.drawing) : null;
+    const illustration = value.drawing ? illustrationOf(value.drawing, mine.content) : null;
     // Showing something on screen: the island folds up so it doesn't cover it.
     // An illustration shows in the chat instead, so the island stays as it is.
     if (value.point || (value.drawing && !illustration)) setPanel(false);
