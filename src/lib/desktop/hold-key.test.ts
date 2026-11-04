@@ -92,6 +92,44 @@ describe("hold-to-talk key", () => {
     expect(slow.events).toEqual([]);
   });
 
+  it("holds through AltGr's Left Ctrl on Windows, but only for that key", () => {
+    const CTRL = 29;
+    const altGr = setup();
+    altGr.hk.setKey(KEY, [CTRL]);
+    // Windows sends Ctrl then right Alt on the press, and both again on each repeat.
+    altGr.down(CTRL);
+    altGr.down();
+    altGr.advance(500);
+    altGr.down(CTRL);
+    altGr.down();
+    altGr.advance(500);
+    altGr.up(CTRL);
+    altGr.up();
+    expect(altGr.events).toEqual(["start", "end"]);
+
+    // A real Ctrl mid-hold still cancels when Ctrl isn't sent with the key.
+    const plain = setup();
+    plain.down();
+    plain.advance(500);
+    plain.down(CTRL);
+    expect(plain.events).toEqual(["start", "cancel"]);
+  });
+
+  it("opens typing on a quick AltGr double tap", () => {
+    const CTRL = 29;
+    const k = setup();
+    k.hk.setKey(KEY, [CTRL]);
+    for (let i = 0; i < 2; i++) {
+      k.down(CTRL);
+      k.down();
+      k.advance(60);
+      k.up(CTRL);
+      k.up();
+      k.advance(100);
+    }
+    expect(k.events).toEqual(["type"]);
+  });
+
   it("does nothing when turned off", () => {
     const k = setup();
     k.hk.setKey(null);

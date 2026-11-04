@@ -5,7 +5,7 @@ export declare function createHoldKey(options: {
   schedule?: (fn: () => void, ms: number) => unknown;
   cancelTimer?: (id: never) => void;
 }): {
-  setKey(code: number | null): void;
+  setKey(code: number | null, comesWith?: number[]): void;
   keydown(code: number, now: number): void;
   keyup(code: number, now: number): void;
 };

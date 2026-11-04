@@ -74,9 +74,13 @@ const shortcutLabel = (accelerator) => {
   const s = CALL_SHORTCUTS.find((c) => c.accelerator === accelerator);
   return s ? (MAC ? s.mac : s.other) : null;
 };
-/** Keys that can be held to talk (uiohook key codes). */
+/**
+ * Keys that can be held to talk (uiohook key codes). `winWith`: codes Windows
+ * sends with the key. On layouts with AltGr (UK, most of Europe), right Alt
+ * comes with a Left Ctrl (29) on every press and repeat.
+ */
 const HOLD_KEYS = [
-  { id: "right-option", code: 3640, mac: "right ⌥", other: "right Alt" },
+  { id: "right-option", code: 3640, mac: "right ⌥", other: "right Alt", winWith: [29] },
   { id: "right-command", code: 3676, mac: "right ⌘", other: "right Windows key" },
   { id: "right-control", code: 3613, mac: "right ⌃", other: "right Ctrl" },
 ];
@@ -1192,6 +1196,10 @@ const chosenHoldKey = () => {
   const id = readSettings().holdKey ?? DEFAULT_HOLD;
   return HOLD_KEYS.find((k) => k.id === id) ?? null;
 };
+function applyHoldKey() {
+  const key = chosenHoldKey();
+  holdKey.setKey(key?.code ?? null, MAC ? [] : (key?.winWith ?? []));
+}
 /** "right ⌥", or null when it's off or not listening yet. */
 function holdKeyLabel() {
   const key = chosenHoldKey();
@@ -1236,7 +1244,7 @@ function startKeyListener() {
     keyWatch = setInterval(() => !keyListener && startKeyListener(), 15000);
     return;
   }
-  holdKey.setKey(chosenHoldKey()?.code ?? null);
+  applyHoldKey();
   announceHoldKey();
 }
 
@@ -1247,7 +1255,7 @@ function announceHoldKey() {
 
 function chooseHoldKey(id) {
   writeSettings({ holdKey: id });
-  holdKey.setKey(chosenHoldKey()?.code ?? null);
+  applyHoldKey();
   announceHoldKey();
 }
 
