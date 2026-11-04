@@ -155,7 +155,7 @@ export async function jobsWithoutCorrectionByTrust(): Promise<TrustClean[]> {
     .from(jobs)
     .innerJoin(skills, eq(jobs.skillId, skills.id))
     .leftJoin(corrections, and(eq(corrections.jobId, jobs.id), eq(corrections.source, "job")))
-    .where(eq(jobs.status, "approved"));
+    .where(and(eq(jobs.status, "approved"), ne(jobs.origin, "trial")));
   const byTrust = new Map<number, TrustClean>();
   for (const row of rows) {
     const entry = byTrust.get(row.trustLevel) ?? {

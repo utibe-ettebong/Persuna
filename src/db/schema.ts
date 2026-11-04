@@ -44,7 +44,7 @@ export const ruleEvidenceSource = pgEnum("rule_evidence_source", [
   "interview",
   "correction",
 ]);
-export const jobOrigin = pgEnum("job_origin", ["owner", "renter"]);
+export const jobOrigin = pgEnum("job_origin", ["owner", "renter", "trial"]);
 export const jobStatus = pgEnum("job_status", [
   "awaiting_payment",
   "awaiting_approval",
@@ -324,6 +324,8 @@ export interface JobToolPolicy {
   mode: "approve_each" | "preapproved";
   /** Tool names allowed without asking when preapproved. */
   tools: string[];
+  /** When true, every call pauses for approval first — even reads. Trials start here. */
+  dryRun?: boolean;
 }
 
 /**

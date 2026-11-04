@@ -1945,7 +1945,9 @@ export async function pulse(userId: string, input: { clock: Clock; path: string 
             origin: jobs.origin,
           })
           .from(jobs)
-          .where(and(inArray(jobs.skillId, ids), eq(jobs.status, "review"))),
+          .where(
+            and(inArray(jobs.skillId, ids), eq(jobs.status, "review"), ne(jobs.origin, "trial")),
+          ),
         db()
           .select({
             id: schema.evalRuns.id,

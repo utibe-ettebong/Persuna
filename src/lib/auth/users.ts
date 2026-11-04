@@ -1,4 +1,4 @@
-import { count, desc, eq, ilike, or } from "drizzle-orm";
+import { and, count, desc, eq, ilike, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "@/db/client";
 import type { AuthUser } from "@/db/schema";
@@ -123,7 +123,12 @@ export async function userOverview(userId: string): Promise<{
   const tally = (rows: Promise<{ n: number }[]>) => rows.then((found) => found[0]?.n ?? 0);
   const [owned, ordered, posted, calls] = await Promise.all([
     tally(db().select({ n: count() }).from(skills).where(eq(skills.ownerId, userId))),
-    tally(db().select({ n: count() }).from(jobs).where(eq(jobs.requesterUserId, userId))),
+    tally(
+      db()
+        .select({ n: count() })
+        .from(jobs)
+        .where(and(eq(jobs.requesterUserId, userId), ne(jobs.origin, "trial"))),
+    ),
     tally(db().select({ n: count() }).from(projects).where(eq(projects.posterId, userId))),
     tally(db().select({ n: count() }).from(modelUsage).where(eq(modelUsage.userId, userId))),
   ]);

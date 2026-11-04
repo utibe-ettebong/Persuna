@@ -62,6 +62,7 @@ import {
   workAutoOffDue,
   type TurnMode,
 } from "@/lib/persuna/screen-mode";
+import { illustrationOf } from "@/lib/persuna/illustrate";
 import { FRESH_CHECK_MS, shouldRefresh } from "./fresh";
 import { CircleLayer, CircledMark, DrawingLayer, cropPicture, type Area } from "./screen-drawing";
 import {
@@ -1165,11 +1166,13 @@ export function Companion(props: CompanionProps) {
     if (value.appConfirm) setAppConfirm(value.appConfirm);
     if (value.mcpConfirm) setMcpConfirm(value.mcpConfirm);
     if (value.operateConfirm) setOperateConfirm(value.operateConfirm);
+    const illustration = value.drawing ? illustrationOf(value.drawing) : null;
     // Showing something on screen: the island folds up so it doesn't cover it.
-    if (value.point || value.drawing) setPanel(false);
+    // An illustration shows in the chat instead, so the island stays as it is.
+    if (value.point || (value.drawing && !illustration)) setPanel(false);
     if (value.point) showPoint(value.point);
     if (value.clipboard) void doClipboard(value.clipboard);
-    if (value.drawing) {
+    if (value.drawing && !illustration) {
       // Each step of the drawing appears as Persuna gets to it.
       const steps = value.drawing.marks.length + (value.drawing.flow?.nodes.length ?? 0);
       setDrawPace(Math.min(2600, Math.max(700, (reply.content.length * 60) / Math.max(1, steps))));
@@ -1181,7 +1184,9 @@ export function Companion(props: CompanionProps) {
         timedDrawing();
       }
     }
+    // A file asked for wins over an illustration from the same turn.
     if (value.file) setMade(value.file);
+    else if (illustration) setMade(illustration);
     if (value.confirm) {
       setConfirm(value.confirm);
       setConfirmLower(false);

@@ -13,7 +13,7 @@ export interface NoticeFacts {
     skill: string;
     createdAt: Date;
     flags: number;
-    origin: "owner" | "renter";
+    origin: "owner" | "renter" | "trial";
   }[];
   scores: { slug: string; skill: string; runId: string; latest: number; previous: number }[];
   orders: { id: string; skill: string; renter: string; createdAt: Date }[];

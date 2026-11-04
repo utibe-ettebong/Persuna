@@ -187,6 +187,18 @@ export function wantsPicture(text: string): boolean {
   );
 }
 
+/** The user asks for an illustration (a diagram, not a file): it shows in the chat. */
+export function wantsDrawing(text: string): boolean {
+  if (
+    /\b(diagrams?|flow ?charts?|illustrat\w+|sketch\w*|show me how|process maps?)\b/i.test(text)
+  ) {
+    return true;
+  }
+  const draw = /\bdraw\w*\b/i.exec(text);
+  // "Draw up a contract" and "draw on experience" aren't pictures.
+  return Boolean(draw && !/^\s+(up|on|from|upon)\b/i.test(text.slice(draw.index + draw[0].length)));
+}
+
 /**
  * Whether a turn's screenshot has to travel with it. The list of what's on
  * screen is quicker for the model and exact about where things are, so the

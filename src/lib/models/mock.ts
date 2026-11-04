@@ -5,6 +5,7 @@
  * without keys. Its drafts are rough and its scores are plain text
  * similarity: good for building and demoing the flow, not for judging a skill.
  */
+import { wantsDrawing } from "@/lib/persuna/scene";
 import { toneFromMessage } from "@/lib/persuna/tone";
 import { parseWhen } from "@/lib/persuna/when";
 import { tokenize } from "@/lib/skill/retrieve";
@@ -174,7 +175,7 @@ function mockPersunaTurn(user: string): {
       actions: [{ type: "clipboard", op, text: what }],
     };
   }
-  if (/\b(draw|diagram|flow ?chart|show me how)\b/.test(lower)) {
+  if (wantsDrawing(text)) {
     const marks =
       screen
         ?.split("\n")
@@ -195,7 +196,13 @@ function mockPersunaTurn(user: string): {
             direction: "down",
             nodes: [
               { id: "a", label: "Your notes" },
-              { id: "b", label: "Persuna learns your method" },
+              {
+                id: "b",
+                label: "Persuna learns your method",
+                shape: "M25,0 L75,0 L100,50 L75,100 L25,100 L0,50 Z",
+                color: "sky",
+                detail: "Each example teaches one habit: your order, your words, your checks.",
+              },
               { id: "c", label: "Draft in your style" },
             ],
             edges: [

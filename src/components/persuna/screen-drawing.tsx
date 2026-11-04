@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { layoutFlow } from "@/lib/persuna/flow-layout";
+import { FLOW_FILLS, layoutFlow } from "@/lib/persuna/flow-layout";
 import type { Drawing } from "@/lib/persuna/service";
 import type { Flow } from "@/lib/persuna/types";
 import { shownSteps } from "./narration";
@@ -10,6 +10,7 @@ import { shownSteps } from "./narration";
  * Boxes and arrows: the same layout the saved SVG uses. `shown` limits it to
  * the boxes said so far (arrows appear once both ends have); `floating` draws
  * it straight over the screen, with a soft shadow instead of a card behind it.
+ * A box with more to say opens it below on tap (hover shows it anywhere).
  */
 export function FlowDiagram({
   flow,
@@ -26,78 +27,118 @@ export function FlowDiagram({
   const order = flow.nodes.map((n) => n.id);
   const visible = (id: string) => shown === undefined || order.indexOf(id) < shown;
   const scale = maxWidth && l.width > maxWidth ? maxWidth / l.width : 1;
+  const [openId, setOpenId] = useState<string | null>(null);
+  const open = l.nodes.find((n) => n.id === openId && n.detail);
+  const toggle = (id: string) => setOpenId((cur) => (cur === id ? null : id));
   return (
-    <svg
-      role="img"
-      aria-label={flow.nodes.map((n) => n.label).join(", then ")}
-      width={l.width * scale}
-      height={l.height * scale}
-      viewBox={`0 0 ${l.width} ${l.height}`}
-      className="block overflow-visible"
-      style={floating ? { filter: "drop-shadow(0 4px 14px rgba(0,0,0,0.45))" } : undefined}
-    >
-      <defs>
-        <marker
-          id="persuna-arrow"
-          viewBox="0 0 10 10"
-          refX="9"
-          refY="5"
-          markerWidth="7"
-          markerHeight="7"
-          orient="auto-start-reverse"
-        >
-          <path d="M0,0 L10,5 L0,10 z" fill="#b794ff" />
-        </marker>
-      </defs>
-      {l.edges
-        .filter((e) => visible(e.from) && visible(e.to))
-        .map((e) => (
-          <g key={`${e.from}-${e.to}`}>
-            <path
-              d={e.path}
-              fill="none"
-              stroke="#b794ff"
-              strokeWidth={2}
-              markerEnd="url(#persuna-arrow)"
-              className="persuna-draw-line"
-            />
-            {e.label && (
-              <text x={e.lx} y={e.ly} fontSize={11} fill="#cdb8ff">
-                {e.label}
-              </text>
-            )}
-          </g>
-        ))}
-      {l.nodes
-        .filter((n) => visible(n.id))
-        .map((n) => (
-          <g key={n.id} className="persuna-in">
-            <rect
-              x={n.x}
-              y={n.y}
-              width={n.w}
-              height={n.h}
-              rx={14}
-              fill={floating ? "rgba(12,10,18,0.78)" : "#141414"}
-              stroke={floating ? "#b794ff" : "rgba(255,255,255,0.7)"}
-              strokeWidth={1.5}
-            />
-            {n.lines.map((line, i) => (
-              <text
-                key={i}
-                x={n.x + n.w / 2}
-                y={n.y + n.h / 2 - (n.lines.length - 1) * 8 + i * 16}
-                textAnchor="middle"
-                dominantBaseline="middle"
-                fontSize={13}
-                fill="#fff"
+    <>
+      <svg
+        role="img"
+        aria-label={flow.nodes.map((n) => n.label).join(", then ")}
+        width={l.width * scale}
+        height={l.height * scale}
+        viewBox={`0 0 ${l.width} ${l.height}`}
+        className="block overflow-visible"
+        style={floating ? { filter: "drop-shadow(0 4px 14px rgba(0,0,0,0.45))" } : undefined}
+      >
+        <defs>
+          <marker
+            id="persuna-arrow"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="7"
+            markerHeight="7"
+            orient="auto-start-reverse"
+          >
+            <path d="M0,0 L10,5 L0,10 z" fill="#b794ff" />
+          </marker>
+        </defs>
+        {l.edges
+          .filter((e) => visible(e.from) && visible(e.to))
+          .map((e) => (
+            <g key={`${e.from}-${e.to}`}>
+              <path
+                d={e.path}
+                fill="none"
+                stroke="#b794ff"
+                strokeWidth={2}
+                markerEnd="url(#persuna-arrow)"
+                className="persuna-draw-line"
+              />
+              {e.label && (
+                <text x={e.lx} y={e.ly} fontSize={11} fill="#cdb8ff">
+                  {e.label}
+                </text>
+              )}
+            </g>
+          ))}
+        {l.nodes
+          .filter((n) => visible(n.id))
+          .map((n) => {
+            const paint = n.color
+              ? FLOW_FILLS[n.color]
+              : {
+                  fill: floating ? "rgba(12,10,18,0.78)" : "#141414",
+                  stroke: floating ? "#b794ff" : "rgba(255,255,255,0.7)",
+                };
+            const openable = Boolean(n.detail);
+            return (
+              <g
+                key={n.id}
+                className={`persuna-in ${openable ? "pointer-events-auto" : ""}`}
+                onClick={openable ? () => toggle(n.id) : undefined}
+                onKeyDown={openable ? (e) => e.key === "Enter" && toggle(n.id) : undefined}
+                role={openable ? "button" : undefined}
+                tabIndex={openable ? 0 : undefined}
+                aria-label={openable ? `${n.lines.join(" ")}: show more` : undefined}
+                style={openable ? { cursor: "pointer" } : undefined}
               >
-                {line}
-              </text>
-            ))}
-          </g>
-        ))}
-    </svg>
+                {openable && <title>{n.detail}</title>}
+                {n.shape ? (
+                  <path
+                    d={n.shape}
+                    transform={`translate(${n.x},${n.y}) scale(${n.w / 100},${n.h / 100})`}
+                    fill={paint.fill}
+                    stroke={paint.stroke}
+                    strokeWidth={1.5}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                ) : (
+                  <rect
+                    x={n.x}
+                    y={n.y}
+                    width={n.w}
+                    height={n.h}
+                    rx={14}
+                    fill={paint.fill}
+                    stroke={paint.stroke}
+                    strokeWidth={1.5}
+                  />
+                )}
+                {n.lines.map((line, i) => (
+                  <text
+                    key={i}
+                    x={n.x + n.w / 2}
+                    y={n.y + n.h / 2 - (n.lines.length - 1) * 8 + i * 16}
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    fontSize={13}
+                    fill="#fff"
+                  >
+                    {line}
+                  </text>
+                ))}
+              </g>
+            );
+          })}
+      </svg>
+      {open?.detail && (
+        <p className="persuna-in mt-2 rounded-xl bg-white/10 px-3 py-2 text-xs leading-snug text-white">
+          {open.detail}
+        </p>
+      )}
+    </>
   );
 }
 

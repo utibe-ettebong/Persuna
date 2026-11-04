@@ -3,7 +3,7 @@
  * call these, so a run from the terminal and a run from the UI are identical.
  */
 import path from "node:path";
-import { and, asc, count, desc, eq, inArray, max, notInArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, max, ne, notInArray, sql } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import type { Example, SkillVersion } from "@/db/schema";
 import { env } from "@/env";
@@ -690,7 +690,7 @@ export async function skillComposite(skillId: string): Promise<Composite> {
   const approved = await db()
     .select({ id: jobs.id })
     .from(jobs)
-    .where(and(eq(jobs.skillId, skillId), eq(jobs.status, "approved")));
+    .where(and(eq(jobs.skillId, skillId), eq(jobs.status, "approved"), ne(jobs.origin, "trial")));
   const [{ n: corrected }] =
     approved.length === 0
       ? [{ n: 0 }]

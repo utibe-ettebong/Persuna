@@ -11,11 +11,12 @@ import {
 import { ActionForm } from "@/components/action-form";
 import { CompositeLine } from "@/components/market";
 import { ScoreBadge, ScoreTrend } from "@/components/score-trend";
+import { TryItForm } from "@/components/try-it-form";
 import { Badge, Card, PageHeader, SkillTabs } from "@/components/ui";
 import { getUser } from "@/lib/auth/session";
 import { orNotFound } from "@/lib/load";
 import { plural } from "@/lib/plural";
-import { getSkillOverview } from "@/lib/skill/service";
+import { getSkillOverview, trainingPairs } from "@/lib/skill/service";
 import { RULE_CATEGORIES } from "@/lib/skill/types";
 
 export const dynamic = "force-dynamic";
@@ -59,6 +60,42 @@ async function TeamCard({
           <input type="hidden" name="intent" value={skill.teamVisible ? "hide" : "show"} />
         </ActionForm>
       </Card>
+    </div>
+  );
+}
+
+/** The owner tests any version end to end. Trials never touch trust or stats. */
+async function TryItCard({
+  skill,
+  versions,
+}: {
+  skill: {
+    id: string;
+    ownerId: string | null;
+    currentVersionId: string | null;
+    publishedVersionId: string | null;
+  };
+  versions: { id: string; version: number; source: string }[];
+}) {
+  const user = await getUser();
+  if (!user || skill.ownerId !== user.id || versions.length === 0) return null;
+  const pairs = await trainingPairs(skill.id).catch(() => []);
+  return (
+    <div id="try-it">
+      <h2 className="mb-3 font-display text-lg font-medium tracking-[-0.02em]">Try it</h2>
+      <p className="mb-3 text-sm text-muted">
+        Run any version on real input, with your own apps when the skill has tools. Trials never
+        count toward trust, earnings, or stats.
+      </p>
+      <TryItForm
+        skillId={skill.id}
+        versions={versions.map((v) => ({
+          ...v,
+          isCurrent: v.id === skill.currentVersionId,
+          isPublished: v.id === skill.publishedVersionId,
+        }))}
+        samples={pairs.slice(0, 6).map((p) => p.input)}
+      />
     </div>
   );
 }
@@ -308,6 +345,7 @@ export default async function SkillPage({ params, searchParams }: Params) {
               renters always use the published version.
             </p>
           </div>
+          <TryItCard skill={skill} versions={versions} />
         </aside>
       </section>
 

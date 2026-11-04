@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { flowSvg, layoutFlow, ranks, wrapLabel } from "./flow-layout";
-import type { Flow } from "./types";
+import { FLOW_FILLS, flowSvg, layoutFlow, ranks, wrapLabel } from "./flow-layout";
+import { flowSchema, type Flow } from "./types";
 
 const flow = (edges: [string, string][], direction: "down" | "right" = "down"): Flow => ({
   direction,
@@ -75,5 +75,76 @@ describe("flowSvg", () => {
     const svg = flowSvg({ direction: "down", nodes: [{ id: "a", label: "<b>&" }], edges: [] }, "T");
     expect(svg).toContain("&lt;b&gt;&amp;");
     expect(svg).not.toContain("<b>");
+  });
+
+  it("draws shaped, colored boxes with hover text", () => {
+    const svg = flowSvg(
+      {
+        direction: "down",
+        nodes: [
+          {
+            id: "a",
+            label: "Leaf",
+            shape: "M50,0 L100,100 L0,100 Z",
+            color: "leaf",
+            detail: "Grown, not built.",
+          },
+        ],
+        edges: [],
+      },
+      null,
+    );
+    expect(svg).toContain('d="M50,0 L100,100 L0,100 Z"');
+    expect(svg).toContain("scale(1.72,0.52)");
+    expect(svg).toContain(`fill="${FLOW_FILLS.leaf.fill}"`);
+    expect(svg).toContain("<title>Grown, not built.</title>");
+  });
+
+  it("keeps plain boxes as they were", () => {
+    const svg = flowSvg({ direction: "down", nodes: [{ id: "a", label: "Box" }], edges: [] });
+    expect(svg).toContain("<rect");
+    expect(svg).toContain('stroke-opacity="0.7"');
+    expect(svg).not.toContain("<title>");
+  });
+});
+
+describe("layoutFlow boxes", () => {
+  it("carries shapes, colors and details to the renderer", () => {
+    const l = layoutFlow({
+      direction: "down",
+      nodes: [
+        {
+          id: "a",
+          label: "A",
+          shape: "M0,0 L100,0 L100,100 L0,100 Z",
+          color: "gold",
+          detail: "More.",
+        },
+      ],
+      edges: [],
+    });
+    expect(l.nodes[0]).toMatchObject({
+      shape: "M0,0 L100,0 L100,100 L0,100 Z",
+      color: "gold",
+      detail: "More.",
+    });
+  });
+});
+
+describe("flowSchema boxes", () => {
+  const node = (over: object) => ({ id: "a", label: "A", ...over });
+  const parse = (over: object) =>
+    flowSchema.safeParse({ direction: "down", nodes: [node(over)], edges: [] });
+
+  it("accepts plain and dressed boxes", () => {
+    expect(parse({}).success).toBe(true);
+    expect(parse({ shape: "M0,0 L10,10", color: "sky", detail: "More." }).success).toBe(true);
+  });
+
+  it("refuses markup in shapes, long details and unknown colors", () => {
+    expect(parse({ shape: "M0,0 <script>" }).success).toBe(false);
+    expect(parse({ shape: "x".repeat(301) }).success).toBe(false);
+    expect(parse({ detail: "x".repeat(141) }).success).toBe(false);
+    expect(parse({ color: "purple" }).success).toBe(false);
   });
 });

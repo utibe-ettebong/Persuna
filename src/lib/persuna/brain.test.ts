@@ -245,6 +245,18 @@ describe("persunaTurn assistant actions with the offline mock", () => {
     const stop = await persunaTurn(client, state(), [], "Done");
     expect(stop.actions).toEqual([{ type: "learn_episode", op: "stop", skill: null }]);
   });
+
+  it("draws a diagram with no marks when nothing is on screen", async () => {
+    const reply = await persunaTurn(client, state(), [], "Illustrate how refunds work");
+    expect(reply.actions).toHaveLength(1);
+    const [draw] = reply.actions;
+    expect(draw.type).toBe("draw");
+    if (draw.type === "draw") {
+      expect(draw.marks ?? []).toEqual([]);
+      expect(draw.flow?.nodes.length).toBeGreaterThan(0);
+      expect(draw.flow?.nodes[1]).toMatchObject({ color: "sky", detail: expect.any(String) });
+    }
+  });
 });
 
 describe("open_page with the offline mock", () => {

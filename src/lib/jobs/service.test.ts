@@ -14,7 +14,14 @@ import { accessTokenFor } from "@/lib/connections/service";
 import { listMcpServers, mcpServerClient } from "@/lib/mcp/service";
 import type { ChatMessage, ModelClient } from "@/lib/models/gateway";
 import { trainingPairs } from "@/lib/skill/service";
-import { decideJobApproval, runJobTools } from "@/lib/jobs/service";
+import {
+  decideJobApproval,
+  openJob,
+  openTrial,
+  reviewJob,
+  runJobTools,
+  trustRecord,
+} from "@/lib/jobs/service";
 import { linkJobConnection as linkConnection, setJobToolPolicy as setPolicy } from "./tools";
 
 process.env.DATABASE_URL ??= "postgres://localhost:5432/persuna_test";
@@ -68,6 +75,8 @@ interface StubState {
   rounds: Row[];
   appConns: Row[];
   mcpRows: Row[];
+  trustRows: Row[];
+  jobInserts: Row[];
 }
 
 const tableKey = (table: unknown): keyof StubState | null => {
@@ -98,6 +107,7 @@ function stubDb(state: StubState) {
                 where: async () => [{ job: state.job, skill: state.skill, version: state.version }],
               }),
             }),
+            where: async () => state.trustRows,
           };
         }
         const key = tableKey(table);
@@ -118,6 +128,7 @@ function stubDb(state: StubState) {
         if (key === "approvals" || key === "links") {
           (state[key] as Row[]).push(row);
         }
+        if (table === jobs) state.jobInserts.push(vals);
         return {
           returning: async () => [{ id: row.id }],
           onConflictDoNothing: async () => [],
@@ -181,6 +192,8 @@ function baseState(overrides: Partial<StubState> = {}): StubState {
     rounds: [],
     appConns: [],
     mcpRows: [],
+    trustRows: [],
+    jobInserts: [],
     ...overrides,
   };
 }
@@ -246,6 +259,98 @@ beforeEach(() => {
   vi.mocked(accessTokenFor).mockResolvedValue("tok-renter");
   vi.mocked(trainingPairs).mockResolvedValue([]);
   vi.mocked(listMcpServers).mockResolvedValue([]);
+});
+
+describe("trustRecord", () => {
+  const clean = {
+    origin: "renter",
+    status: "approved",
+    editSize: "none",
+    approvedBy: "owner",
+    trustLevel: 0,
+    complainedAt: null,
+  };
+  it("ignores trial runs, even reviewed ones on the published version", async () => {
+    const state = baseState({
+      skill: { id: "skill-1", publishedVersionId: "v-1" },
+      trustRows: [
+        clean,
+        { ...clean, origin: "trial" },
+        { ...clean, origin: "trial" },
+        { ...clean, status: "rejected", editSize: "rejected" },
+      ],
+    });
+    stubDb(state);
+    const record = await trustRecord("skill-1");
+    expect(record.reviewed).toBe(2);
+    expect(record.clean).toBe(1);
+    expect(record.rejected).toBe(1);
+  });
+
+  it("is empty without a published version", async () => {
+    stubDb(baseState({ skill: { id: "skill-1", publishedVersionId: null }, trustRows: [{}] }));
+    expect(await trustRecord("skill-1")).toMatchObject({ reviewed: 0 });
+  });
+});
+
+describe("openJob", () => {
+  it("opens a trial on a chosen version", async () => {
+    const state = baseState({
+      skill: { id: "skill-1", name: "Minutes", publishedVersionId: "v-9" },
+      version: { id: "v-2" },
+    });
+    stubDb(state);
+    await openJob({
+      skillId: "skill-1",
+      origin: "trial",
+      requesterName: "Owner",
+      requesterUserId: "owner-1",
+      input: "Try the draft version.",
+      versionId: "v-2",
+    });
+    expect(state.jobInserts).toHaveLength(1);
+    expect(state.jobInserts[0]).toMatchObject({
+      skillId: "skill-1",
+      skillVersionId: "v-2",
+      origin: "trial",
+    });
+  });
+
+  it("refuses a version from another skill", async () => {
+    stubDb(baseState({ skill: { id: "skill-1", name: "Minutes" }, version: undefined }));
+    await expect(
+      openJob({
+        skillId: "skill-1",
+        origin: "trial",
+        requesterName: "Owner",
+        input: "Try it.",
+        versionId: "v-x",
+      }),
+    ).rejects.toThrow("isn't part of this skill");
+  });
+});
+
+describe("openTrial", () => {
+  it("opens a dry trial of a chosen version", async () => {
+    const state = baseState({
+      skill: { id: "skill-1", name: "Minutes", publishedVersionId: "v-9" },
+      version: { id: "v-2" },
+      job: { id: "job-1", requesterUserId: "owner-1", draft: "" },
+    });
+    stubDb(state);
+    await openTrial(
+      { id: "owner-1", name: "Owner" },
+      { skillId: "skill-1", versionId: "v-2", input: "Try the draft.", dryRun: true },
+      "user:owner@example.com",
+    );
+    expect(state.jobInserts[0]).toMatchObject({ origin: "trial", skillVersionId: "v-2" });
+    expect(state.job.toolPolicy).toEqual({ mode: "approve_each", tools: [], dryRun: true });
+  });
+
+  it("locks trials out of review", async () => {
+    stubDb(baseState({ job: { id: "job-1", origin: "trial", status: "review" } }));
+    await expect(reviewJob("job-1", "approve")).rejects.toThrow("aren't reviewed");
+  });
 });
 
 describe("runJobTools", () => {
@@ -516,6 +621,23 @@ describe("links and policy", () => {
       expect.objectContaining({ action: "job.connection_linked" }),
     );
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: "job.tool_policy" }));
+  });
+
+  it("keeps dry runs dry when the policy is edited", async () => {
+    const state = baseState();
+    state.job.toolPolicy = { mode: "approve_each", tools: [], dryRun: true };
+    stubDb(state);
+    await setPolicy(
+      "job-1",
+      "renter-1",
+      { mode: "preapproved", tools: ["notion_create_page"] },
+      "user:ren@example.com",
+    );
+    expect(state.job.toolPolicy).toEqual({
+      mode: "preapproved",
+      tools: ["notion_create_page"],
+      dryRun: true,
+    });
   });
 
   it("refuses unowned connections, strangers, and started jobs", async () => {

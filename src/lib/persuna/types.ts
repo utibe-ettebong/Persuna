@@ -7,12 +7,28 @@ const interviewKey = z.enum(
   INTERVIEW_QUESTIONS.map((q) => q.key) as [InterviewKey, ...InterviewKey[]],
 );
 
-/** A small diagram: boxes and the arrows between them. */
+/** Which palette color fills a box; the fills live with the layout, so both renderers share them. */
+export const flowColorToken = z.enum(["ink", "berry", "leaf", "gold", "sky", "coral"]);
+export type FlowColor = z.infer<typeof flowColorToken>;
+
+/** Only path commands, numbers and separators: a shape can draw, never inject. */
+const flowShapeChars = /^[MmLlHhVvCcSsQqTtAaZz0-9\s,.\-]+$/;
+
+/** A small diagram: boxes (optionally shaped and colored, with more on tap) and the arrows between them. */
 export const flowSchema = z.object({
   direction: z.enum(["down", "right"]).default("down"),
   nodes: z
     .array(
-      z.object({ id: z.string().trim().min(1).max(20), label: z.string().trim().min(1).max(60) }),
+      z.object({
+        id: z.string().trim().min(1).max(20),
+        label: z.string().trim().min(1).max(60),
+        /** An outline in a 0-100 box, scaled into the box; null is a rounded box. */
+        shape: z.string().trim().min(1).max(300).regex(flowShapeChars).nullish(),
+        /** Which palette color fills the box; null is ink. */
+        color: flowColorToken.nullish(),
+        /** A sentence shown when the box is opened. */
+        detail: z.string().trim().min(1).max(140).nullish(),
+      }),
     )
     .min(1)
     .max(14),

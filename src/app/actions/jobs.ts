@@ -12,6 +12,7 @@ import {
   draftJob,
   jobNeedsSetup,
   openJob,
+  openTrial,
   reviewJob,
   setTrustLevel,
   startJob,
@@ -45,6 +46,36 @@ export async function createJobAction(_: ActionState, form: FormData): Promise<A
       await draftJob(createModelClient(user), job.id);
     }
     revalidatePath("/jobs");
+    return `/jobs/${job.id}`;
+  });
+}
+
+const trialForm = z.object({
+  skillId: uuidField,
+  versionId: uuidField,
+  inputText: z.string().max(20000),
+  dryRun: z.enum(["on"]).optional(),
+});
+
+export async function openTrialAction(_: ActionState, form: FormData): Promise<ActionState> {
+  return attempt(async () => {
+    const { skillId, versionId, inputText, dryRun } = trialForm.parse(Object.fromEntries(form));
+    const user = await requireUser();
+    await ownedSkillById(user, skillId);
+    if (!inputText.trim()) {
+      throw new Error("Give the trial something to work on, or pick a sample below.");
+    }
+    const job = await openTrial(
+      user,
+      { skillId, versionId, input: inputText, dryRun: dryRun === "on" },
+      actorOf(user),
+    );
+    // Tool skills wait for you to link your apps on the trial page.
+    if (!(await jobNeedsSetup(job.id))) {
+      await draftJob(createModelClient(user), job.id);
+    }
+    revalidatePath("/jobs");
+    revalidatePath("/dashboard");
     return `/jobs/${job.id}`;
   });
 }

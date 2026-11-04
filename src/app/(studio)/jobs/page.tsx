@@ -29,9 +29,11 @@ export default async function JobsPage() {
     listOrdersFor(user.id),
   ]);
   const publishable = skills.filter((s) => s.publishedVersionId);
-  const queue = jobs.filter((j) => j.job.status === "review");
-  const done = jobs.filter((j) => j.job.status !== "review");
-  const stats = approvalStats(jobs.map((j) => j.job));
+  const real = jobs.filter((j) => j.job.origin !== "trial");
+  const trials = jobs.filter((j) => j.job.origin === "trial");
+  const queue = real.filter((j) => j.job.status === "review");
+  const done = real.filter((j) => j.job.status !== "review");
+  const stats = approvalStats(real.map((j) => j.job));
 
   return (
     <div className="space-y-8">
@@ -108,6 +110,7 @@ export default async function JobsPage() {
         empty="Nothing waiting."
       />
       <JobList title="Reviewed" rows={done} empty="No reviewed jobs yet." />
+      {trials.length > 0 && <JobList title={`Trials (${trials.length})`} rows={trials} empty="" />}
       <OrderList orders={orders} />
     </div>
   );
@@ -180,7 +183,12 @@ function JobList({
                       <span className="font-medium">{skill.name}</span>{" "}
                       <span className="text-muted">
                         v{version.version} ·{" "}
-                        {job.origin === "renter" ? `rented by ${job.requesterName}` : "your job"} ·{" "}
+                        {job.origin === "renter"
+                          ? `rented by ${job.requesterName}`
+                          : job.origin === "trial"
+                            ? "trial run"
+                            : "your job"}{" "}
+                        ·{" "}
                         {job.createdAt.toLocaleString("en-GB", {
                           dateStyle: "medium",
                           timeStyle: "short",
@@ -188,6 +196,7 @@ function JobList({
                       </span>
                     </span>
                     <span className="flex gap-1.5">
+                      {job.origin === "trial" && <Badge>Trial</Badge>}
                       {job.flags.length > 0 && job.status === "review" && (
                         <Badge tone="warn">{job.flags.length} flagged</Badge>
                       )}

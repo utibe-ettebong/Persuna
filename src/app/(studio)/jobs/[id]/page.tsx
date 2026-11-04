@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { reviewJobAction, teachFromJobAction } from "@/app/actions/jobs";
 import { ActionForm } from "@/components/action-form";
 import { JobApprovals, JobToolSetup } from "@/components/job-tools";
@@ -28,6 +29,8 @@ export default async function JobPage({ params }: Params) {
   const edited = job.status === "approved" && job.editSize !== "none";
   const rounds = await jobRoundsFor(job.id);
   const lastRound = rounds.at(-1);
+  const isTrial = job.origin === "trial";
+  const trialPublished = job.skillVersionId === skill.publishedVersionId;
   // Setup and approvals show only when you are the requester (your own jobs);
   // a renter's links and approvals stay on their order page.
   const [setup, approvals, apps, servers] = await Promise.all([
@@ -44,9 +47,14 @@ export default async function JobPage({ params }: Params) {
         title={skill.name}
         description={
           <>
-            v{version.version} ·{" "}
-            {job.origin === "renter" ? `Rented by ${job.requesterName}` : "Your job"} · deleted on{" "}
-            {job.expiresAt.toLocaleDateString("en-GB", { dateStyle: "medium" })}
+            v{version.version}
+            {isTrial && !trialPublished ? " (unpublished)" : ""} ·{" "}
+            {job.origin === "renter"
+              ? `Rented by ${job.requesterName}`
+              : isTrial
+                ? "Your trial run"
+                : "Your job"}{" "}
+            · deleted on {job.expiresAt.toLocaleDateString("en-GB", { dateStyle: "medium" })}
           </>
         }
       >
@@ -74,13 +82,15 @@ export default async function JobPage({ params }: Params) {
       </PageHeader>
 
       <div className="flex flex-wrap gap-2">
+        {isTrial && <Badge>Trial</Badge>}
+        {isTrial && job.toolPolicy?.dryRun !== false && <Badge>dry run: every call asks</Badge>}
         {job.status === "awaiting_payment" && <Badge>waiting for the renter&apos;s payment</Badge>}
         {job.status === "awaiting_approval" && (
           <Badge tone="accent">
             {job.origin === "renter" ? "waiting for the renter's approval" : "needs your approval"}
           </Badge>
         )}
-        {job.status === "review" && <Badge tone="accent">needs your review</Badge>}
+        {job.status === "review" && !isTrial && <Badge tone="accent">needs your review</Badge>}
         {job.approvedBy === "auto" && <Badge>auto-approved at trust level {job.trustLevel}</Badge>}
         {job.ownerReviewRequired && <Badge tone="accent">renter paid for your review</Badge>}
         {job.complaint && <Badge tone="danger">renter reported a problem</Badge>}
@@ -172,7 +182,25 @@ export default async function JobPage({ params }: Params) {
           <Prose>{job.input}</Prose>
         </Card>
 
-        {job.status === "review" ? (
+        {isTrial && job.status === "review" && job.draft ? (
+          <Card className="p-4">
+            <h2 className="mb-2 label-mono text-muted">Trial result</h2>
+            <Prose>{job.draft}</Prose>
+            <p className="mt-3 text-sm text-muted">
+              Trials never count toward trust, earnings, or stats.{" "}
+              <Link href={`/skills/${skill.slug}#try-it`} className="underline">
+                Run another trial
+              </Link>
+            </p>
+          </Card>
+        ) : isTrial && !job.draft ? (
+          <Card className="p-4">
+            <h2 className="mb-2 label-mono text-muted">Trial waiting to run</h2>
+            <p className="text-sm text-muted">
+              Link your apps below, then start the trial. Each tool call asks first.
+            </p>
+          </Card>
+        ) : job.status === "review" ? (
           <Card className="p-4">
             <ActionForm
               action={reviewJobAction}

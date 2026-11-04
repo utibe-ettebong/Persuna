@@ -3,7 +3,7 @@
  * that own them: what needs you now, money earned and held, your skills,
  * projects (as client and seller), orders you placed, and your to-dos.
  */
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
 import { db, schema } from "@/db/client";
 import { env } from "@/env";
 import { earnings } from "@/lib/market/service";
@@ -39,7 +39,13 @@ export async function dashboard(userId: string, now = new Date()) {
               createdAt: jobs.createdAt,
             })
             .from(jobs)
-            .where(and(inArray(jobs.skillId, skillIds), eq(jobs.status, "review")))
+            .where(
+              and(
+                inArray(jobs.skillId, skillIds),
+                eq(jobs.status, "review"),
+                ne(jobs.origin, "trial"),
+              ),
+            )
             .orderBy(asc(jobs.createdAt))
         : Promise.resolve([]),
       skillIds.length
