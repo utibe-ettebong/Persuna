@@ -2936,11 +2936,12 @@ export function Companion(props: CompanionProps) {
           </div>
         </div>
       )}
-      {askLook && (
+      {/* The island draws its own copy of this card, so only the page shows this one. */}
+      {askLook && !props.overlay && (
         <div className={`persuna-in space-y-2 rounded-[22px] p-4 text-sm ${card}`}>
           <p>
-            <strong>Take one look at {askLook}?</strong> Just this turn — I won&apos;t keep
-            watching, and I never keep the screenshot.
+            <strong>Take one look at your screen?</strong> {askLook} Just this turn — I won&apos;t
+            keep watching, and I never keep the screenshot.
           </p>
           <div className="flex gap-2">
             <button
@@ -3019,6 +3020,7 @@ export function Companion(props: CompanionProps) {
         Boolean(appConfirm) ||
         Boolean(mcpConfirm) ||
         Boolean(made && !props.overlay) ||
+        Boolean(askLook && !props.overlay) ||
         Boolean(switchOffer && busy === "idle") ||
         Boolean(watchNote && !watching))) ||
     Boolean(latestJob);
@@ -3722,8 +3724,8 @@ export function Companion(props: CompanionProps) {
                 className={`persuna-in space-y-2 rounded-[22px] p-4 text-[13px] leading-snug ${ISLAND_CARD}`}
               >
                 <p>
-                  <strong>Take one look at {askLook}?</strong> Just this turn — I won&apos;t keep
-                  watching, and I never keep the screenshot.
+                  <strong>Take one look at your screen?</strong> {askLook} Just this turn — I
+                  won&apos;t keep watching, and I never keep the screenshot.
                 </p>
                 <div className="flex gap-2">
                   <button
