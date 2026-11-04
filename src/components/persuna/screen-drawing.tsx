@@ -215,7 +215,25 @@ export function DrawingLayer({
               height: m.spot.h + 10,
             }}
           >
-            <span className="absolute inset-0 rounded-xl ring-[2.5px] ring-[#b794ff] shadow-[0_0_24px_4px_rgba(167,123,255,0.4)]" />
+            {m.shape === "circle" ? (
+              <svg
+                className="absolute inset-0 h-full w-full"
+                aria-hidden
+                style={{ filter: "drop-shadow(0 0 10px rgba(167,123,255,0.55))" }}
+              >
+                <ellipse
+                  cx="50%"
+                  cy="50%"
+                  rx="50%"
+                  ry="50%"
+                  fill="none"
+                  stroke="#b794ff"
+                  strokeWidth={2.5}
+                />
+              </svg>
+            ) : (
+              <span className="absolute inset-0 rounded-xl ring-[2.5px] ring-[#b794ff] shadow-[0_0_24px_4px_rgba(167,123,255,0.4)]" />
+            )}
             <span className="absolute -left-3 -top-3 grid h-6 w-6 place-items-center rounded-full bg-black text-[11px] font-semibold text-white ring-2 ring-[#b794ff]">
               {m.n}
             </span>
@@ -287,6 +305,72 @@ export function onScreenSpot(spot: Area, viewport: { w: number; h: number }): bo
   const cx = spot.x + spot.w / 2;
   const cy = spot.y + spot.h / 2;
   return cx >= 0 && cy >= 0 && cx <= viewport.w && cy <= viewport.h;
+}
+
+/** At most this many thumbnails ride with an explanation. */
+const MAX_SHOTS = 4;
+
+/**
+ * Where a screen area sits in the look's picture. A circled look's picture is
+ * already cropped to the circle, so the area is measured from the circle and
+ * the picture spans its width; an area outside the circle isn't in it at all.
+ */
+export function shotIn(
+  area: Area,
+  screenWidth: number,
+  crop: Area | null,
+): { area: Area; width: number } | null {
+  if (!crop) return { area, width: screenWidth };
+  const inside =
+    area.x < crop.x + crop.w &&
+    area.x + area.w > crop.x &&
+    area.y < crop.y + crop.h &&
+    area.y + area.h > crop.y;
+  if (!inside) return null;
+  return { area: { ...area, x: area.x - crop.x, y: area.y - crop.y }, width: crop.w };
+}
+
+/**
+ * What an explanation shows pictures of: one area per mark, then the pointed
+ * thing, at most a few. The pictures themselves are cropped from the look's
+ * screenshot on the device, so they never travel anywhere. Pure, so tested.
+ */
+export function shotAreas(
+  drawing: { marks: { n: number; note: string; spot: Area }[] } | null,
+  point: (Area & { label: string }) | null,
+  max = MAX_SHOTS,
+): { n: number; note: string; area: Area }[] {
+  const shots = (drawing?.marks ?? []).map((m) => ({ n: m.n, note: m.note, area: m.spot }));
+  if (point) {
+    const { x, y, w, h } = point;
+    shots.push({ n: shots.length + 1, note: point.label, area: { x, y, w, h } });
+  }
+  return shots.slice(0, max);
+}
+
+/** The explanation's pictures: what each numbered note (or point) shows. */
+export function ShotStrip({ shots }: { shots: { n: number; note: string; src: string }[] }) {
+  if (!shots.length) return null;
+  return (
+    <div className="flex gap-2 overflow-x-auto pb-1" aria-label="What the explanation shows">
+      {shots.map((s) => (
+        <figure key={s.n} className="relative w-24 shrink-0">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={s.src}
+            alt={s.note}
+            className="h-14 w-24 rounded-lg object-cover ring-1 ring-white/20"
+          />
+          <span className="absolute -left-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full bg-black text-[10px] font-semibold text-white ring-2 ring-[#b794ff]">
+            {s.n}
+          </span>
+          <figcaption className="mt-1 line-clamp-2 text-[10px] leading-snug text-white/70">
+            {s.note}
+          </figcaption>
+        </figure>
+      ))}
+    </div>
+  );
 }
 
 export interface CirclePick {

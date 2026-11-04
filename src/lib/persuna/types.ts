@@ -151,6 +151,8 @@ export const persunaAction = z.discriminatedUnion("type", [
           /** Something visual that isn't listed, found in the picture instead. */
           thing: z.string().trim().max(80).nullish(),
           note: z.string().trim().min(1).max(120),
+          /** Ring a round thing (icon, avatar, badge) instead of boxing it. */
+          shape: z.enum(["box", "circle"]).nullish(),
         }),
       )
       .max(8)

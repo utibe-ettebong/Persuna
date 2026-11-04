@@ -15,6 +15,8 @@ const SCREENISH = new RegExp(
     `(this|that) (?:\\w+ ){0,2}(${SCREEN_WORDS})\\b`,
     `(${SCREEN_WORDS}) (on|in) (my|the|this)`,
     "on (my|the) screen\\b",
+    "what (can|do) you see\\b",
+    "can you see (my|the|this|that|it)\\b",
     "show me\\b",
     "look at (this|that|the|my)\\b",
     "read (this|that|it|the)\\b",

@@ -506,10 +506,10 @@ export interface SpeechQueue {
 
 /**
  * Speaks sentences as they arrive over the stream: the first is fetched as
- * soon as it's written, each next one while the previous plays, so streamed
- * replies sound continuous. Falls back to the browser's voice exactly like
- * {@link speak} when the cloud voice is off or fails. Stopped by
- * {@link stopSpeaking}, like anything being said.
+ * soon as it's written, and whatever else has arrived while it plays joins
+ * the next fetch, so one reply needs few requests and sounds continuous.
+ * Falls back to the browser's voice exactly like {@link speak} when the cloud
+ * voice is off or fails. Stopped by {@link stopSpeaking}, like anything said.
  */
 export function createSpeechQueue(
   handlers: SpeakHandlers,
@@ -553,9 +553,10 @@ export function createSpeechQueue(
         }
         return;
       }
-      let current = await take();
-      if (current === null || mine !== generation) return;
-      let res = await fetchAudio(current);
+      const first = await take();
+      if (first === null || mine !== generation) return;
+      let current = [first];
+      let res = await fetchAudio(current.join(" "));
       for (;;) {
         if (mine !== generation) {
           void res?.body?.cancel();
@@ -563,33 +564,48 @@ export function createSpeechQueue(
         }
         if (!res) {
           // The cloud voice failed: the rest goes in the browser's voice.
-          for (let text: string | null = current; text !== null; text = await take()) {
+          for (const text of current) {
+            if (mine !== generation) return;
+            await speakIn([text], handlers, mine);
+          }
+          for (let text = await take(); text !== null; text = await take()) {
             if (mine !== generation) return;
             await speakIn([text], handlers, mine);
           }
           return;
         }
         const following = take();
-        handlers.onSpoken?.(current);
+        for (const text of current) handlers.onSpoken?.(text);
         const played = playAudio(res, handlers.onLevel, mine);
         const nextText = await following;
-        const nextFetch = nextText === null ? null : fetchAudio(nextText);
+        // Sentences that arrived while this chunk plays join the next fetch.
+        let next: string[] | null = null;
+        if (nextText !== null) {
+          next = [nextText];
+          let len = nextText.length;
+          while (pending.length > 0 && len + 1 + pending[0].length <= CLOUD_CHUNK_CHARS) {
+            const text = pending.shift()!;
+            next.push(text);
+            len += 1 + text.length;
+          }
+        }
+        const nextFetch = next === null ? null : fetchAudio(next.join(" "));
         if (!(await played)) {
           // Playback failed: current and everything after it in the browser's voice.
-          const rest = nextText === null ? [] : [nextText];
+          const rest = next === null ? [] : [...next];
           for (;;) {
             const text = await take();
             if (text === null) break;
             rest.push(text);
           }
-          await speakIn([current, ...rest], handlers, mine);
+          await speakIn([...current, ...rest], handlers, mine);
           return;
         }
-        if (nextText === null || mine !== generation) {
+        if (next === null || mine !== generation) {
           void nextFetch?.then((r) => r?.body?.cancel());
           return;
         }
-        current = nextText;
+        current = next;
         res = await nextFetch;
       }
     } finally {

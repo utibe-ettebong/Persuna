@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   entryAt,
   parseSamBox,
+  pictureForTurn,
   pictureNeeded,
   samSpot,
   sceneEntries,
@@ -76,6 +77,8 @@ describe("the screen as a list", () => {
       "What's on my screen right now?",
       "What am I looking at?",
       "What do you see?",
+      "What can you see?",
+      "Can you see my screen?",
       "Describe my screen",
       "Summarize this page",
     ]) {
@@ -86,6 +89,8 @@ describe("the screen as a list", () => {
       "What's next on my list?",
       "Explain this form",
       "Reply to this email",
+      "What can you do?",
+      "Can you see why this fails?",
     ]) {
       expect(wantsPicture(text), text).toBe(false);
     }
@@ -220,6 +225,27 @@ describe("pictureNeeded", () => {
     expect(pictureNeeded({ scene: null })).toBe(true);
     expect(pictureNeeded({ scene: rich, circled: true })).toBe(true);
     expect(pictureNeeded({ scene: rich }, "what colour is this logo?")).toBe(true);
+  });
+
+  it("takes the picture with the first request on a spoken look, holds it back otherwise", () => {
+    const turn = (over: object) =>
+      pictureForTurn({
+        sight: { scene: rich },
+        image: true,
+        saidFirst: false,
+        spoken: false,
+        typed: "what's next on my list?",
+        mode: "talk",
+        ...over,
+      });
+    // A voice question about the screen: asking afterwards means dead air mid-answer.
+    expect(turn({ spoken: true, typed: null, mode: "look" })).toBe(true);
+    // Anywhere else, the held-back picture stays held back.
+    expect(turn({ spoken: true, typed: null, mode: "work" })).toBe(false);
+    expect(turn({})).toBe(false);
+    expect(turn({ typed: "what colour is this logo?" })).toBe(true);
+    expect(turn({ saidFirst: true })).toBe(true);
+    expect(turn({ image: false, spoken: true, mode: "look" })).toBe(false);
   });
 });
 

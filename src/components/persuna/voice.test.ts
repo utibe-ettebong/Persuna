@@ -127,6 +127,29 @@ describe("createSpeechQueue", () => {
     expect(t.played).toEqual(["One.", "Two."]);
   });
 
+  it("says sentences that arrive mid-playback in one request, without gaps", async () => {
+    const t = script();
+    t.holdPlay();
+    const queue = createSpeechQueue(t.handlers, t.deps);
+    queue.push("One.");
+    for (let i = 0; i < 100 && t.played.length < 1; i++) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    queue.push("Two.");
+    queue.push("Three.");
+    const finished = queue.finish();
+    for (let i = 0; i < 100 && t.fetched.length < 2; i++) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    // Still playing "One.", and "Two." plus "Three." go as a single fetch.
+    expect(t.fetched).toEqual(["One.", "Two. Three."]);
+    expect(t.played).toEqual(["One."]);
+    t.release();
+    await finished;
+    expect(t.played).toEqual(["One.", "Two. Three."]);
+    expect(t.spoken).toEqual(["One.", "Two.", "Three."]);
+  });
+
   it("says the rest in the browser's voice when the cloud fails", async () => {
     const t = script();
     t.fail("fetch");
