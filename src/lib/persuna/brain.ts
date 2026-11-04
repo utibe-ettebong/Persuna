@@ -10,6 +10,7 @@ import {
   persunaObserveMessages,
   persunaWorkMessages,
 } from "@/lib/skill/prompts";
+import { stepsAsFlow } from "./illustrate";
 import { entryAt, sceneEntries, sceneForModel, spotOf, type Scene } from "./scene";
 import { createSentenceSplitter, splitSentences } from "./sentences";
 import { createTurnSplitter, type TurnEvent } from "./stream-protocol";
@@ -299,15 +300,20 @@ export function tidyReply(
     }
     if (action.type === "look_closer") return sight?.scene && !sight.image ? [action] : [];
     if (action.type === "draw") {
-      // Notes only on things that are on screen, by id or by name; a drawing
-      // with nothing left is dropped.
-      const marks = (action.marks ?? []).flatMap((m) => {
-        if (!sight?.scene) return [];
-        if (spotOf(sight.scene, m.item)) return [m];
-        const named = entryNamed(sight.scene, m.item);
-        return named ? [{ ...m, item: named }] : [];
+      // Notes on things that are on screen, by id or by name, or on something
+      // visual the picture can find. With nothing to pin to, the steps still
+      // draw as a diagram; only a drawing with no steps at all is dropped.
+      const asked = action.marks ?? [];
+      const marks = asked.flatMap((m) => {
+        if (sight?.scene && m.item) {
+          if (spotOf(sight.scene, m.item)) return [m];
+          const named = entryNamed(sight.scene, m.item);
+          if (named) return [{ ...m, item: named }];
+        }
+        return m.thing && sight?.scene && sight.image ? [{ ...m, item: null }] : [];
       });
-      return marks.length || action.flow ? [{ ...action, marks }] : [];
+      const flow = action.flow ?? (marks.length ? null : stepsAsFlow(asked.map((m) => m.note)));
+      return marks.length || flow ? [{ ...action, marks, flow }] : [];
     }
     if (action.type === "make_file") {
       if (action.kind === "flow") return action.flow ? [action] : [];

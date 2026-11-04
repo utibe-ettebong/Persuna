@@ -529,7 +529,52 @@ describe("drawing, files and the clipboard", () => {
     ],
   });
 
-  it("keeps notes only on things on screen, and drops a drawing left with nothing", () => {
+  it("draws the steps as a diagram when no note can sit on the screen", () => {
+    const draw = (marks: { item: string | null; thing?: string; note: string }[]) => ({
+      reply: "Here.",
+      actions: [{ type: "draw" as const, title: null, marks, flow: null }],
+    });
+    // No screen at all: the explanation still draws.
+    const blind = tidyReply(
+      draw([
+        { item: "e1", note: "1. Open the menu" },
+        { item: "e2", note: "2. Pick Export" },
+      ]),
+      state(),
+      null,
+    );
+    expect(blind.actions).toEqual([
+      {
+        type: "draw",
+        title: null,
+        marks: [],
+        flow: {
+          direction: "down",
+          nodes: [
+            { id: "s1", label: "1. Open the menu", detail: null },
+            { id: "s2", label: "2. Pick Export", detail: null },
+          ],
+          edges: [{ from: "s1", to: "s2" }],
+        },
+      },
+    ]);
+    // Something visual, with a picture to find it in: kept for the locator.
+    const seen = tidyReply(
+      draw([{ item: null, thing: "sales chart", note: "1. Revenue" }]),
+      state(),
+      { scene, image: "data:image/png;base64,AA==" },
+    );
+    expect(seen.actions).toEqual([
+      {
+        type: "draw",
+        title: null,
+        marks: [{ item: null, thing: "sales chart", note: "1. Revenue" }],
+        flow: null,
+      },
+    ]);
+  });
+
+  it("keeps notes only on things on screen, and drops a drawing with no steps", () => {
     const draw = (marks: { item: string; note: string }[], flow = null) => ({
       reply: "Here.",
       actions: [{ type: "draw" as const, title: null, marks, flow }],
@@ -548,7 +593,7 @@ describe("drawing, files and the clipboard", () => {
     expect(kept.actions).toEqual([
       { type: "draw", title: null, marks: [{ item: "e1", note: "1. Reply" }], flow: null },
     ]);
-    expect(tidyReply(draw([{ item: "e9", note: "Gone" }]), state(), null).actions).toEqual([]);
+    expect(tidyReply(draw([]), state(), null).actions).toEqual([]);
   });
 
   it("keeps notes named by what they're called, not just by id", () => {

@@ -145,7 +145,14 @@ export const persunaAction = z.discriminatedUnion("type", [
     type: z.literal("draw"),
     title: z.string().trim().max(80).nullish(),
     marks: z
-      .array(z.object({ item: z.string().trim().max(10), note: z.string().trim().min(1).max(120) }))
+      .array(
+        z.object({
+          item: z.string().trim().max(10).nullish(),
+          /** Something visual that isn't listed, found in the picture instead. */
+          thing: z.string().trim().max(80).nullish(),
+          note: z.string().trim().min(1).max(120),
+        }),
+      )
       .max(8)
       .nullish(),
     flow: flowSchema.nullish(),
