@@ -62,7 +62,6 @@ import {
   workAutoOffDue,
   type TurnMode,
 } from "@/lib/persuna/screen-mode";
-import { illustrationOf } from "@/lib/persuna/illustrate";
 import { FRESH_CHECK_MS, shouldRefresh } from "./fresh";
 import {
   CircleLayer,
@@ -1194,13 +1193,12 @@ export function Companion(props: CompanionProps) {
     if (value.appConfirm) setAppConfirm(value.appConfirm);
     if (value.mcpConfirm) setMcpConfirm(value.mcpConfirm);
     if (value.operateConfirm) setOperateConfirm(value.operateConfirm);
-    const illustration = value.drawing ? illustrationOf(value.drawing, mine.content) : null;
-    // Showing something on screen: the island folds up so it doesn't cover it.
-    // An illustration shows in the chat instead, so the island stays as it is.
-    if (value.point || (value.drawing && !illustration)) setPanel(false);
+    // Showing something on screen, an illustration included: the island folds
+    // up so it doesn't cover it, and the drawing builds while Persuna speaks.
+    if (value.point || value.drawing) setPanel(false);
     if (value.point) showPoint(value.point);
     if (value.clipboard) void doClipboard(value.clipboard);
-    if (value.drawing && !illustration) {
+    if (value.drawing) {
       // Each step of the drawing appears as Persuna gets to it.
       const steps = value.drawing.marks.length + (value.drawing.flow?.nodes.length ?? 0);
       setDrawPace(Math.min(2600, Math.max(700, (reply.content.length * 60) / Math.max(1, steps))));
@@ -1212,9 +1210,8 @@ export function Companion(props: CompanionProps) {
         timedDrawing();
       }
     }
-    // A file asked for wins over an illustration from the same turn.
+    // Only a file they asked to keep shows as a card; drawings stay on screen.
     if (value.file) setMade(value.file);
-    else if (illustration) setMade(illustration);
     if (value.confirm) {
       setConfirm(value.confirm);
       setConfirmLower(false);

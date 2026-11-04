@@ -11,7 +11,7 @@ import {
   persunaWorkMessages,
 } from "@/lib/skill/prompts";
 import { stepsAsFlow } from "./illustrate";
-import { entryAt, sceneEntries, sceneForModel, spotOf, type Scene } from "./scene";
+import { entryAt, sceneEntries, sceneForModel, spotOf, wantsDrawing, type Scene } from "./scene";
 import { createSentenceSplitter, splitSentences } from "./sentences";
 import { createTurnSplitter, type TurnEvent } from "./stream-protocol";
 import {
@@ -50,6 +50,10 @@ export const TURN_TIMEOUT_MS = 20_000;
 const SHOW_MESSAGE =
   'The user pressed "Show me": your reply MUST include a draw (marks on screen entries, or a flow diagram) or a point, so they can see what you mean — a text-only answer is not enough.';
 
+/** They asked for an illustration in words: it draws, it isn't read out as a list. */
+const ILLUSTRATE_MESSAGE =
+  'The user asked for an illustration: your reply MUST include a draw with a "flow" (3-8 boxes, in order, short labels) — it draws large over their screen, one box at a time while you speak. In "reply", walk through the boxes in the same order, one short sentence per box. Never write the steps as a numbered list or count them out ("one, two…"); the diagram carries the steps. Don\'t use make_file unless they asked to save or keep a file.';
+
 /** The model role for a turn: hearing and pictures need the LISTEN role. */
 function turnRole(
   message: string | { audio: string },
@@ -83,6 +87,9 @@ function turnMessages(
     voice,
   );
   if (show) messages.push({ role: "system", content: SHOW_MESSAGE });
+  if (typeof message === "string" && wantsDrawing(message)) {
+    messages.push({ role: "system", content: ILLUSTRATE_MESSAGE });
+  }
   return messages;
 }
 

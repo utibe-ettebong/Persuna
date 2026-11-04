@@ -1,12 +1,8 @@
 /**
- * A drawing with numbered marks is a walkthrough: it stays over the screen.
- * A diagram the user asked for in words ("draw me…", "illustrate…") is an
- * illustration: it shows in the chat, where the file card's Save buttons keep
- * it one tap from a file. Any other diagram explains what's in front of them
- * ("Show me", "explain this"), so it draws over the screen too.
+ * Every drawing goes over the screen and builds while Persuna speaks: numbered
+ * marks on the things it means, a flow diagram for an illustration. Only a
+ * file the user asked to keep shows as a card.
  */
-import { wantsDrawing } from "./scene";
-import type { Drawing, MadeFile } from "./service";
 import type { Flow } from "./types";
 
 /**
@@ -26,10 +22,4 @@ export function stepsAsFlow(notes: string[]): Flow | null {
   }));
   const edges = nodes.slice(1).map((n, i) => ({ from: nodes[i].id, to: n.id }));
   return { direction: "down", nodes, edges };
-}
-
-/** The illustration in a drawing, if it belongs in the chat rather than over the screen. */
-export function illustrationOf(drawing: Drawing, said: string): MadeFile | null {
-  if (drawing.marks.length > 0 || !drawing.flow || !wantsDrawing(said)) return null;
-  return { kind: "flow", title: drawing.title ?? "Diagram", body: "", flow: drawing.flow };
 }

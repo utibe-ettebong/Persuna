@@ -232,10 +232,12 @@ export function pictureForTurn(input: {
   return pictureNeeded(input.sight, input.typed);
 }
 
-/** The user asks for an illustration (a diagram, not a file): it shows in the chat. */
+/** The user asks for an illustration (a diagram, not a file): it must draw, over the screen. */
 export function wantsDrawing(text: string): boolean {
   if (
-    /\b(diagrams?|flow ?charts?|illustrat\w+|sketch\w*|show me how|process maps?)\b/i.test(text)
+    /\b(diagrams?|flow ?charts?|illustrat\w+|sketch\w*|show me how|process maps?|visuali[sz]\w*|(as|into) an? (\w+ )?flow(?!\s*state))\b/i.test(
+      text,
+    )
   ) {
     return true;
   }
