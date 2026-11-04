@@ -5,6 +5,8 @@
 // - Press another key while holding it (a shortcut like ⌥E): nothing, or
 //   "cancel" if listening had already started.
 // - Tap it twice quickly: "type" (open the message box).
+// - Keys the system sends along with ours (Windows sends Left Ctrl with
+//   AltGr, every press and every repeat) never count as another key.
 
 /** How long the key is held, alone, before listening starts. */
 const HOLD_MS = 180;
@@ -15,6 +17,7 @@ const TAP_MS = 250;
 
 function createHoldKey({ emit, schedule = setTimeout, cancelTimer = clearTimeout }) {
   let key = null;
+  let alongside = [];
   let isDown = false;
   let downAt = 0;
   let combo = false;
@@ -28,15 +31,16 @@ function createHoldKey({ emit, schedule = setTimeout, cancelTimer = clearTimeout
   };
 
   return {
-    /** Which key code holds to talk; null turns it off. */
-    setKey(code) {
+    /** Which key code holds to talk (null turns it off), and codes that come with it. */
+    setKey(code, comesWith = []) {
       key = code;
+      alongside = comesWith;
       clear();
       isDown = false;
       started = false;
     },
     keydown(code, now) {
-      if (key === null) return;
+      if (key === null || alongside.includes(code)) return;
       if (code !== key) {
         // Another key while ours is down: a shortcut, not talking.
         if (isDown) {
