@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  cleanPersonaName,
   describeSkill,
   freeSlug,
   introFacts,
@@ -19,6 +20,21 @@ describe("parseName", () => {
   it("leaves it to Persuna when asked", () => {
     expect(parseName("you choose")).toBeNull();
     expect(parseName("   ")).toBeNull();
+  });
+});
+
+describe("cleanPersonaName", () => {
+  it("trims a rename to a short capitalized name", () => {
+    expect(cleanPersonaName("nova")).toBe("Nova");
+    expect(cleanPersonaName('  "Ada Lovelace" ')).toBe("Ada Lovelace");
+    expect(cleanPersonaName("kemi")).toBe("Kemi");
+  });
+
+  it("refuses empties and overlong names", () => {
+    expect(cleanPersonaName("   ")).toBeNull();
+    expect(cleanPersonaName("")).toBeNull();
+    expect(cleanPersonaName("a".repeat(41))).toBeNull();
+    expect(cleanPersonaName("a".repeat(40))).toHaveLength(40);
   });
 });
 

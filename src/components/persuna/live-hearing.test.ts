@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hearingSession, pcmBase64 } from "./live-hearing";
+import { gateSamples, hearingSession, pcmBase64 } from "./live-hearing";
 
 const OPEN = 1;
 const CONNECTING = 0;
@@ -36,6 +36,28 @@ describe("pcmBase64", () => {
     const bytes = atob(pcmBase64(new Float32Array([0, 1, -1, 2])));
     const view = new DataView(Uint8Array.from(bytes, (c) => c.charCodeAt(0)).buffer);
     expect([0, 2, 4, 6].map((at) => view.getInt16(at, true))).toEqual([0, 32767, -32768, 32767]);
+  });
+});
+
+describe("gateSamples", () => {
+  const tone = (amp: number, n = 2048) =>
+    Float32Array.from({ length: n }, (_, i) => amp * Math.sin((i / n) * Math.PI * 8));
+
+  it("passes speech through and turns the room's hush down", () => {
+    const speech = gateSamples(tone(0.3), { open: false, quietChunks: 0 });
+    expect(speech.out).toEqual(tone(0.3));
+    expect(speech.state.open).toBe(true);
+    const hush = gateSamples(tone(0.002), { open: false, quietChunks: 0 });
+    expect(Math.max(...hush.out.map(Math.abs))).toBeLessThan(0.002);
+    expect(hush.state.open).toBe(false);
+  });
+
+  it("holds the gate open briefly past speech, then closes it", () => {
+    let state = { open: true, quietChunks: 0 };
+    state = gateSamples(tone(0.002), state).state;
+    expect(state.open).toBe(true);
+    for (let i = 0; i < 5; i++) state = gateSamples(tone(0.002), state).state;
+    expect(state.open).toBe(false);
   });
 });
 

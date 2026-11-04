@@ -279,6 +279,31 @@ describe("open_page with the offline mock", () => {
   });
 });
 
+describe("renaming and quieting", () => {
+  it("keeps a rename and a quiet toggle as said", () => {
+    for (const action of [
+      { type: "set_name", name: "Nova" },
+      { type: "quiet_notices", on: true },
+    ]) {
+      expect(persunaAction.safeParse(action).success).toBe(true);
+    }
+    const reply = tidyReply(
+      {
+        reply: "ok",
+        actions: [
+          { type: "set_name", name: "Nova" },
+          { type: "quiet_notices", on: true },
+        ],
+      },
+      state(),
+    );
+    expect(reply.actions).toEqual([
+      { type: "set_name", name: "Nova" },
+      { type: "quiet_notices", on: true },
+    ]);
+  });
+});
+
 describe("tone with the offline mock", () => {
   const client = createMockClient();
 

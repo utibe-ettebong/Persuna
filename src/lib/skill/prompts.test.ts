@@ -53,6 +53,13 @@ describe("persunaChatMessages", () => {
     expect(systemOf(true, false)).toContain("Their latest message is in <persuna_user>.");
   });
 
+  it("tells the model how to rename itself and quiet its notices", () => {
+    const system = systemOf(false, false);
+    expect(system).toContain('{ "type": "set_name", "name": "..." }');
+    expect(system).toContain('{ "type": "quiet_notices", "on": true|false }');
+    expect(system).toContain("call yourself Nova");
+  });
+
   it("tells the model to summarise the screen, not recite its chrome", () => {
     const system = textOf(
       persunaChatMessages(state(), [], "hi", { scene: "App: Safari", image: null }, null, false)[0]

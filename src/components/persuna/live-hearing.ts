@@ -20,6 +20,39 @@ export interface LiveHearing {
   cancel(): void;
 }
 
+/**
+ * A noise gate for microphone chunks: speech passes untouched, while the
+ * room's hush between words is turned down (not cut, so nothing clicks).
+ * Stays open briefly past speech so quiet word endings survive. Pure.
+ */
+export interface GateState {
+  open: boolean;
+  quietChunks: number;
+}
+
+const GATE_OPEN_RMS = 0.025;
+/** Chunks of hush before the gate closes again (about a quarter of a second). */
+const GATE_HANGOVER = 2;
+/** How far the hush is turned down. */
+const GATE_ATTEN = 0.2;
+
+export function gateSamples(
+  samples: Float32Array,
+  state: GateState,
+): { out: Float32Array; state: GateState } {
+  let sum = 0;
+  for (const v of samples) sum += v * v;
+  const rms = Math.sqrt(sum / Math.max(1, samples.length));
+  if (rms >= GATE_OPEN_RMS) return { out: samples, state: { open: true, quietChunks: 0 } };
+  if (state.open && state.quietChunks < GATE_HANGOVER) {
+    return { out: samples, state: { open: true, quietChunks: state.quietChunks + 1 } };
+  }
+  return {
+    out: Float32Array.from(samples, (v) => v * GATE_ATTEN),
+    state: { open: false, quietChunks: 0 },
+  };
+}
+
 /** 32-bit float samples as base64 of 16-bit little-endian PCM, as the transcriber takes them. */
 export function pcmBase64(samples: Float32Array): string {
   const bytes = new Uint8Array(samples.length * 2);
@@ -142,16 +175,24 @@ export function startLiveHearing(
   try {
     ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
     const source = ctx.createMediaStreamSource(stream);
+    // Room rumble and mic thumps live below speech: cut them before hearing.
+    const rumble = ctx.createBiquadFilter();
+    rumble.type = "highpass";
+    rumble.frequency.value = 80;
     // ScriptProcessor hands over samples at once with no module to load, so
     // the first words of a turn aren't lost. Its output stays silent.
     const tap = ctx.createScriptProcessor(CHUNK_SAMPLES, 1, 1);
+    let gate: GateState = { open: false, quietChunks: 0 };
     tap.onaudioprocess = (event) => {
       if (!listening) return;
-      const audio = pcmBase64(event.inputBuffer.getChannelData(0));
+      const gated = gateSamples(event.inputBuffer.getChannelData(0), gate);
+      gate = gated.state;
+      const audio = pcmBase64(gated.out);
       if (session) session.audio(audio);
       else held.push(audio);
     };
-    source.connect(tap);
+    source.connect(rumble);
+    rumble.connect(tap);
     tap.connect(ctx.destination);
   } catch {
     stopAudio();
