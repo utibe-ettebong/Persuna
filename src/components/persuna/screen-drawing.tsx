@@ -11,22 +11,25 @@ import { shownSteps } from "./narration";
  * the boxes said so far (arrows appear once both ends have); `floating` draws
  * it straight over the screen, with a soft shadow instead of a card behind it.
  * A box with more to say opens it below on tap (hover shows it anywhere).
+ * `fit` grows or shrinks it to fill that space (on screen, so it's readable).
  */
 export function FlowDiagram({
   flow,
   maxWidth,
+  fit,
   shown,
   floating = false,
 }: {
   flow: Flow;
   maxWidth?: number;
+  fit?: { w: number; h: number };
   shown?: number;
   floating?: boolean;
 }) {
   const l = layoutFlow(flow);
   const order = flow.nodes.map((n) => n.id);
   const visible = (id: string) => shown === undefined || order.indexOf(id) < shown;
-  const scale = maxWidth && l.width > maxWidth ? maxWidth / l.width : 1;
+  const scale = fit ? fitScale(l, fit) : maxWidth && l.width > maxWidth ? maxWidth / l.width : 1;
   const [openId, setOpenId] = useState<string | null>(null);
   const open = l.nodes.find((n) => n.id === openId && n.detail);
   const toggle = (id: string) => setOpenId((cur) => (cur === id ? null : id));
@@ -249,13 +252,24 @@ export function DrawingLayer({
         );
       })}
       {drawing.flow && boxes > 0 && (
-        <div className="pointer-events-none absolute right-8 top-28 max-h-[75vh] max-w-[min(44rem,60vw)]">
+        // An illustration on its own takes the middle of the screen; beside
+        // marks it keeps to the right so the marks stay in view.
+        <div
+          className={`pointer-events-none absolute rounded-[28px] bg-black/70 p-6 shadow-2xl ring-1 ring-white/10 backdrop-blur-md ${
+            drawing.marks.length
+              ? "right-8 top-24"
+              : "left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
+          }`}
+        >
           {drawing.title && (
-            <p className="persuna-in mb-3 inline-block rounded-full bg-black/80 px-3 py-1 text-sm font-medium text-white shadow-lg">
-              {drawing.title}
-            </p>
+            <p className="persuna-in mb-4 text-lg font-semibold text-white">{drawing.title}</p>
           )}
-          <FlowDiagram flow={drawing.flow} maxWidth={640} shown={boxes} floating />
+          <FlowDiagram
+            flow={drawing.flow}
+            fit={flowRoom(viewport, drawing.marks.length > 0)}
+            shown={boxes}
+            floating
+          />
         </div>
       )}
       <button
@@ -305,6 +319,28 @@ export function onScreenSpot(spot: Area, viewport: { w: number; h: number }): bo
   const cx = spot.x + spot.w / 2;
   const cy = spot.y + spot.h / 2;
   return cx >= 0 && cy >= 0 && cx <= viewport.w && cy <= viewport.h;
+}
+
+/** An on-screen diagram grows up to this much past its natural size, no more. */
+const MOST_GROWTH = 2.4;
+
+/** How much to scale a diagram so it fills `room` without spilling out of it. */
+export function fitScale(size: { width: number; height: number }, room: { w: number; h: number }) {
+  if (size.width <= 0 || size.height <= 0) return 1;
+  return Math.min(room.w / size.width, room.h / size.height, MOST_GROWTH);
+}
+
+/**
+ * The space an on-screen diagram may fill: most of the screen on its own,
+ * the right-hand side beside marks. Leaves room for the panel, title and Done.
+ */
+export function flowRoom(
+  viewport: { w: number; h: number },
+  besideMarks: boolean,
+): { w: number; h: number } {
+  return besideMarks
+    ? { w: viewport.w * 0.4, h: viewport.h * 0.65 }
+    : { w: viewport.w * 0.72, h: viewport.h * 0.68 };
 }
 
 /** At most this many thumbnails ride with an explanation. */

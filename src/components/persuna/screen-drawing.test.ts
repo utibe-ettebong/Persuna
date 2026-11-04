@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { loopOf, notePlacement, onScreenSpot, shotAreas, shotIn } from "./screen-drawing";
+import {
+  fitScale,
+  flowRoom,
+  loopOf,
+  notePlacement,
+  onScreenSpot,
+  shotAreas,
+  shotIn,
+} from "./screen-drawing";
 
 describe("circling something", () => {
   it("turns a drawn loop into a closed path and the box around it", () => {
@@ -110,5 +118,23 @@ describe("shotIn", () => {
 
   it("has no picture of an area outside the circle", () => {
     expect(shotIn(mark, 1440, { x: 0, y: 0, w: 200, h: 200 })).toBeNull();
+  });
+});
+
+describe("on-screen diagram size", () => {
+  const screen = { w: 1440, h: 900 };
+
+  it("grows a small diagram to fill most of the screen, but not without limit", () => {
+    // Five boxes down: about 204 by 468 at natural size.
+    const room = flowRoom(screen, false);
+    const k = fitScale({ width: 204, height: 468 }, room);
+    expect(k).toBeGreaterThan(1.2);
+    expect(468 * k).toBeLessThanOrEqual(room.h);
+    expect(fitScale({ width: 50, height: 50 }, room)).toBe(2.4);
+  });
+
+  it("shrinks a big diagram to fit, and keeps beside marks to a smaller space", () => {
+    expect(fitScale({ width: 3000, height: 400 }, flowRoom(screen, false))).toBeLessThan(1);
+    expect(flowRoom(screen, true).w).toBeLessThan(flowRoom(screen, false).w);
   });
 });

@@ -99,6 +99,10 @@ describe("the screen as a list", () => {
   it("spots illustration asks, not drafting ones", () => {
     expect(wantsDrawing("Draw me a diagram of refunds")).toBe(true);
     expect(wantsDrawing("Illustrate how this works")).toBe(true);
+    expect(wantsDrawing("Give me an illustration flow of onboarding")).toBe(true);
+    expect(wantsDrawing("Show it as a flow")).toBe(true);
+    expect(wantsDrawing("Can you visualise the steps?")).toBe(true);
+    expect(wantsDrawing("I was in a flow state")).toBe(false);
     expect(wantsDrawing("Show me how it fits together")).toBe(true);
     expect(wantsDrawing("Draw up a contract")).toBe(false);
     expect(wantsDrawing("Draw on your experience")).toBe(false);

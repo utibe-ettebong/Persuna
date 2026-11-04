@@ -516,6 +516,26 @@ describe("showing, and not hanging", () => {
     expect(seen[0].options).toMatchObject({ timeoutMs: TURN_TIMEOUT_MS });
     expect(TURN_TIMEOUT_MS).toBeLessThan(60_000);
   });
+
+  it("makes an asked-for illustration draw a flow, not read out a list", async () => {
+    const seen: unknown[] = [];
+    const client: ModelClient = {
+      async complete(_role, messages) {
+        seen.push(messages);
+        return {
+          text: JSON.stringify({ reply: "OK.", actions: [] }),
+          model: "fake",
+          promptTokens: 0,
+          completionTokens: 0,
+        };
+      },
+    };
+    await persunaTurn(client, state(), [], "Give me an illustration flow of onboarding");
+    await persunaTurn(client, state(), [], "Hello");
+    expect(JSON.stringify(seen[0])).toContain("asked for an illustration");
+    expect(JSON.stringify(seen[0])).toContain("Never write the steps as a numbered list");
+    expect(JSON.stringify(seen[1])).not.toContain("asked for an illustration");
+  });
 });
 
 describe("drawing, files and the clipboard", () => {
