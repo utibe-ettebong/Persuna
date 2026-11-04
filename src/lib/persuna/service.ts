@@ -85,6 +85,7 @@ import {
 } from "./onboarding";
 import type { Flow, PersunaReply, PersunaState } from "./types";
 import { createLocator } from "@/lib/models/sam";
+import { stepsAsFlow } from "./illustrate";
 import { pictureNeeded, samSpot, sceneIsThin, spotOf, type Scene, type Spot } from "./scene";
 import type { TurnMode } from "./screen-mode";
 import { splitSentences } from "./sentences";
@@ -759,12 +760,37 @@ async function applyTurn(
     } else if (action.type === "clipboard") {
       clipboard = { op: action.op, text: action.text };
     } else if (action.type === "draw") {
-      const marks = (action.marks ?? []).flatMap((m, i) => {
-        const spot = sight?.scene ? spotOf(sight.scene, m.item) : null;
+      const asked = action.marks ?? [];
+      // A listed entry first; else the thing, found in the picture as point does.
+      const spots = await Promise.all(
+        asked.map(async (m): Promise<Spot | null> => {
+          const listed = m.item && sight?.scene ? spotOf(sight.scene, m.item) : null;
+          if (listed || !m.thing || !sight?.image || !sight.scene) return listed;
+          const box = await createLocator()
+            ?.locate(sight.image, m.thing)
+            .catch(() => null);
+          return box ? samSpot(box, sight.scene, m.thing, sight.crop ?? null) : null;
+        }),
+      );
+      const marks = asked.flatMap((m, i) => {
+        const spot = spots[i];
         return spot ? [{ n: i + 1, note: m.note, spot }] : [];
       });
-      if (marks.length || action.flow) {
-        drawing = { title: action.title ?? null, marks, flow: action.flow ?? null };
+      // Nothing to pin to: the steps still draw, as a diagram over the screen.
+      const fallback = !marks.length && !action.flow ? stepsAsFlow(asked.map((m) => m.note)) : null;
+      const flow = action.flow ?? fallback;
+      console.log(
+        JSON.stringify({
+          scope: "draw",
+          asked: asked.length,
+          placed: marks.length,
+          flow: Boolean(action.flow),
+          fallback: Boolean(fallback),
+          screen: Boolean(sight?.scene),
+        }),
+      );
+      if (marks.length || flow) {
+        drawing = { title: action.title ?? null, marks, flow };
       }
     } else if (action.type === "make_file") {
       made = {

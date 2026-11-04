@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { illustrationOf } from "./illustrate";
+import { illustrationOf, stepsAsFlow } from "./illustrate";
 import type { Drawing } from "./service";
 import type { Flow } from "./types";
 
@@ -36,5 +36,22 @@ describe("illustrationOf", () => {
     const mark = { n: 1, note: "1. Export", spot: { x: 1, y: 2, w: 60, h: 24, label: "Export" } };
     expect(illustrationOf({ title: null, marks: [mark], flow: { ...flow } }, "Draw it")).toBeNull();
     expect(illustrationOf({ title: null, marks: [], flow: null }, "Draw it")).toBeNull();
+  });
+});
+
+describe("stepsAsFlow", () => {
+  it("chains notes into numbered steps, keeping long ones whole in the detail", () => {
+    const long = `1. ${"word ".repeat(20).trim()}`;
+    const flow = stepsAsFlow([long, " 2. Save ", ""]);
+    expect(flow?.nodes.map((n) => n.id)).toEqual(["s1", "s2"]);
+    expect(flow?.nodes[0].label).toHaveLength(60);
+    expect(flow?.nodes[0].detail).toBe(long);
+    expect(flow?.nodes[1]).toEqual({ id: "s2", label: "2. Save", detail: null });
+    expect(flow?.edges).toEqual([{ from: "s1", to: "s2" }]);
+  });
+
+  it("has nothing to draw without notes", () => {
+    expect(stepsAsFlow([])).toBeNull();
+    expect(stepsAsFlow(["  "])).toBeNull();
   });
 });
