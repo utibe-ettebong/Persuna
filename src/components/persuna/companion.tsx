@@ -64,7 +64,15 @@ import {
 } from "@/lib/persuna/screen-mode";
 import { illustrationOf } from "@/lib/persuna/illustrate";
 import { FRESH_CHECK_MS, shouldRefresh } from "./fresh";
-import { CircleLayer, CircledMark, DrawingLayer, cropPicture, type Area } from "./screen-drawing";
+import {
+  CircleLayer,
+  CircledMark,
+  DrawingLayer,
+  cropPicture,
+  notePlacement,
+  onScreenSpot,
+  type Area,
+} from "./screen-drawing";
 import {
   WORK_EVERY_MS,
   mayInterrupt,
@@ -911,6 +919,7 @@ export function Companion(props: CompanionProps) {
         form.append("client-turn", turnId);
         if (sight?.scene) form.append("scene", JSON.stringify(sight.scene));
         if (sight?.circled) form.append("circled", "1");
+        if (sight?.crop) form.append("crop", JSON.stringify(sight.crop));
         if (sight?.image && withPicture) form.append("screen", sight.image);
         else if (sight?.image) form.append("picture-held", "1");
         form.append("mode", opts.mode);
@@ -1673,6 +1682,7 @@ export function Companion(props: CompanionProps) {
     image: string | null;
     scene: Scene | null;
     circled?: boolean;
+    crop?: Area | null;
   } | null> {
     if (!mode || mode === "talk") {
       sightPromise.current = null;
@@ -1702,6 +1712,7 @@ export function Companion(props: CompanionProps) {
             sight.image && (await cropPicture(sight.image, area, width).catch(() => sight.image)),
           scene: sight.scene && sceneWithin(sight.scene, area),
           circled: true,
+          crop: area,
         };
       } finally {
         if (fresh) setLooking(false);
@@ -3240,6 +3251,13 @@ export function Companion(props: CompanionProps) {
       editingExcluded ||
       teachOffer ||
       (attached && !panel);
+    // Off the server, everything fits: the client clamps once it renders.
+    const view =
+      typeof window === "undefined"
+        ? { w: Number.MAX_SAFE_INTEGER, h: Number.MAX_SAFE_INTEGER }
+        : { w: window.innerWidth, h: window.innerHeight };
+    const pointShown = pointAt && onScreenSpot(pointAt, view) ? pointAt : null;
+    const pointPlace = pointShown ? notePlacement(pointShown, view, 60) : null;
     return (
       <section
         data-persuna
@@ -3258,24 +3276,26 @@ export function Companion(props: CompanionProps) {
         />
 
         {/* What Persuna is pointing at: a glowing outline around it, with its name. */}
-        {pointAt && (
+        {pointShown && pointPlace && (
           <div
             aria-hidden
             className="persuna-in pointer-events-none fixed"
             style={{
-              left: pointAt.x - 6,
-              top: pointAt.y - 6,
-              width: pointAt.w + 12,
-              height: pointAt.h + 12,
+              left: pointShown.x - 6,
+              top: pointShown.y - 6,
+              width: pointShown.w + 12,
+              height: pointShown.h + 12,
             }}
           >
             <span className="absolute inset-0 animate-pulse rounded-xl ring-[3px] ring-[#a77bff] shadow-[0_0_0_6px_rgba(167,123,255,0.18),0_0_28px_6px_rgba(167,123,255,0.45)]" />
             <span
-              className={`label-mono absolute left-0 whitespace-nowrap rounded-full bg-black px-2.5 py-1 text-[10px] text-white shadow-lg ${
-                pointAt.y > 60 ? "-top-8" : "-bottom-8"
-              }`}
+              className={`label-mono absolute max-w-[calc(100vw-2rem)] overflow-hidden text-ellipsis whitespace-nowrap rounded-full bg-black px-2.5 py-1 text-[10px] text-white shadow-lg ${
+                pointPlace.side === "left" ? "left-0" : "right-0"
+              } ${pointPlace.above ? "-top-8" : "-bottom-8"}`}
             >
-              {pointAt.label.length > 40 ? `${pointAt.label.slice(0, 40)}…` : pointAt.label}
+              {pointShown.label.length > 40
+                ? `${pointShown.label.slice(0, 40)}…`
+                : pointShown.label}
             </span>
           </div>
         )}

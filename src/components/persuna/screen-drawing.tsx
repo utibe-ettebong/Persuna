@@ -183,7 +183,12 @@ export function DrawingLayer({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onDone]);
-  const marks = drawing.marks.slice(0, shown);
+  // Off the server, everything fits: the client places notes once it renders.
+  const viewport =
+    typeof window === "undefined"
+      ? { w: Number.MAX_SAFE_INTEGER, h: Number.MAX_SAFE_INTEGER }
+      : { w: window.innerWidth, h: window.innerHeight };
+  const marks = drawing.marks.slice(0, shown).filter((m) => onScreenSpot(m.spot, viewport));
   const boxes = Math.max(0, shown - drawing.marks.length);
   const centres = marks.map((m) => ({
     x: m.spot.x + m.spot.w / 2,
@@ -197,30 +202,34 @@ export function DrawingLayer({
           <path d={trail} fill="none" stroke="#b794ff" strokeWidth={2} strokeDasharray="6 7" />
         </svg>
       )}
-      {marks.map((m) => (
-        <div
-          key={m.n}
-          className="persuna-in absolute"
-          style={{
-            left: m.spot.x - 5,
-            top: m.spot.y - 5,
-            width: m.spot.w + 10,
-            height: m.spot.h + 10,
-          }}
-        >
-          <span className="absolute inset-0 rounded-xl ring-[2.5px] ring-[#b794ff] shadow-[0_0_24px_4px_rgba(167,123,255,0.4)]" />
-          <span className="absolute -left-3 -top-3 grid h-6 w-6 place-items-center rounded-full bg-black text-[11px] font-semibold text-white ring-2 ring-[#b794ff]">
-            {m.n}
-          </span>
-          <span
-            className={`absolute left-4 max-w-72 whitespace-normal rounded-2xl bg-black px-3 py-1.5 text-xs leading-snug text-white shadow-lg ${
-              m.spot.y > 70 ? "bottom-[calc(100%+10px)]" : "top-[calc(100%+10px)]"
-            }`}
+      {marks.map((m) => {
+        const place = notePlacement(m.spot, viewport);
+        return (
+          <div
+            key={m.n}
+            className="persuna-in absolute"
+            style={{
+              left: m.spot.x - 5,
+              top: m.spot.y - 5,
+              width: m.spot.w + 10,
+              height: m.spot.h + 10,
+            }}
           >
-            {m.note}
-          </span>
-        </div>
-      ))}
+            <span className="absolute inset-0 rounded-xl ring-[2.5px] ring-[#b794ff] shadow-[0_0_24px_4px_rgba(167,123,255,0.4)]" />
+            <span className="absolute -left-3 -top-3 grid h-6 w-6 place-items-center rounded-full bg-black text-[11px] font-semibold text-white ring-2 ring-[#b794ff]">
+              {m.n}
+            </span>
+            <span
+              className={`absolute max-w-72 whitespace-normal rounded-2xl bg-black px-3 py-1.5 text-xs leading-snug text-white shadow-lg ${
+                place.side === "left" ? "left-4" : "right-4"
+              } ${place.above ? "bottom-[calc(100%+10px)]" : "top-[calc(100%+10px)]"}`}
+              style={{ maxWidth: "min(18rem, calc(100vw - 2rem))" }}
+            >
+              {m.note}
+            </span>
+          </div>
+        );
+      })}
       {drawing.flow && boxes > 0 && (
         <div className="pointer-events-none absolute right-8 top-28 max-h-[75vh] max-w-[min(44rem,60vw)]">
           {drawing.title && (
@@ -247,6 +256,37 @@ export interface Area {
   y: number;
   w: number;
   h: number;
+}
+
+/** A note's width (max-w-72) and the room one needs above or below its mark, gap included. */
+const NOTE_W = 288;
+const NOTE_ROOM = 76;
+
+/**
+ * Where a mark's note goes so it stays on this screen: off the mark's left
+ * edge, or its right edge near the screen's right edge; above the mark, or
+ * below it near the top (or when above would run off). Pure, so it's tested.
+ */
+export function notePlacement(
+  spot: Area,
+  viewport: { w: number; h: number },
+  topMargin = 70,
+): { side: "left" | "right"; above: boolean } {
+  const boxL = spot.x - 5;
+  const boxT = spot.y - 5;
+  const boxB = spot.y + spot.h + 5;
+  const side = boxL + 16 + NOTE_W > viewport.w - 8 ? "right" : "left";
+  const aboveFits = boxT - NOTE_ROOM >= 8;
+  const belowFits = boxB + NOTE_ROOM <= viewport.h - 8;
+  const above = spot.y > topMargin ? aboveFits || !belowFits : !belowFits && aboveFits;
+  return { side, above };
+}
+
+/** Whether a spot's centre is inside this view: marks centred off it can't be drawn here. */
+export function onScreenSpot(spot: Area, viewport: { w: number; h: number }): boolean {
+  const cx = spot.x + spot.w / 2;
+  const cy = spot.y + spot.h / 2;
+  return cx >= 0 && cy >= 0 && cx <= viewport.w && cy <= viewport.h;
 }
 
 export interface CirclePick {

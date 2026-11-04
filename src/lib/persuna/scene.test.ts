@@ -70,6 +70,27 @@ describe("the screen as a list", () => {
     expect(wantsPicture("Reply to this email")).toBe(false);
   });
 
+  it("sends the picture for describe-the-screen questions, not describe-the-method ones", () => {
+    for (const text of [
+      "Describe what's on my screen",
+      "What's on my screen right now?",
+      "What am I looking at?",
+      "What do you see?",
+      "Describe my screen",
+      "Summarize this page",
+    ]) {
+      expect(wantsPicture(text), text).toBe(true);
+    }
+    for (const text of [
+      "Describe your method",
+      "What's next on my list?",
+      "Explain this form",
+      "Reply to this email",
+    ]) {
+      expect(wantsPicture(text), text).toBe(false);
+    }
+  });
+
   it("spots illustration asks, not drafting ones", () => {
     expect(wantsDrawing("Draw me a diagram of refunds")).toBe(true);
     expect(wantsDrawing("Illustrate how this works")).toBe(true);
@@ -128,6 +149,31 @@ describe("sceneForModel's cap", () => {
     expect(lines.at(-1)).toBe("…and 6 more things on screen (ask to look closer for the rest)");
   });
 
+  it("keeps the page's text when tabs would fill the whole budget", () => {
+    const browser = sceneSchema.parse({
+      screen: { w: 1440, h: 900 },
+      app: "Safari",
+      window: "News",
+      items: Array.from({ length: 30 }, (_, i) => ({
+        role: "tab",
+        label: `Tab ${i + 1}`,
+        ...box(i),
+      })),
+      text: Array.from({ length: 12 }, (_, i) => ({
+        text: `Headline story number ${i + 1} today`,
+        x: 200,
+        y: 200 + i * 30,
+        w: 500,
+        h: 20,
+      })),
+    });
+    const lines = sceneForModel(browser).split("\n");
+    // Every text line survives; only a few tabs are shown, the rest counted.
+    expect(lines.filter((l) => l.includes('"Headline'))).toHaveLength(12);
+    expect(lines.filter((l) => l.includes("tab ")).length).toBeLessThanOrEqual(8);
+    expect(lines.at(-1)).toMatch(/more things on screen/);
+  });
+
   it("counts the trimmed entries in the 'more things' line and keeps the head", () => {
     const busy = sceneSchema.parse({
       screen: { w: 1440, h: 900 },
@@ -184,6 +230,30 @@ describe("SAM 3.1 boxes", () => {
     expect(samSpot(box!, scene, "Reply")).toEqual({ x: 90, y: 450, w: 180, h: 56, label: "Reply" });
     expect(parseSamBox("")).toBeNull();
     expect(parseSamBox("<|box;x1=5;y1=5;x2=1;y2=9;w=10;h=10|>")).toBeNull();
+  });
+
+  it("scales x and y separately when the picture's shape differs from the screen", () => {
+    const box = parseSamBox("<|box;x1=100;y1=100;x2=300;y2=200;w=1600;h=800|>");
+    // 1440/1600 wide, 900/800 tall: not the same factor.
+    expect(samSpot(box!, scene, "Thing")).toEqual({
+      x: 90,
+      y: 113,
+      w: 180,
+      h: 113,
+      label: "Thing",
+    });
+  });
+
+  it("lands inside the circled area when the picture was cropped to it", () => {
+    const box = parseSamBox("<|box;x1=80;y1=40;x2=240;y2=120;w=800;h=400|>");
+    const crop = { x: 100, y: 200, w: 720, h: 360 };
+    expect(samSpot(box!, scene, "Thing", crop)).toEqual({
+      x: 172,
+      y: 236,
+      w: 144,
+      h: 72,
+      label: "Thing",
+    });
   });
 });
 

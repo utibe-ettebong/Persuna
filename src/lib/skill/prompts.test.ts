@@ -52,4 +52,13 @@ describe("persunaChatMessages", () => {
     expect(systemOf(true, true)).toContain("Your Heard line holds exactly what they said.");
     expect(systemOf(true, false)).toContain("Their latest message is in <persuna_user>.");
   });
+
+  it("tells the model to summarise the screen, not recite its chrome", () => {
+    const system = textOf(
+      persunaChatMessages(state(), [], "hi", { scene: "App: Safari", image: null }, null, false)[0]
+        .content,
+    );
+    expect(system).toContain("never read out the whole list");
+    expect(system).toContain("browser's chrome");
+  });
 });
