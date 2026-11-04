@@ -41,6 +41,7 @@ const { randomBytes } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { createHoldKey } = require("./hold-key");
+const { parseKeyLine } = require("./mac-keys");
 const { createUpdater } = require("./updater");
 const { createEyesClient } = require("./eyes-client");
 const {
@@ -463,8 +464,9 @@ ipcMain.handle("persuna:paste", async (event, text) => {
     overlay.showInactive();
     await delay(60);
   }
-  const { UiohookKey } = require("uiohook-napi");
-  keyListener.keyTap(UiohookKey.V, [MAC ? UiohookKey.Meta : UiohookKey.Ctrl]);
+  // Sending keys needs no listener running (on a Mac, there's no uiohook tap at all).
+  const { uIOhook, UiohookKey } = require("uiohook-napi");
+  uIOhook.keyTap(UiohookKey.V, [MAC ? UiohookKey.Meta : UiohookKey.Ctrl]);
   return true;
 });
 
@@ -1211,6 +1213,59 @@ function holdKeyLabel() {
  * switched on under Accessibility; until then it checks every few seconds,
  * so turning it on takes effect without a restart.
  */
+/** One key from either listener: the talk-key test hears it, the hold key reads it. */
+function onKey(code, down) {
+  if (!down) return holdKey.keyup(code, Date.now());
+  if (code === chosenHoldKey()?.code) {
+    keyHeard = true;
+    keyTest?.(true);
+  }
+  holdKey.keydown(code, Date.now());
+}
+
+/**
+ * The talk key on a Mac: `persuna-eyes keys`, a passive key monitor in its own
+ * process. uiohook's active event tap held every key and click on the Mac
+ * until Persuna answered it, so a busy Persuna, or Accessibility switched off
+ * while the tap ran (as setup has you do), froze the whole computer.
+ */
+function startMacKeys() {
+  const child = spawn(EYES, ["keys"], { stdio: ["pipe", "pipe", "ignore"] });
+  const listener = { stop: () => child.kill() };
+  let rest = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    const lines = (rest + chunk).split("\n");
+    rest = lines.pop() ?? "";
+    for (const line of lines) {
+      const key = parseKeyLine(line);
+      if (key) onKey(key.code, key.down);
+    }
+  });
+  // Accessibility switched off: stop, so switching it back on starts a fresh monitor.
+  const revoked = setInterval(() => {
+    if (keyListener !== listener || keyboardAllowed()) return;
+    child.kill();
+    keyListener = null;
+    holdKey.setKey(null);
+    announceHoldKey();
+    startKeyListener();
+  }, 3000);
+  // Gone on its own (missing, or killed): say so in setup, and try again soon.
+  const ended = (why) => {
+    clearInterval(revoked);
+    if (keyListener !== listener) return;
+    keyListener = null;
+    keyError = why;
+    holdKey.setKey(null);
+    keyWatch ??= setInterval(() => !keyListener && startKeyListener(), 15000);
+    announceHoldKey();
+  };
+  child.on("error", (error) => ended(error.message));
+  child.on("exit", () => ended("Persuna's talk-key listener stopped."));
+  return listener;
+}
+
 function startKeyListener() {
   if (keyListener) return;
   if (!keyboardAllowed()) {
@@ -1220,21 +1275,19 @@ function startKeyListener() {
   clearInterval(keyWatch);
   keyWatch = null;
   try {
-    const { uIOhook } = require("uiohook-napi");
-    // Once only: a retry after a failed start must not hear every key twice.
-    if (!keyHooked) {
-      keyHooked = true;
-      uIOhook.on("keydown", (e) => {
-        if (e.keycode === chosenHoldKey()?.code) {
-          keyHeard = true;
-          keyTest?.(true);
-        }
-        holdKey.keydown(e.keycode, Date.now());
-      });
-      uIOhook.on("keyup", (e) => holdKey.keyup(e.keycode, Date.now()));
+    if (MAC) {
+      keyListener = startMacKeys();
+    } else {
+      const { uIOhook } = require("uiohook-napi");
+      // Once only: a retry after a failed start must not hear every key twice.
+      if (!keyHooked) {
+        keyHooked = true;
+        uIOhook.on("keydown", (e) => onKey(e.keycode, true));
+        uIOhook.on("keyup", (e) => onKey(e.keycode, false));
+      }
+      uIOhook.start();
+      keyListener = uIOhook;
     }
-    uIOhook.start();
-    keyListener = uIOhook;
     keyError = null;
   } catch (error) {
     // Never silent: setup reports it, and retries while it stays broken.
