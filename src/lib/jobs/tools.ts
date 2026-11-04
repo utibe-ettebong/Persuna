@@ -40,6 +40,7 @@ export function policyAllows(
   call: { writes: boolean; tool: string },
   approved: boolean,
 ): "run" | "ask" {
+  if (policy?.dryRun && !approved) return "ask";
   if (!call.writes) return "run";
   if (approved) return "run";
   if (policy?.mode === "preapproved" && policy.tools.includes(call.tool)) return "run";
@@ -188,9 +189,10 @@ export async function setJobToolPolicy(
     throw new Error("Unknown approval policy.");
   }
   const tools = [...new Set(policy.tools.map((t) => t.trim()).filter(Boolean))].slice(0, 50);
+  const dryRun = policy.dryRun ?? job.toolPolicy?.dryRun;
   await db()
     .update(jobs)
-    .set({ toolPolicy: { mode: policy.mode, tools } })
+    .set({ toolPolicy: { mode: policy.mode, tools, ...(dryRun === undefined ? {} : { dryRun }) } })
     .where(eq(jobs.id, jobId));
   await audit({
     actor,
@@ -198,7 +200,7 @@ export async function setJobToolPolicy(
     entityType: "job",
     entityId: jobId,
     skillId: job.skillId,
-    details: { mode: policy.mode, tools: tools.length },
+    details: { mode: policy.mode, tools: tools.length, ...(dryRun ? { dryRun: true } : {}) },
   });
 }
 

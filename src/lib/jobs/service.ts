@@ -43,13 +43,15 @@ const { jobs, jobApprovals, jobRounds, skills, skillVersions } = schema;
 
 export interface NewJob {
   skillId: string;
-  origin: "owner" | "renter";
+  origin: "owner" | "renter" | "trial";
   requesterName: string;
   /** The account that asked for the job (the owner, or a renter). */
   requesterUserId?: string;
   input: string;
   /** Renter paid for guaranteed owner review. */
   ownerReviewRequired?: boolean;
+  /** Run a chosen version instead of the published one (trials). */
+  versionId?: string;
 }
 
 async function publishedVersion(skillId: string) {
@@ -63,12 +65,25 @@ async function publishedVersion(skillId: string) {
   return { skill, version };
 }
 
+/** A chosen version for a trial run. It must belong to the skill. */
+async function namedVersion(skillId: string, versionId: string) {
+  const skill = await db().query.skills.findFirst({ where: eq(skills.id, skillId) });
+  if (!skill) throw new NotFoundError("No such skill");
+  const version = await db().query.skillVersions.findFirst({
+    where: and(eq(skillVersions.id, versionId), eq(skillVersions.skillId, skillId)),
+  });
+  if (!version) throw new NotFoundError("That version isn't part of this skill");
+  return { skill, version };
+}
+
 /**
  * Records a job before any drafting. Renter jobs paid through Paystack wait
  * here (awaiting_payment) until the payment is confirmed.
  */
 export async function openJob(job: NewJob, status: "awaiting_payment" | "review" = "review") {
-  const { skill, version } = await publishedVersion(job.skillId);
+  const { skill, version } = job.versionId
+    ? await namedVersion(job.skillId, job.versionId)
+    : await publishedVersion(job.skillId);
   const input = normalizeText(job.input);
   if (!input) throw new Error("The job has no input");
   const [row] = await db()
@@ -97,6 +112,34 @@ export async function openJob(job: NewJob, status: "awaiting_payment" | "review"
     details: { origin: row.origin, version: version.version, status },
   });
   return row;
+}
+
+/**
+ * A trial run of a chosen version: the owner tests a draft before publishing
+ * it. Trials use the owner's own connections, start dry (every tool call asks
+ * first unless told otherwise), never count toward trust or stats, and purge
+ * like any other job. Tool skills wait for links; the trial page starts them.
+ */
+export async function openTrial(
+  user: { id: string; name: string },
+  input: { skillId: string; versionId: string; input: string; dryRun: boolean },
+  actor: Actor,
+) {
+  const job = await openJob({
+    skillId: input.skillId,
+    origin: "trial",
+    requesterName: user.name,
+    requesterUserId: user.id,
+    input: input.input,
+    versionId: input.versionId,
+  });
+  await setJobToolPolicy(
+    job.id,
+    user.id,
+    { mode: "approve_each", tools: [], dryRun: input.dryRun },
+    actor,
+  );
+  return getJob(job.id);
 }
 
 /**
@@ -724,6 +767,7 @@ export async function reviewJob(
   finalOutput?: string,
 ) {
   const job = await getJob(jobId);
+  if (job.origin === "trial") throw new Error("Trials aren't reviewed; run another if it missed.");
   if (job.status !== "review") throw new Error("This job isn't waiting for review");
 
   if (decision === "reject") {
@@ -877,16 +921,19 @@ export async function trustRecord(skillId: string): Promise<TrustRecord> {
       complaints: 0,
     };
   }
-  const rows = await db()
-    .select({
-      status: jobs.status,
-      editSize: jobs.editSize,
-      approvedBy: jobs.approvedBy,
-      trustLevel: jobs.trustLevel,
-      complainedAt: jobs.complainedAt,
-    })
-    .from(jobs)
-    .where(eq(jobs.skillVersionId, skill.publishedVersionId));
+  const rows = (
+    await db()
+      .select({
+        origin: jobs.origin,
+        status: jobs.status,
+        editSize: jobs.editSize,
+        approvedBy: jobs.approvedBy,
+        trustLevel: jobs.trustLevel,
+        complainedAt: jobs.complainedAt,
+      })
+      .from(jobs)
+      .where(eq(jobs.skillVersionId, skill.publishedVersionId))
+  ).filter((r) => r.origin !== "trial");
   const ownerReviewed = rows.filter(
     (r) => r.approvedBy === "owner" && (r.status === "approved" || r.status === "rejected"),
   );

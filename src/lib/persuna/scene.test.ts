@@ -9,6 +9,7 @@ import {
   sceneIsThin,
   sceneSchema,
   spotOf,
+  wantsDrawing,
   wantsPicture,
 } from "./scene";
 
@@ -67,6 +68,15 @@ describe("the screen as a list", () => {
     expect(sceneIsThin(busy)).toBe(false);
     expect(wantsPicture("What colour is this logo?")).toBe(true);
     expect(wantsPicture("Reply to this email")).toBe(false);
+  });
+
+  it("spots illustration asks, not drafting ones", () => {
+    expect(wantsDrawing("Draw me a diagram of refunds")).toBe(true);
+    expect(wantsDrawing("Illustrate how this works")).toBe(true);
+    expect(wantsDrawing("Show me how it fits together")).toBe(true);
+    expect(wantsDrawing("Draw up a contract")).toBe(false);
+    expect(wantsDrawing("Draw on your experience")).toBe(false);
+    expect(wantsDrawing("Reply to this email")).toBe(false);
   });
 });
 

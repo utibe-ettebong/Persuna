@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
+import type { JobToolPolicy } from "@/db/schema";
 import { policyAllows, targetInText, targetOf, truncateValue } from "./tools";
 
 describe("policyAllows", () => {
+  it("pauses everything first in dry runs, even reads", () => {
+    const dry: JobToolPolicy = { mode: "approve_each", tools: [], dryRun: true };
+    expect(policyAllows(dry, { writes: false, tool: "notion_search" }, false)).toBe("ask");
+    expect(policyAllows(dry, { writes: true, tool: "x_post" }, false)).toBe("ask");
+    expect(policyAllows(dry, { writes: false, tool: "notion_search" }, true)).toBe("run");
+    expect(policyAllows(dry, { writes: true, tool: "x_post" }, true)).toBe("run");
+  });
+
   it("runs reads freely, whatever the policy", () => {
     expect(policyAllows(null, { writes: false, tool: "notion_search" }, false)).toBe("run");
     expect(

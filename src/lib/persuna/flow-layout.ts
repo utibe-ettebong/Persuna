@@ -4,10 +4,19 @@
  * process reads top to bottom (or left to right). Pure, so the overlay, the
  * saved SVG and the tests all share it.
  */
-import type { Flow } from "./types";
+import type { Flow, FlowColor } from "./types";
 
 export const NODE_W = 172;
 export const NODE_H = 52;
+/** Dark fills with light strokes, so every token reads on the black diagram. */
+export const FLOW_FILLS: Record<FlowColor, { fill: string; stroke: string }> = {
+  ink: { fill: "#141414", stroke: "#ffffff" },
+  berry: { fill: "#3d2030", stroke: "#e79fb3" },
+  leaf: { fill: "#1e3320", stroke: "#9ed6a0" },
+  gold: { fill: "#3a2f14", stroke: "#e8c766" },
+  sky: { fill: "#1d2f3d", stroke: "#8fc3e8" },
+  coral: { fill: "#3d2318", stroke: "#eba37e" },
+};
 const GAP_MAIN = 44;
 const GAP_CROSS = 22;
 const PAD = 16;
@@ -21,6 +30,12 @@ export interface PlacedNode {
   y: number;
   w: number;
   h: number;
+  /** An outline in a 0-100 box, scaled into the node; null is a rounded box. */
+  shape: string | null;
+  /** Which palette token fills the node; null is ink. */
+  color: FlowColor | null;
+  /** A sentence shown when the node is opened; null is nothing to open. */
+  detail: string | null;
 }
 
 export interface PlacedEdge {
@@ -101,14 +116,17 @@ export function layoutFlow(flow: Flow): FlowLayout {
     ids.forEach((id, i) => {
       const main = PAD + r * (mainSize + GAP_MAIN);
       const cross = PAD + (crossSpan - span) / 2 + i * (crossSize + GAP_CROSS);
-      const label = flow.nodes.find((n) => n.id === id)!.label;
+      const node = flow.nodes.find((n) => n.id === id)!;
       placed.set(id, {
         id,
-        lines: wrapLabel(label),
+        lines: wrapLabel(node.label),
         x: down ? cross : main,
         y: down ? main : cross,
         w: NODE_W,
         h: NODE_H,
+        shape: node.shape ?? null,
+        color: node.color ?? null,
+        detail: node.detail ?? null,
       });
     });
   }
@@ -180,7 +198,11 @@ export function flowSvg(flow: Flow, title: string | null = null): string {
             `<text x="${cx}" y="${first + i * 16}" text-anchor="middle" dominant-baseline="middle">${escapeXml(line)}</text>`,
         )
         .join("");
-      return `<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="14" fill="#141414" stroke="#ffffff" stroke-opacity="0.7" stroke-width="1.5"/>${text}`;
+      const paint = FLOW_FILLS[n.color ?? "ink"];
+      const box = n.shape
+        ? `<path d="${escapeXml(n.shape)}" transform="translate(${n.x},${n.y}) scale(${n.w / 100},${n.h / 100})" fill="${paint.fill}" stroke="${paint.stroke}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`
+        : `<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="14" fill="${paint.fill}" stroke="${paint.stroke}"${n.color ? "" : ' stroke-opacity="0.7"'} stroke-width="1.5"/>`;
+      return `<g>${n.detail ? `<title>${escapeXml(n.detail)}</title>` : ""}${box}${text}</g>`;
     })
     .join("");
   const edges = l.edges
