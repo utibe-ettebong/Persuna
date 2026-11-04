@@ -60,12 +60,21 @@ func frame(_ el: AXUIElement) -> CGRect? {
   return CGRect(origin: point, size: size)
 }
 
-/// The front app that isn't Persuna: the topmost normal window's owner.
+/// The front app that isn't Persuna: the topmost normal window's owner, on the
+/// display Persuna lives on. The screenshot and the overlay both cover the main
+/// display alone, so a window on another display would mix one screen's app
+/// with another screen's picture.
 func frontApp(skipping skip: pid_t) -> (pid_t, String)? {
   let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+  let main = CGDisplayBounds(CGMainDisplayID())
   for w in list {
     guard (w[kCGWindowLayer as String] as? Int) == 0,
           let pid = w[kCGWindowOwnerPID as String] as? pid_t, pid != skip else { continue }
+    if let b = w[kCGWindowBounds as String] as? [String: Any],
+       let x = b["X"] as? Double, let y = b["Y"] as? Double,
+       let width = b["Width"] as? Double, let height = b["Height"] as? Double {
+      if !CGRect(x: x, y: y, width: width, height: height).intersects(main) { continue }
+    }
     return (pid, w[kCGWindowOwnerName as String] as? String ?? "")
   }
   return nil

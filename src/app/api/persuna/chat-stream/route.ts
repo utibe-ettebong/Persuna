@@ -37,12 +37,14 @@ export async function POST(request: Request) {
   if (!clock.success) return new Response("Bad clock", { status: 400 });
   const image = form.get("screen");
   const scene = form.get("scene");
+  const crop = form.get("crop");
   let sight: z.output<typeof sightField>;
   try {
     sight = sightField.parse({
       image: typeof image === "string" ? image : null,
       scene: typeof scene === "string" ? JSON.parse(scene) : null,
       circled: form.get("circled") === "1",
+      crop: typeof crop === "string" ? JSON.parse(crop) : null,
     });
   } catch {
     return new Response("That screen read couldn't be used", { status: 400 });

@@ -362,6 +362,7 @@ export async function persunaVoiceAction(form: FormData, clock: z.input<typeof c
     if (!audio) throw new Error("Nothing was recorded");
     const image = form.get("screen");
     const scene = form.get("scene");
+    const crop = form.get("crop");
     return chatFromVoice(createModelClient(user), createTranscriber(user), user.id, {
       audio,
       clock: clockField.parse(clock),
@@ -370,6 +371,7 @@ export async function persunaVoiceAction(form: FormData, clock: z.input<typeof c
         image: typeof image === "string" ? image : null,
         scene: typeof scene === "string" ? JSON.parse(scene) : null,
         circled: form.get("circled") === "1",
+        crop: typeof crop === "string" ? JSON.parse(crop) : null,
       }),
     });
   });

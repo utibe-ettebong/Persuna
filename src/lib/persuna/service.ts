@@ -99,6 +99,8 @@ export interface Sight {
   image: string | null;
   /** The user circled part of the screen: the scene and picture are cropped to it. */
   circled?: boolean;
+  /** The circled area in points, so boxes found in the cropped picture land on screen. */
+  crop?: { x: number; y: number; w: number; h: number } | null;
 }
 
 const { persunaProfiles, persunaMessages, persunaNotes, persunaReminders, skills, jobs, listings } =
@@ -752,7 +754,7 @@ async function applyTurn(
         const box = await createLocator()
           ?.locate(sight.image, action.thing)
           .catch(() => null);
-        if (box) point = samSpot(box, sight.scene, action.thing);
+        if (box) point = samSpot(box, sight.scene, action.thing, sight.crop ?? null);
       }
     } else if (action.type === "clipboard") {
       clipboard = { op: action.op, text: action.text };

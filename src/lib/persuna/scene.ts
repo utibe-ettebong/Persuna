@@ -41,6 +41,9 @@ const MAX_LINES = 120;
 /** Lines the model gets from one screen, head lines and the "more" line included. */
 const MAX_MODEL_LINES = 40;
 
+/** Tabs shown when trimming: a tab strip must never crowd the page itself out. */
+const MAX_TABS_SHOWN = 8;
+
 /**
  * Kinds the user can act on, as Persuna Desktop names them (see ROLES in
  * desktop/native/mac/eyes.swift), plus the names other readers use for the
@@ -108,13 +111,20 @@ export function sceneForModel(scene: Scene): string {
     return [...head, ...entries.map(line)].join("\n");
   }
   const isText = (e: (typeof entries)[number]) => e.id.startsWith("t");
+  const isTab = (e: (typeof entries)[number]) => !isText(e) && e.kind.toLowerCase() === "tab";
   const interactive = entries.filter(
-    (e) => !isText(e) && INTERACTIVE_KINDS.has(e.kind.toLowerCase()),
+    (e) => !isText(e) && !isTab(e) && INTERACTIVE_KINDS.has(e.kind.toLowerCase()),
   );
   const otherItems = entries.filter(
-    (e) => !isText(e) && !INTERACTIVE_KINDS.has(e.kind.toLowerCase()),
+    (e) => !isText(e) && !isTab(e) && !INTERACTIVE_KINDS.has(e.kind.toLowerCase()),
   );
-  const ordered = [...interactive, ...otherItems, ...entries.filter(isText)];
+  // Tabs come last and capped: they say where the window has been, not what it shows.
+  const ordered = [
+    ...interactive,
+    ...otherItems,
+    ...entries.filter(isText),
+    ...entries.filter(isTab).slice(0, MAX_TABS_SHOWN),
+  ];
   const kept = ordered.slice(0, Math.max(0, MAX_MODEL_LINES - head.length - 1));
   const more = `…and ${entries.length - kept.length} more things on screen (ask to look closer for the rest)`;
   return [...head, ...kept.map(line), more].join("\n");
@@ -182,8 +192,21 @@ export function entryAt(scene: Scene, point: { x: number; y: number }, reach = 4
 
 /** Questions that need the picture itself, whatever the list says. */
 export function wantsPicture(text: string): boolean {
-  return /\b(photo|picture|image|pic|colou?rs?|looks? like|design|logo|chart|graph|diagram|drawing|video|face|screenshot)\b/i.test(
-    text,
+  if (
+    /\b(photo|picture|image|pic|colou?rs?|looks? like|design|logo|chart|graph|diagram|drawing|video|face|screenshot)\b/i.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  // Describing the screen itself needs the page, not just its list of chrome.
+  return (
+    /\bwhat am i looking at\b/i.test(text) ||
+    /\bwhat do you see\b/i.test(text) ||
+    /\bwhat('s| is) on (my|the|this) (screen|page|window)\b/i.test(text) ||
+    /\b(describ\w+|summari[sz]\w+).{0,40}\b(this|that|my|the)\b.{0,20}\b(screen|page|window)\b/i.test(
+      text,
+    )
   );
 }
 
@@ -236,18 +259,36 @@ export function parseSamBox(
   return { x1: v.x1, y1: v.y1, x2: v.x2, y2: v.y2, w: v.w, h: v.h };
 }
 
-/** A SAM box (screenshot pixels) as a place on screen (points). */
+/**
+ * A SAM box (screenshot pixels) as a place on screen (points). Each axis
+ * scales on its own: the picture's shape only matches the screen's. When the
+ * picture was cropped to a circled area, `crop` is that area in points, and
+ * the box lands inside it.
+ */
 export function samSpot(
   box: NonNullable<ReturnType<typeof parseSamBox>>,
   scene: Scene,
   label: string,
+  crop: { x: number; y: number; w: number; h: number } | null = null,
 ): Spot {
-  const k = scene.screen.w / box.w;
+  if (crop && crop.w > 0 && crop.h > 0) {
+    const kx = crop.w / box.w;
+    const ky = crop.h / box.h;
+    return {
+      x: Math.round(crop.x + box.x1 * kx),
+      y: Math.round(crop.y + box.y1 * ky),
+      w: Math.round((box.x2 - box.x1) * kx),
+      h: Math.round((box.y2 - box.y1) * ky),
+      label,
+    };
+  }
+  const kx = scene.screen.w / box.w;
+  const ky = scene.screen.h / box.h;
   return {
-    x: Math.round(box.x1 * k),
-    y: Math.round(box.y1 * k),
-    w: Math.round((box.x2 - box.x1) * k),
-    h: Math.round((box.y2 - box.y1) * k),
+    x: Math.round(box.x1 * kx),
+    y: Math.round(box.y1 * ky),
+    w: Math.round((box.x2 - box.x1) * kx),
+    h: Math.round((box.y2 - box.y1) * ky),
     label,
   };
 }

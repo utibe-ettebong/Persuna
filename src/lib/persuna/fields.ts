@@ -30,12 +30,27 @@ export const screenField = z
  */
 export const turnModeField = z.enum(["talk", "work", "look"]).catch("talk");
 
+/** The circled area a cropped screenshot shows, in points from the screen's top-left. */
+export const cropField = z
+  .object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })
+  .nullish();
+
 /** What Persuna may see with a message (Persuna Desktop): a screenshot and the list of the screen. */
 export const sightField = z
-  .object({ image: screenField, scene: sceneSchema.nullish(), circled: z.boolean().optional() })
+  .object({
+    image: screenField,
+    scene: sceneSchema.nullish(),
+    circled: z.boolean().optional(),
+    crop: cropField,
+  })
   .nullish()
   .transform((s) =>
     s && (s.image || s.scene)
-      ? { image: s.image ?? null, scene: s.scene ?? null, circled: Boolean(s.circled) }
+      ? {
+          image: s.image ?? null,
+          scene: s.scene ?? null,
+          circled: Boolean(s.circled),
+          crop: s.crop ?? null,
+        }
       : null,
   );
