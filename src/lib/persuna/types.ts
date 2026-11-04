@@ -207,6 +207,10 @@ export const persunaAction = z.discriminatedUnion("type", [
     playful: z.boolean().nullish(),
     note: z.string().trim().max(160).nullish(),
   }),
+  /** The user renamed Persuna ("call yourself Nova"): the new name, exactly as said. */
+  z.object({ type: z.literal("set_name"), name: z.string().trim().min(1).max(40) }),
+  /** The user silenced Persuna's reminders and notices ("on") or wants them spoken again. */
+  z.object({ type: z.literal("quiet_notices"), on: z.boolean() }),
 ]);
 export type PersunaAction = z.infer<typeof persunaAction>;
 

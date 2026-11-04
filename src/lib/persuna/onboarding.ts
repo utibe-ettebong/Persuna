@@ -38,6 +38,17 @@ export function parseName(text: string): string | null {
   return cleaned.replace(/\b\p{L}/gu, (c) => c.toUpperCase());
 }
 
+/** A rename ("nova", '"Ada Lovelace"') as a kept name, or null when unusable. */
+export function cleanPersonaName(text: string): string | null {
+  const cleaned = text
+    .trim()
+    .replace(/^["'“”‘’]+|["'“”‘’.!?,]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned || cleaned.length > 40) return null;
+  return cleaned.replace(/\b\p{L}/gu, (c) => c.toUpperCase());
+}
+
 const COLOUR_WORDS: Record<LookId, RegExp> = {
   plum: /\b(plum|purple|violet|lilac)\b/i,
   aurora: /\b(aurora|teal|turquoise|cyan|northern)\b/i,

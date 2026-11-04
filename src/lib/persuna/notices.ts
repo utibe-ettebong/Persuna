@@ -119,3 +119,33 @@ export function unseen(all: Notice[], seen: string[]): Notice[] {
   const said = new Set(seen);
   return all.filter((n) => !said.has(n.key)).slice(0, MAX_NOTICES);
 }
+
+/** Lines waiting for a quiet moment, at most this many (they're all kept as messages anyway). */
+export const MAX_QUEUED_NOTICES = 3;
+
+/**
+ * Whether a notice may speak right now: only into silence. Speaking over a
+ * reply, a thought, or the user's own words is how notices talk over people.
+ */
+export function shouldSpeakNotice(state: {
+  quiet: boolean;
+  talking: boolean;
+  speaking: boolean;
+  busy: boolean;
+  userSpeaking: boolean;
+  holding: boolean;
+}): boolean {
+  return (
+    !state.quiet &&
+    !state.talking &&
+    !state.speaking &&
+    !state.busy &&
+    !state.userSpeaking &&
+    !state.holding
+  );
+}
+
+/** Holds a line for the next quiet moment, dropping the oldest past the cap. Pure. */
+export function queueNotice(queue: string[], line: string): string[] {
+  return [...queue, line].slice(-MAX_QUEUED_NOTICES);
+}

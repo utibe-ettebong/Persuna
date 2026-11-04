@@ -37,6 +37,13 @@ import {
   type Scene,
   type Spot,
 } from "@/lib/persuna/scene";
+import { queueNotice, shouldSpeakNotice } from "@/lib/persuna/notices";
+import {
+  fingerprintOfAudio,
+  handsFreeListener,
+  matchVoiceprint,
+  type Voiceprint,
+} from "@/lib/persuna/voiceprint";
 import { LOOKS, LOOK_IDS, lookOf } from "@/lib/persuna/looks";
 import {
   SETUP_QUESTIONS,
@@ -275,6 +282,8 @@ const WRAP_UP_OFFER = "It's getting late. Want a wrap-up of today?";
 /** After this local hour, Persuna offers an end-of-day wrap-up (once a day). */
 const WRAP_UP_HOUR = 17;
 const REMINDER_POLL_MS = 30_000;
+/** How long voice enrollment listens: a few sentences. */
+const ENROLL_VOICE_MS = 6000;
 /** With no input on the page for this long, Persuna dozes until you move. */
 const DOZE_MS = 5 * 60_000;
 /** A call ends by itself after this long with nobody talking. */
@@ -384,6 +393,15 @@ export function Companion(props: CompanionProps) {
   const [watchNote, setWatchNote] = useState<string | null>(null);
   const [wakeOn, setWakeOn] = useState(false);
   const [askWake, setAskWake] = useState(false);
+  // Reminders and notices appear but never speak (said by menu or by voice).
+  const [quietNotices, setQuietNotices] = useState(false);
+  // Lines waiting for a quiet moment, spoken oldest first.
+  const noticeWaiting = useRef<string[]>([]);
+  const pumpingNotices = useRef(false);
+  // Only the owner's voice gets answers (opt-in; the voiceprint stays on this device).
+  const [ownerVoice, setOwnerVoice] = useState(false);
+  const [hasVoiceprint, setHasVoiceprint] = useState(false);
+  const [enrollingVoice, setEnrollingVoice] = useState(false);
   const router = useRouter();
   const watcher = useRef<Watcher | null>(null);
   const conversation = useRef<Conversation | null>(null);
@@ -506,10 +524,21 @@ export function Companion(props: CompanionProps) {
     name,
     focusName: focusSkill?.name ?? null,
     panel,
+    holding,
+    quietNotices,
   });
   useEffect(() => {
-    live.current = { voiceOn, busy, talking, name, focusName: focusSkill?.name ?? null, panel };
-  }, [voiceOn, busy, talking, name, focusSkill, panel]);
+    live.current = {
+      voiceOn,
+      busy,
+      talking,
+      name,
+      focusName: focusSkill?.name ?? null,
+      panel,
+      holding,
+      quietNotices,
+    };
+  }, [voiceOn, busy, talking, name, focusSkill, panel, holding, quietNotices]);
 
   // The desktop keeps this page open for days: pick up new versions, and have
   // the address for hearing you ready before the first turn.
@@ -686,6 +715,32 @@ export function Companion(props: CompanionProps) {
     setSpeakProgress(null);
   }
 
+  /** Whether a waiting notice may speak: only into silence, never over anything. */
+  function noticeIdle() {
+    return shouldSpeakNotice({
+      quiet: live.current.quietNotices,
+      talking: talkingNow.current,
+      speaking: speaking.current > 0,
+      busy: live.current.busy !== "idle",
+      userSpeaking: conversation.current?.userSpeaking() ?? false,
+      holding: live.current.holding,
+    });
+  }
+
+  /** Speaks waiting notices oldest first, stopping the moment anything else needs the voice. */
+  async function pumpNotices() {
+    if (pumpingNotices.current) return;
+    pumpingNotices.current = true;
+    try {
+      while (noticeWaiting.current.length && noticeIdle()) {
+        const line = noticeWaiting.current.shift()!;
+        await express(line);
+      }
+    } finally {
+      pumpingNotices.current = false;
+    }
+  }
+
   // First interaction anywhere: say whatever was waiting, and wake up.
   useEffect(() => {
     const onInput = () => {
@@ -731,6 +786,9 @@ export function Companion(props: CompanionProps) {
       setWorkAutoOffMin(stored("persuna.workAutoOffMin", 30));
       setExcludedApps(stored("persuna.excludedApps", []));
       setWakeOn(stored("persuna.wake", false) && wakeWordSupported());
+      setQuietNotices(stored("persuna.quietNotices", false));
+      setOwnerVoice(stored("persuna.ownerVoice", false));
+      setHasVoiceprint(loadVoiceprint() !== null);
     });
     void persunaCheckInAction(clock().day).then((res) => {
       if (res.ok && res.value && props.setupDone) {
@@ -751,6 +809,7 @@ export function Companion(props: CompanionProps) {
 
   // Heartbeat: due reminders, plus anything worth speaking up about. Also
   // runs shortly after you open another page, so Persuna reacts to it.
+  // Messages and OS notifications always land; the voice waits for silence.
   const path = usePathname();
   useEffect(() => {
     const check = async () => {
@@ -762,7 +821,7 @@ export function Companion(props: CompanionProps) {
           ...all,
           { id: `reminder-${r.id}`, role: "assistant", kind: "reminder", content: line },
         ]);
-        express(line);
+        noticeWaiting.current = queueNotice(noticeWaiting.current, line);
         if (typeof Notification !== "undefined" && Notification.permission === "granted") {
           new Notification(`${live.current.name} · reminder`, { body: r.text, tag: r.id });
         }
@@ -772,10 +831,11 @@ export function Companion(props: CompanionProps) {
           ...all,
           { ...n.message, role: "assistant", link: { href: n.href, label: "Take a look" } },
         ]);
-        express(n.message.content);
+        noticeWaiting.current = queueNotice(noticeWaiting.current, n.message.content);
         // If the thing it's talking about is on screen, go and point at it.
         perchBy(document.querySelector(`main a[href="${n.href}"]`));
       }
+      void pumpNotices();
     };
     const timer = setInterval(() => void check(), REMINDER_POLL_MS);
     const soon = setTimeout(() => void check(), 1500);
@@ -948,6 +1008,8 @@ export function Companion(props: CompanionProps) {
           if (speaking.current === 0) {
             talkingNow.current = false;
             setTalking(false);
+            // The voice is free: anything the heartbeat held back can speak now.
+            void pumpNotices();
           }
         });
       };
@@ -1193,6 +1255,13 @@ export function Companion(props: CompanionProps) {
     if (value.appConfirm) setAppConfirm(value.appConfirm);
     if (value.mcpConfirm) setMcpConfirm(value.mcpConfirm);
     if (value.operateConfirm) setOperateConfirm(value.operateConfirm);
+    if (value.name && value.name !== name) setName(value.name);
+    if (value.quiet) {
+      const quiet = value.quiet === "on";
+      setQuietNotices(quiet);
+      store("persuna.quietNotices", quiet);
+      if (!quiet) void pumpNotices();
+    }
     // Showing something on screen, an illustration included: the island folds
     // up so it doesn't cover it, and the drawing builds while Persuna speaks.
     if (value.point || value.drawing) setPanel(false);
@@ -1232,6 +1301,8 @@ export function Companion(props: CompanionProps) {
     }
     if (!spoken) {
       const said = express(reply.content, lead);
+      // Said: anything the heartbeat held back can speak now.
+      void said.then(() => pumpNotices());
       // Silent after all (the browser needs a click first): the drawing
       // paces itself instead of jumping to full. Else it ends with the voice.
       if (gen !== null) {
@@ -1249,6 +1320,66 @@ export function Companion(props: CompanionProps) {
     window.clearTimeout(pointTimer.current);
     setPointAt(spot);
     pointTimer.current = window.setTimeout(() => setPointAt(null), POINT_MS);
+  }
+
+  /** The enrolled owner voiceprint, if one was taught on this device. */
+  function loadVoiceprint(): Voiceprint | null {
+    const saved = stored<Voiceprint | null>("persuna.voiceprint", null);
+    if (
+      !saved ||
+      !Array.isArray(saved.mean) ||
+      !saved.mean.length ||
+      !saved.mean.every((v) => Number.isFinite(v))
+    ) {
+      return null;
+    }
+    return saved;
+  }
+
+  /** Learns the owner's voice: a few seconds of talking, kept as a print on this device. */
+  async function enrollVoice() {
+    if (enrollingVoice) return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setError("This browser can't use the microphone. Type instead.");
+      return;
+    }
+    if (conversation.current || agentCall.current) endConversation();
+    if (talkingNow.current) interrupt();
+    setEnrollingVoice(true);
+    setError(null);
+    try {
+      showCaption("Say a few sentences — I'm learning your voice…");
+      chime(true);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      try {
+        const rec = new MediaRecorder(stream);
+        const chunks: Blob[] = [];
+        rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+        const stopped = new Promise<void>((resolve) => {
+          rec.onstop = () => resolve();
+        });
+        rec.start(200);
+        await new Promise((resolve) => setTimeout(resolve, ENROLL_VOICE_MS));
+        rec.stop();
+        await stopped;
+        const print = await fingerprintOfAudio(
+          new Blob(chunks, { type: rec.mimeType || "audio/webm" }),
+        );
+        if (!print) {
+          express("I didn't catch enough voice — try again somewhere quieter.");
+          return;
+        }
+        store("persuna.voiceprint", print);
+        setHasVoiceprint(true);
+        express("Got it — I know your voice now.");
+      } finally {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+    } catch {
+      setError("Microphone access was blocked.");
+    } finally {
+      setEnrollingVoice(false);
+    }
   }
 
   /**
@@ -1445,6 +1576,22 @@ export function Companion(props: CompanionProps) {
       // Straight away, before anything travels: you've been heard.
       ackTick();
       setBusy(words && setupRef.current.done ? "thinking" : "hearing");
+      // Owner-only voice: a stranger's words end here, unanswered. Live
+      // transcription already heard them as they spoke; nothing else travels.
+      if (setupRef.current.done && stored("persuna.ownerVoice", false)) {
+        const enrolled = loadVoiceprint();
+        const sample = enrolled ? await fingerprintOfAudio(audio).catch(() => null) : null;
+        if (!enrolled || !sample || !matchVoiceprint(sample, enrolled).match) {
+          setBusy("idle");
+          const who = props.userName?.split(/\s+/)[0] || "my owner";
+          express(
+            enrolled
+              ? `Hmm, that didn't sound like ${who} — I only answer ${who}.`
+              : "I don't know your voice yet — teach me from my menu first.",
+          );
+          return;
+        }
+      }
       if (live.current.voiceOn) void warmVoice();
       try {
         // A very long turn: Persuna cut in, and says so.
@@ -1559,7 +1706,13 @@ export function Companion(props: CompanionProps) {
       setError("This browser can't use the microphone. Type instead.");
       return;
     }
-    if (props.voiceMode === "agent" && agentVoice && setupRef.current.done) {
+    const listener = handsFreeListener({
+      agentMode: props.voiceMode === "agent",
+      agentReady: Boolean(agentVoice),
+      setupDone: setupRef.current.done,
+      ownerOnly: stored("persuna.ownerVoice", false),
+    });
+    if (listener === "agent") {
       try {
         if (await startAgentConversation()) return;
       } catch {
@@ -3144,6 +3297,44 @@ export function Companion(props: CompanionProps) {
         setVoiceOn(next);
         store("persuna.voice", next);
         if (!next) stopSpeaking();
+      },
+    },
+    {
+      label: quietNotices ? "Speak my notifications" : "Silence my notifications",
+      onSelect: () => {
+        const next = !quietNotices;
+        setQuietNotices(next);
+        store("persuna.quietNotices", next);
+        if (!next) void pumpNotices();
+      },
+    },
+    {
+      label: ownerVoice ? "Answer any voice" : "Only answer my voice",
+      onSelect: () => {
+        if (!ownerVoice && !loadVoiceprint()) {
+          express("Teach me your voice first, then I'll only answer you.");
+          return;
+        }
+        const next = !ownerVoice;
+        setOwnerVoice(next);
+        store("persuna.ownerVoice", next);
+        // The ElevenLabs agent can't check voices: a call in progress ends.
+        if (next && agentCall.current) endConversation();
+      },
+    },
+    {
+      label: enrollingVoice ? "Learning your voice…" : "Teach it my voice…",
+      onSelect: () => void enrollVoice(),
+    },
+    {
+      label: "Forget my voice",
+      hidden: !hasVoiceprint,
+      onSelect: () => {
+        store("persuna.voiceprint", null);
+        store("persuna.ownerVoice", false);
+        setHasVoiceprint(false);
+        setOwnerVoice(false);
+        express("Done — I've forgotten your voice, and I'll answer anyone again.");
       },
     },
     {

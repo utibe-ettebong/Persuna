@@ -17,7 +17,12 @@ export async function toTranscribableWav(input: Blob, name = "recording"): Promi
     const offline = new OfflineAudioContext(1, frames, TARGET_SAMPLE_RATE);
     const source = offline.createBufferSource();
     source.buffer = decoded; // the offline context downmixes to mono and resamples
-    source.connect(offline.destination);
+    // Room rumble and mic thumps live below speech: cut them before transcribing.
+    const rumble = offline.createBiquadFilter();
+    rumble.type = "highpass";
+    rumble.frequency.value = 80;
+    source.connect(rumble);
+    rumble.connect(offline.destination);
     source.start();
     const rendered = await offline.startRendering();
     const wav = encodeWav(rendered.getChannelData(0), TARGET_SAMPLE_RATE);

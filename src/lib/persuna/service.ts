@@ -78,6 +78,7 @@ import {
 import { buildWrapUp } from "./wrapup";
 import {
   MAX_FIRST_SKILLS,
+  cleanPersonaName,
   describeSkill,
   freeSlug,
   introFacts,
@@ -302,6 +303,10 @@ export interface ChatResult {
   drawing: Drawing | null;
   /** A file Persuna made, to preview, copy and save. */
   file: MadeFile | null;
+  /** Persuna was renamed this turn: the app answers to the new name now. */
+  name: string | null;
+  /** The user silenced Persuna's notices ("on") or wants them spoken again. */
+  quiet: "on" | "off" | null;
 }
 
 export interface Drawing {
@@ -533,6 +538,8 @@ async function applyTurn(
   let clipboard: ChatResult["clipboard"] = null;
   let drawing: ChatResult["drawing"] = null;
   let made: ChatResult["file"] = null;
+  let renamed: ChatResult["name"] = null;
+  let quiet: ChatResult["quiet"] = null;
 
   for (const action of reply.actions) {
     if (action.type === "remember") {
@@ -824,6 +831,16 @@ async function applyTurn(
       }
     } else if (action.type === "watch_screen") {
       watch = action.on ? "start" : "stop";
+    } else if (action.type === "set_name") {
+      const name = cleanPersonaName(action.name);
+      if (name) {
+        await updateProfile(userId, { name });
+        renamed = name;
+      } else {
+        extra.push("Say that once more — what should I call myself?");
+      }
+    } else if (action.type === "quiet_notices") {
+      quiet = action.on ? "on" : "off";
     } else if (action.type === "learn_episode") {
       try {
         if (action.op === "start") {
@@ -943,6 +960,8 @@ async function applyTurn(
     clipboard,
     drawing,
     file: made,
+    name: renamed,
+    quiet,
   };
   return { result, extra };
 }
