@@ -44,7 +44,7 @@ Run from source:
 ```bash
 cd desktop
 npm install
-PERSUNA_URL=https://persuna-production.up.railway.app npm start
+PERSUNA_URL=https://persuna.up.railway.app npm start
 ```
 
 ## Building and releasing
