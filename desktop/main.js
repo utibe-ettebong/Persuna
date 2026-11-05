@@ -54,8 +54,10 @@ const {
   screenStatus,
 } = require("./health");
 
-const APP_URL = process.env.PERSUNA_URL || "https://persuna-production.up.railway.app";
+const APP_URL = process.env.PERSUNA_URL || "https://persuna.up.railway.app";
 const ORIGIN = new URL(APP_URL).origin;
+/** Where Persuna was served before, so a sign-in kept there carries over. */
+const FORMER_ORIGINS = ["https://persuna-production.up.railway.app"];
 const ALLOWED_PERMISSIONS = new Set(["media", "display-capture", "notifications"]);
 const MAC = process.platform === "darwin";
 
@@ -110,6 +112,35 @@ function writeSettings(patch) {
   const next = { ...readSettings(), ...patch };
   fs.writeFileSync(settingsPath(), JSON.stringify(next, null, 2));
   return next;
+}
+
+/**
+ * Persuna moved to a new address. Sign-in cookies belong to the old one, so
+ * copy them to the new one once, instead of signing everyone out.
+ */
+async function carryOverSignIn(ses) {
+  try {
+    const here = await ses.cookies.get({ url: ORIGIN });
+    if (here.some((c) => c.name.includes("better-auth"))) return;
+    for (const former of FORMER_ORIGINS) {
+      if (former === ORIGIN) continue;
+      for (const c of await ses.cookies.get({ url: former })) {
+        if (!c.name.includes("better-auth")) continue;
+        await ses.cookies.set({
+          url: ORIGIN,
+          name: c.name,
+          value: c.value,
+          path: c.path,
+          secure: c.secure,
+          httpOnly: c.httpOnly,
+          sameSite: c.sameSite,
+          expirationDate: c.expirationDate,
+        });
+      }
+    }
+  } catch (err) {
+    console.warn("Couldn't carry the sign-in over to the new address", err);
+  }
 }
 
 function isOurs(url) {
@@ -1758,8 +1789,9 @@ if (!app.requestSingleInstanceLock()) {
     if (!setup) callPersuna();
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     const ses = session.defaultSession;
+    await carryOverSignIn(ses);
     ses.setPermissionRequestHandler((_wc, permission, callback, details) => {
       callback(isOurs(details.requestingUrl) && ALLOWED_PERMISSIONS.has(permission));
     });
