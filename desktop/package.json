@@ -1,6 +1,6 @@
 {
   "name": "persuna-desktop",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "private": true,
   "description": "Persuna, your AI assistant, over your whole screen.",
   "main": "main.js",
@@ -20,7 +20,7 @@
     "name": "Persuna",
     "email": "hello@gamaidfoundation.org"
   },
-  "homepage": "https://persuna-production.up.railway.app",
+  "homepage": "https://persuna.up.railway.app",
   "build": {
     "appId": "app.persuna.persuna",
     "productName": "Persuna",
