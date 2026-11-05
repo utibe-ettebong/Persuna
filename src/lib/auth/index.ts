@@ -4,7 +4,7 @@ import { APIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { oneTimeToken } from "better-auth/plugins/one-time-token";
 import { db, schema } from "@/db/client";
-import { parseList, signUpAllowed } from "./policy";
+import { parseList, signUpAllowed, trustedOrigins } from "./policy";
 
 /**
  * Accounts with email and password (Better Auth). Sessions live in Postgres;
@@ -19,6 +19,7 @@ function createAuth() {
     appName: "PERSUNA",
     secret: process.env.BETTER_AUTH_SECRET,
     baseURL: process.env.BETTER_AUTH_URL ?? process.env.APP_URL,
+    trustedOrigins: trustedOrigins([process.env.BETTER_AUTH_URL, process.env.APP_URL]),
     database: drizzleAdapter(db(), {
       provider: "pg",
       schema: {

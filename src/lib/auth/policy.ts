@@ -19,3 +19,21 @@ export function matchesList(email: string, list: string[]): boolean {
 export function signUpAllowed(email: string, allowlist: string[]): boolean {
   return allowlist.length === 0 || matchesList(email, allowlist);
 }
+
+/**
+ * The origins sign-in accepts: each configured public URL, so the app works on
+ * every domain it is served from (a new domain, and the old one the desktop app
+ * still opens) while BETTER_AUTH_URL and APP_URL differ.
+ */
+export function trustedOrigins(urls: (string | undefined)[]): string[] {
+  const origins = new Set<string>();
+  for (const url of urls) {
+    if (!url) continue;
+    try {
+      origins.add(new URL(url).origin);
+    } catch {
+      // Not a URL: skip it rather than trusting a bad value.
+    }
+  }
+  return [...origins];
+}
